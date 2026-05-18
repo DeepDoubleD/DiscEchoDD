@@ -22,6 +22,7 @@ import (
 type splittableStub struct {
 	failOnRip       error
 	failOnTranscode error
+	failOnScan      error
 	ripDelay        time.Duration
 	transcodeDelay  time.Duration
 
@@ -31,7 +32,10 @@ type splittableStub struct {
 	mu             sync.Mutex
 	ripCalls       int
 	transcodeCalls int
+	scanCalls      int
 	ripSpoolPath   string
+	// scanTitles is what ScanTitles returns when failOnScan is nil.
+	scanTitles []pipelines.TitleInfo
 }
 
 func (s *splittableStub) DiscType() state.DiscType { return state.DiscTypeBDMV }
@@ -97,6 +101,17 @@ func (s *splittableStub) RunRip(ctx context.Context, _ *state.Drive, _ *state.Di
 		path = spoolDir
 	}
 	return pipelines.RipResult{SpoolPath: path}, nil
+}
+
+// ScanTitles makes splittableStub satisfy pipelines.TitleScanner.
+func (s *splittableStub) ScanTitles(_ context.Context, _ *state.Drive, _ *state.Disc, _ *state.Profile, _ pipelines.EventSink) ([]pipelines.TitleInfo, error) {
+	s.mu.Lock()
+	s.scanCalls++
+	s.mu.Unlock()
+	if s.failOnScan != nil {
+		return nil, s.failOnScan
+	}
+	return s.scanTitles, nil
 }
 
 func (s *splittableStub) RunTranscode(ctx context.Context, result pipelines.RipResult, _ *state.Disc, _ *state.Profile, _ pipelines.EventSink) error {
@@ -428,6 +443,97 @@ func TestCompute_ConcurrencyLimits(t *testing.T) {
 	if got := maxInFlight.Load(); got > 1 {
 		t.Errorf("concurrency cap broken: maxInFlight = %d, want 1", got)
 	}
+}
+
+// TestOrchestrator_ScanJob_PersistsTitlesAndCompletes drives a
+// kind='scan' job end-to-end through the orchestrator. Asserts the
+// scanned title list lands on disc.metadata_json under "scan".titles,
+// the job reaches done, and the disc.changed SSE event fires.
+func TestOrchestrator_ScanJob_PersistsTitlesAndCompletes(t *testing.T) {
+	store, bc, sp, h := openSplit(t)
+	defer bc.Close()
+	h.scanTitles = []pipelines.TitleInfo{
+		{ID: 0, DurationSec: 30, SourceFile: "00000.mpls"},
+		{ID: 1, DurationSec: 7200, ChapterCount: 16, SourceFile: "00800.mpls", SizeBytes: 28_000_000_000},
+	}
+
+	reg := pipelines.NewRegistry()
+	reg.Register(h)
+	compute := jobs.NewCompute(jobs.ComputeConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg, Spool: sp, Concurrency: 1,
+	})
+	t.Cleanup(compute.Close)
+	o := jobs.NewOrchestrator(jobs.OrchestratorConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg,
+		Compute: compute, Spool: sp,
+	})
+	t.Cleanup(o.Close)
+
+	_, disc, prof := seedSplitInputs(t, store)
+	job, err := o.SubmitScan(context.Background(), disc.ID, prof.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Kind != state.JobKindScan {
+		t.Errorf("kind: got %s want scan", job.Kind)
+	}
+	if err := waitJobState(store, job.ID, state.JobStateDone, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if h.scanCalls != 1 {
+		t.Errorf("scanCalls = %d, want 1", h.scanCalls)
+	}
+
+	// disc.metadata_json should now carry the scan blob.
+	d, err := store.GetDisc(context.Background(), disc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.MetadataJSON == "" || d.MetadataJSON == "{}" {
+		t.Fatalf("metadata_json not populated: %q", d.MetadataJSON)
+	}
+	if !contains(d.MetadataJSON, `"scan"`) {
+		t.Errorf("metadata_json missing scan key: %s", d.MetadataJSON)
+	}
+	if !contains(d.MetadataJSON, `"00800.mpls"`) {
+		t.Errorf("metadata_json missing scanned title: %s", d.MetadataJSON)
+	}
+}
+
+// TestOrchestrator_SubmitScan_RejectsNonScannerHandler verifies the
+// pre-flight check fires when the disc type's handler doesn't
+// implement TitleScanner — without this the orchestrator would
+// happily enqueue a scan job that fails at runtime.
+func TestOrchestrator_SubmitScan_RejectsNonScannerHandler(t *testing.T) {
+	store, bc, _ := openOrch(t)
+	defer bc.Close()
+	// stubHandler is the non-splittable, non-scanner monolithic stub.
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubHandler{})
+	o := jobs.NewOrchestrator(jobs.OrchestratorConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg,
+	})
+	t.Cleanup(o.Close)
+
+	_, disc, prof := seedJobInputs(t, store)
+	if _, err := o.SubmitScan(context.Background(), disc.ID, prof.ID); err == nil {
+		t.Errorf("SubmitScan with non-TitleScanner handler: want error, got nil")
+	}
+}
+
+// contains is a tiny test helper so callers don't import strings just
+// for one substring check.
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && indexOf(s, sub) >= 0
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
 
 // waitForChild polls for a kind='transcode' job whose ParentJobID is

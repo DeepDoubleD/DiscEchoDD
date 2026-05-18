@@ -288,6 +288,36 @@ func (h *Handler) createWorkDir(discID string) (string, error) {
 	return pipelines.CreateWorkDir(h.deps.WorkRoot, "uhd", discID)
 }
 
+// ScanTitles implements pipelines.TitleScanner — same flow as BDMV.
+// Brief, drive-bound, doesn't eject.
+func (h *Handler) ScanTitles(ctx context.Context, drv *state.Drive, _ *state.Disc, _ *state.Profile, sink pipelines.EventSink) ([]pipelines.TitleInfo, error) {
+	sink.OnStepStart(state.StepIdentify)
+	defer sink.OnStepDone(state.StepIdentify, nil)
+
+	if h.deps.MakeMKVScanner == nil {
+		err := errors.New("uhd: MakeMKV not configured")
+		sink.OnStepFailed(state.StepIdentify, err)
+		return nil, err
+	}
+	sink.OnLog(state.LogLevelInfo, "MakeMKV: scanning %s for titles (UHD)", drv.DevPath)
+	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath)
+	if err != nil {
+		sink.OnStepFailed(state.StepIdentify, err)
+		return nil, fmt.Errorf("makemkv scan: %w", err)
+	}
+	out := make([]pipelines.TitleInfo, 0, len(titles))
+	for _, t := range titles {
+		out = append(out, pipelines.TitleInfo{
+			ID:           t.ID,
+			DurationSec:  t.DurationSec,
+			ChapterCount: t.Chapters,
+			SourceFile:   t.SourceFile,
+			SizeBytes:    t.SizeBytes,
+		})
+	}
+	return out, nil
+}
+
 func pickLongestTitle(titles []tools.MakeMKVTitle, prof *state.Profile) (tools.MakeMKVTitle, error) {
 	minSec := 0
 	if prof != nil && prof.Options != nil {

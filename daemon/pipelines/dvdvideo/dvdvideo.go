@@ -472,6 +472,35 @@ func (h *Handler) createWorkDir(discID string) (string, error) {
 	return pipelines.CreateWorkDir(h.deps.WorkRoot, "dvd", discID)
 }
 
+// ScanTitles implements pipelines.TitleScanner: enumerate titles via
+// HandBrake direct-against-device (no dvdbackup mirror needed — that
+// would add 5+ minutes for a feature that just wants the title list).
+// Brief (~10s), drive-bound, doesn't eject.
+func (h *Handler) ScanTitles(ctx context.Context, drv *state.Drive, _ *state.Disc, _ *state.Profile, sink pipelines.EventSink) ([]pipelines.TitleInfo, error) {
+	sink.OnStepStart(state.StepIdentify)
+	defer sink.OnStepDone(state.StepIdentify, nil)
+
+	if h.deps.HandBrakeScanner == nil {
+		err := errors.New("dvdvideo: HandBrakeScanner not configured")
+		sink.OnStepFailed(state.StepIdentify, err)
+		return nil, err
+	}
+	sink.OnLog(state.LogLevelInfo, "HandBrake: scanning %s for titles", drv.DevPath)
+	titles, err := h.deps.HandBrakeScanner.Scan(ctx, drv.DevPath)
+	if err != nil {
+		sink.OnStepFailed(state.StepIdentify, err)
+		return nil, fmt.Errorf("handbrake scan: %w", err)
+	}
+	out := make([]pipelines.TitleInfo, 0, len(titles))
+	for _, t := range titles {
+		out = append(out, pipelines.TitleInfo{
+			ID:          t.Number,
+			DurationSec: t.DurationSeconds,
+		})
+	}
+	return out, nil
+}
+
 // selectEncodeTitles picks which titles to encode for **series**
 // profiles. Movie profiles bypass this entirely and let HandBrake's
 // --main-feature pick from the IFO.

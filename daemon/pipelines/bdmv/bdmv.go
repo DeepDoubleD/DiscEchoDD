@@ -346,6 +346,38 @@ func (h *Handler) createWorkDir(discID string) (string, error) {
 	return pipelines.CreateWorkDir(h.deps.WorkRoot, "bdmv", discID)
 }
 
+// ScanTitles implements pipelines.TitleScanner: enumerate titles on
+// the inserted disc via MakeMKV without ripping. Brief (drive-bound),
+// doesn't eject — caller (orchestrator scan-job path) decides whether
+// to free the drive or hold it for an immediate follow-on rip.
+func (h *Handler) ScanTitles(ctx context.Context, drv *state.Drive, _ *state.Disc, _ *state.Profile, sink pipelines.EventSink) ([]pipelines.TitleInfo, error) {
+	sink.OnStepStart(state.StepIdentify)
+	defer sink.OnStepDone(state.StepIdentify, nil)
+
+	if h.deps.MakeMKVScanner == nil {
+		err := errors.New("bdmv: MakeMKV not configured")
+		sink.OnStepFailed(state.StepIdentify, err)
+		return nil, err
+	}
+	sink.OnLog(state.LogLevelInfo, "MakeMKV: scanning %s for titles", drv.DevPath)
+	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath)
+	if err != nil {
+		sink.OnStepFailed(state.StepIdentify, err)
+		return nil, fmt.Errorf("makemkv scan: %w", err)
+	}
+	out := make([]pipelines.TitleInfo, 0, len(titles))
+	for _, t := range titles {
+		out = append(out, pipelines.TitleInfo{
+			ID:           t.ID,
+			DurationSec:  t.DurationSec,
+			ChapterCount: t.Chapters,
+			SourceFile:   t.SourceFile,
+			SizeBytes:    t.SizeBytes,
+		})
+	}
+	return out, nil
+}
+
 // pickLongestTitle selects the longest title that meets
 // options.min_title_seconds. Returns an error if no title qualifies.
 func pickLongestTitle(titles []tools.MakeMKVTitle, prof *state.Profile) (tools.MakeMKVTitle, error) {

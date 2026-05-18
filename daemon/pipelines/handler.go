@@ -90,6 +90,32 @@ type SplittableHandler interface {
 	RunTranscode(ctx context.Context, ripResult RipResult, disc *state.Disc, profile *state.Profile, sink EventSink) error
 }
 
+// TitleInfo describes one selectable title from a MakeMKV / HandBrake
+// scan. Carries enough metadata for the picker UI to render a useful
+// row (duration, chapter count) and enough for a subsequent rip to
+// reference the title by its tool-specific ID.
+type TitleInfo struct {
+	ID           int    `json:"id"`                      // tool's title id (MakeMKV tnum, HandBrake title number)
+	DurationSec  int    `json:"duration_sec"`            // total runtime
+	ChapterCount int    `json:"chapter_count,omitempty"` // 0 when the tool doesn't report it
+	SourceFile   string `json:"source_file,omitempty"`   // .mpls / .ifo / .m2ts hint (BDMV) — useful for box-set debugging
+	SizeBytes    int64  `json:"size_bytes,omitempty"`    // best-effort byte estimate (MakeMKV reports this)
+}
+
+// TitleScanner is the optional interface a handler implements when it
+// supports pre-rip title enumeration for the picker flow. The
+// orchestrator type-asserts on this when running a kind='scan' job.
+// Handlers that don't implement it surface a clear "not supported"
+// error so the picker UI can hide itself for that disc type.
+//
+// ScanTitles is drive-bound and brief (~30-60s on MakeMKV BD; <10s on
+// HandBrake DVD-direct). It must not eject — the disc stays in the
+// drive for the subsequent rip the user kicks off from the picker.
+type TitleScanner interface {
+	Handler
+	ScanTitles(ctx context.Context, drv *state.Drive, disc *state.Disc, profile *state.Profile, sink EventSink) ([]TitleInfo, error)
+}
+
 // EventSink receives every event a Handler emits during Run.
 // JobID identifies the job the sink is bound to — pipelines use it to
 // attribute final output sizes back onto the right job row.

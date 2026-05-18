@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
@@ -124,6 +125,69 @@ func (h *Handlers) StartDisc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+// ScanDisc creates a kind='scan' job that enumerates titles via
+// MakeMKV (BDMV/UHD) or HandBrake (DVD) without ripping. Drive-bound
+// and brief (~60s on a slow MakeMKV BD; ~10s on DVD direct-scan).
+// Output lands on disc.metadata_json.scan and the dashboard's picker
+// UI surfaces it when the disc.changed SSE event fires.
+//
+// Body: {"profile_id": "<id>"}.
+// Errors:
+//
+//	400 missing or invalid body
+//	404 disc not found
+//	409 disc already has an active job
+//	422 disc type doesn't support title scan (returned by Submit)
+//	503 orchestrator not wired (test harness)
+func (h *Handlers) ScanDisc(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var req struct {
+		ProfileID string `json:"profile_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if req.ProfileID == "" {
+		writeError(w, http.StatusBadRequest, "profile_id required")
+		return
+	}
+	if _, err := h.Store.GetDisc(r.Context(), id); err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "disc not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if h.Orchestrator == nil {
+		writeError(w, http.StatusServiceUnavailable, "orchestrator not configured")
+		return
+	}
+	hasActive, err := h.Store.DiscHasActiveJob(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if hasActive {
+		writeError(w, http.StatusConflict, "disc already has an active job")
+		return
+	}
+	job, err := h.Orchestrator.SubmitScan(r.Context(), id, req.ProfileID)
+	if err != nil {
+		// SubmitScan's "disc type does not support title scan" is a
+		// client-side issue, not a server failure — surface as 422.
+		if strings.Contains(err.Error(), "does not support title scan") {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
 }
 
 // DeleteDisc removes a disc row by id. Used by the dashboard's Skip

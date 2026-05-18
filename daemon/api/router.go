@@ -107,6 +107,7 @@ func NewRouter(h *Handlers, static http.Handler) http.Handler {
 
 			longAuthed.Post("/discs/{id}/identify", h.IdentifyDisc)
 			longAuthed.Post("/discs/{id}/start", h.StartDisc)
+			longAuthed.Post("/discs/{id}/scan", h.ScanDisc)
 			longAuthed.Post("/drives/{id}/reclassify", h.ReclassifyDrive)
 		})
 	})

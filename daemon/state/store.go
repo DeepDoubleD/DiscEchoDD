@@ -834,7 +834,9 @@ func (s *Store) CreateJob(ctx context.Context, j *Job) error {
 	if j.Kind == "" {
 		j.Kind = JobKindRip
 	}
-	if j.Kind != JobKindRip && j.Kind != JobKindTranscode {
+	switch j.Kind {
+	case JobKindRip, JobKindTranscode, JobKindScan:
+	default:
 		return fmt.Errorf("CreateJob: invalid kind %q", j.Kind)
 	}
 
@@ -850,9 +852,12 @@ func (s *Store) CreateJob(ctx context.Context, j *Job) error {
 		}
 	}
 	var stepIDs []StepID
-	if j.Kind == JobKindTranscode {
+	switch j.Kind {
+	case JobKindTranscode:
 		stepIDs = CanonicalTranscodeSteps()
-	} else {
+	case JobKindScan:
+		stepIDs = CanonicalScanSteps()
+	default:
 		stepIDs = CanonicalSteps()
 	}
 

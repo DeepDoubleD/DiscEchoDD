@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -126,6 +127,52 @@ func (o *Orchestrator) Submit(ctx context.Context, discID, profileID string) (*s
 	}
 	if err := o.cfg.Store.CreateJob(ctx, job); err != nil {
 		return nil, fmt.Errorf("create job: %w", err)
+	}
+	o.cfg.Broadcaster.Publish(state.Event{
+		Name: "job.created", Payload: map[string]any{"job": job},
+	})
+
+	if err := o.enqueue(driveID, job.ID); err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
+// SubmitScan creates a kind='scan' job for the given disc + profile
+// and enqueues it on the disc's per-drive worker. Rejects with a
+// clear error when the handler doesn't implement TitleScanner so the
+// picker UI can hide itself for unsupported disc types.
+func (o *Orchestrator) SubmitScan(ctx context.Context, discID, profileID string) (*state.Job, error) {
+	disc, err := o.cfg.Store.GetDisc(ctx, discID)
+	if err != nil {
+		return nil, fmt.Errorf("get disc: %w", err)
+	}
+	prof, err := o.cfg.Store.GetProfile(ctx, profileID)
+	if err != nil {
+		return nil, fmt.Errorf("get profile: %w", err)
+	}
+	handler, ok := o.cfg.Pipelines.Get(disc.Type)
+	if !ok {
+		return nil, fmt.Errorf("no handler registered for %s", disc.Type)
+	}
+	if _, ok := handler.(pipelines.TitleScanner); !ok {
+		return nil, fmt.Errorf("disc type %s does not support title scan", disc.Type)
+	}
+
+	driveID := disc.DriveID
+	if driveID == "" {
+		return nil, errors.New("submit scan: disc has no drive_id; cannot queue")
+	}
+
+	job := &state.Job{
+		DiscID:    disc.ID,
+		DriveID:   driveID,
+		ProfileID: prof.ID,
+		Kind:      state.JobKindScan,
+		State:     state.JobStateQueued,
+	}
+	if err := o.cfg.Store.CreateJob(ctx, job); err != nil {
+		return nil, fmt.Errorf("create scan job: %w", err)
 	}
 	o.cfg.Broadcaster.Publish(state.Event{
 		Name: "job.created", Payload: map[string]any{"job": job},
@@ -318,14 +365,25 @@ func (o *Orchestrator) runJob(jobID string) {
 
 	sink := NewPersistentSink(o.cfg.Store, o.cfg.Broadcaster, jobID)
 
-	// Route through the splittable path when the handler advertises it
-	// AND both Compute + Spool are wired. Otherwise fall back to the
-	// monolithic Run that drives the whole 8-step chain inline.
+	// Route by job kind. scan: a brief title-enumeration job that
+	// populates disc.metadata_json.scan and doesn't eject. rip
+	// (default): splittable path when wired, else the monolithic Run
+	// fallback.
 	var runErr error
-	if splittable, ok := handler.(pipelines.SplittableHandler); ok && o.cfg.Compute != nil && o.cfg.Spool != nil {
-		runErr = o.runSplittable(ctx, splittable, drv, disc, prof, job, sink)
-	} else {
-		runErr = handler.Run(ctx, drv, disc, prof, sink)
+	switch job.Kind {
+	case state.JobKindScan:
+		scanner, ok := handler.(pipelines.TitleScanner)
+		if !ok {
+			runErr = fmt.Errorf("scan: handler for %s does not implement TitleScanner", disc.Type)
+		} else {
+			runErr = o.runScan(ctx, scanner, drv, disc, prof, sink)
+		}
+	default:
+		if splittable, ok := handler.(pipelines.SplittableHandler); ok && o.cfg.Compute != nil && o.cfg.Spool != nil {
+			runErr = o.runSplittable(ctx, splittable, drv, disc, prof, job, sink)
+		} else {
+			runErr = handler.Run(ctx, drv, disc, prof, sink)
+		}
 	}
 
 	// Determine final state
@@ -359,6 +417,49 @@ func (o *Orchestrator) runJob(jobID string) {
 	case state.JobStateFailed:
 		o.cfg.Broadcaster.Publish(state.Event{Name: "job.failed", Payload: map[string]any{"job_id": jobID, "error": errMsg}})
 	}
+}
+
+// runScan executes a kind='scan' job: drive-bound title enumeration
+// that doesn't eject. Results land on disc.metadata_json under the
+// "scan" key with a "titles" array and "scanned_at" timestamp; the
+// dashboard's picker UI reads from there once the disc.changed SSE
+// event fires.
+func (o *Orchestrator) runScan(
+	ctx context.Context,
+	handler pipelines.TitleScanner,
+	drv *state.Drive, disc *state.Disc, prof *state.Profile,
+	sink pipelines.EventSink,
+) error {
+	titles, err := handler.ScanTitles(ctx, drv, disc, prof, sink)
+	if err != nil {
+		return err
+	}
+
+	// Merge the scan results into the existing metadata blob so other
+	// keys (cover_url, dvd_titles, …) survive.
+	merged := map[string]any{}
+	if disc.MetadataJSON != "" && disc.MetadataJSON != "{}" {
+		_ = json.Unmarshal([]byte(disc.MetadataJSON), &merged)
+	}
+	merged["scan"] = map[string]any{
+		"titles":     titles,
+		"scanned_at": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	body, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("scan: marshal metadata: %w", err)
+	}
+	if err := o.cfg.Store.UpdateDiscMetadataBlob(ctx, disc.ID, string(body)); err != nil {
+		return fmt.Errorf("scan: persist metadata: %w", err)
+	}
+	o.cfg.Broadcaster.Publish(state.Event{
+		Name: "disc.changed",
+		Payload: map[string]any{
+			"id":            disc.ID,
+			"metadata_json": string(body),
+		},
+	})
+	return nil
 }
 
 // runSplittable drives the drive-bound half of a split pipeline: it

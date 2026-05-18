@@ -96,14 +96,24 @@ func CanonicalTranscodeSteps() []StepID {
 	return []StepID{StepTranscode, StepCompress, StepMove, StepNotify}
 }
 
-// JobKind discriminates rip-half from transcode-half jobs. Monolithic
-// (audio CD / DATA) pipelines keep kind='rip' and run the whole
-// canonical 8-step list inside a single job.
+// CanonicalScanSteps is the single-step list for kind='scan' jobs:
+// a short drive-bound MakeMKV / HandBrake scan that enumerates titles
+// without ripping. Reuses StepIdentify so the existing CHECK
+// constraint on job_steps.step doesn't need rewriting.
+func CanonicalScanSteps() []StepID {
+	return []StepID{StepIdentify}
+}
+
+// JobKind discriminates rip-half from transcode-half jobs, plus the
+// short scan jobs the title-picker flow uses. Monolithic (audio CD /
+// DATA) pipelines keep kind='rip' and run the whole canonical 8-step
+// list inside a single job.
 type JobKind string
 
 const (
 	JobKindRip       JobKind = "rip"
 	JobKindTranscode JobKind = "transcode"
+	JobKindScan      JobKind = "scan"
 )
 
 // JobStepState transitions:
