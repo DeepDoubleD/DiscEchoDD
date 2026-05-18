@@ -15,9 +15,14 @@ import (
 )
 
 // startDiscRequest is the wire format for POST /api/discs/:id/start.
+// TitleIDs is optional; when present, the rip handler reads them off
+// disc.metadata_json.selected_title_ids and rips exactly those
+// titles instead of running its auto-pick heuristic. Empty / absent
+// preserves today's behaviour.
 type startDiscRequest struct {
 	ProfileID      string `json:"profile_id"`
 	CandidateIndex int    `json:"candidate_index"`
+	TitleIDs       []int  `json:"title_ids,omitempty"`
 }
 
 // StartDisc creates a job for the given disc + profile and queues it on
@@ -117,6 +122,26 @@ func (h *Handlers) StartDisc(w http.ResponseWriter, r *http.Request) {
 	if hasActive {
 		writeError(w, http.StatusConflict, "disc already has an active job")
 		return
+	}
+
+	// Persist the user-picked title IDs into the disc's metadata_json
+	// so the rip handler reads them at runtime. Cleared on next
+	// identify (when a fresh disc is inserted into the same drive)
+	// via the existing UpdateDiscMetadataBlob path. Skipped when the
+	// list is empty so the default auto-pick path stays unchanged.
+	if len(req.TitleIDs) > 0 {
+		merged := map[string]any{}
+		if disc.MetadataJSON != "" && disc.MetadataJSON != "{}" {
+			_ = json.Unmarshal([]byte(disc.MetadataJSON), &merged)
+		}
+		merged["selected_title_ids"] = req.TitleIDs
+		body, err := json.Marshal(merged)
+		if err == nil {
+			if err := h.Store.UpdateDiscMetadataBlob(r.Context(), disc.ID, string(body)); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
 	}
 
 	job, err := h.Orchestrator.Submit(r.Context(), disc.ID, req.ProfileID)

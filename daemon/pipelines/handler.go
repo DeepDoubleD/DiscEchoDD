@@ -6,6 +6,7 @@ package pipelines
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
@@ -88,6 +89,43 @@ type SplittableHandler interface {
 	// from a different path (e.g. a future network-mount mode).
 	RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, profile *state.Profile, spoolDir string, sink EventSink) (RipResult, error)
 	RunTranscode(ctx context.Context, ripResult RipResult, disc *state.Disc, profile *state.Profile, sink EventSink) error
+}
+
+// SelectedTitleIDsFromDisc returns the user-picked title IDs from a
+// disc's metadata_json blob (key: "selected_title_ids"). Returns nil
+// when the key is absent, empty, or malformed — callers fall back to
+// their default auto-pick behaviour in that case. The conversion is
+// permissive: JSON numbers decode as float64, and the slice can be
+// of any numeric type.
+func SelectedTitleIDsFromDisc(disc *state.Disc) []int {
+	if disc == nil || disc.MetadataJSON == "" || disc.MetadataJSON == "{}" {
+		return nil
+	}
+	var blob map[string]any
+	if err := json.Unmarshal([]byte(disc.MetadataJSON), &blob); err != nil {
+		return nil
+	}
+	raw, ok := blob["selected_title_ids"]
+	if !ok {
+		return nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]int, 0, len(arr))
+	for _, v := range arr {
+		switch n := v.(type) {
+		case float64:
+			out = append(out, int(n))
+		case int:
+			out = append(out, n)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // TitleInfo describes one selectable title from a MakeMKV / HandBrake

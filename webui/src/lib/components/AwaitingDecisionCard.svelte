@@ -3,6 +3,7 @@
   import {
     profiles,
     startDisc,
+    scanDisc,
     discs,
     manualIdentify,
     pendingDiscID,
@@ -31,6 +32,23 @@
   $: candidates = liveDisc.candidates ?? [];
   $: topConfidence = candidates[0]?.confidence ?? 0;
   $: isGameDisc = ['PSX', 'PS2', 'SAT', 'DC', 'XBOX'].includes(liveDisc.type);
+  // BDMV/UHD/DVD are the only disc types whose handlers implement
+  // TitleScanner. Hide the Pick titles… affordance for everything else
+  // so audio CDs / game discs / DATA discs don't show a button that
+  // would 422 from the server.
+  $: titleScanSupported = ['BDMV', 'UHD', 'DVD'].includes(liveDisc.type);
+  // Resolve the profile a Pick-titles click would scan + rip with —
+  // the top candidate's natural profile (movie/series split for DVD).
+  $: scanProfileID = pickerProfileID(liveDisc, $profiles, candidates[0]);
+
+  function pickerProfileID(d: typeof liveDisc, pros: typeof $profiles, top?: Candidate): string {
+    const enabled = pros.filter((p) => p.enabled);
+    if (d.type === 'DVD') {
+      const wantName = top?.media_type === 'tv' ? 'DVD-Series' : 'DVD-Movie';
+      return enabled.find((p) => p.disc_type === 'DVD' && p.name === wantName)?.id ?? '';
+    }
+    return enabled.find((p) => p.disc_type === d.type)?.id ?? '';
+  }
   // The manual-search backend dispatches on disc.type — MB for audio
   // CDs, IGDB for game discs, TMDB for video — so the placeholder +
   // button label must follow the same split or the user is told the
@@ -71,6 +89,15 @@
     return $profiles.find((p) => p.disc_type === 'DATA' && p.enabled)?.id ?? '';
   }
 
+  // showsTitlePicker reports whether a profile opts into the pre-rip
+  // title picker. Used by both the manual pick + auto-confirm paths to
+  // route through scanDisc instead of startDisc.
+  function showsTitlePicker(profileID: string): boolean {
+    const p = $profiles.find((x) => x.id === profileID);
+    const v = p?.options?.['show_title_picker'];
+    return v === true;
+  }
+
   async function ripAsData(): Promise<void> {
     if (starting) return;
     cancelled = true;
@@ -106,7 +133,14 @@
     if (!profileId) return;
     starting = true;
     try {
-      await startDisc(liveDisc.id, profileId, idx);
+      // Profiles opted into the title picker route through scanDisc
+      // instead of startDisc — the user wants the chance to confirm
+      // titles before the rip kicks off.
+      if (showsTitlePicker(profileId)) {
+        await scanDisc(liveDisc.id, profileId);
+      } else {
+        await startDisc(liveDisc.id, profileId, idx);
+      }
     } catch (_e) {
       // Daemon refuses duplicate starts with 409 since 0.4.1; if we
       // hit any error, release the lock so the user can retry from
@@ -132,9 +166,35 @@
     if (!profileId) return;
     starting = true;
     try {
-      await startDisc(liveDisc.id, profileId, candidateIndex);
+      if (showsTitlePicker(profileId)) {
+        await scanDisc(liveDisc.id, profileId);
+      } else {
+        await startDisc(liveDisc.id, profileId, candidateIndex);
+      }
     } catch (_e) {
       starting = false;
+    }
+  }
+
+  let scanning = false;
+  let scanError: string | null = null;
+
+  async function pickTitles(): Promise<void> {
+    if (scanning || starting || !scanProfileID) return;
+    cancelled = true;
+    clearInterval(timer);
+    scanning = true;
+    scanError = null;
+    try {
+      // SubmitScan creates a kind='scan' job; on completion the
+      // disc.changed SSE event arrives with metadata_json.scan
+      // populated and AwaitingDecisionList swaps this card out for
+      // the TitlePicker. No further action needed from this function.
+      await scanDisc(liveDisc.id, scanProfileID);
+    } catch (e) {
+      scanError = (e as Error).message;
+      scanning = false;
+      cancelled = false;
     }
   }
 
@@ -351,9 +411,19 @@
           <button
             class="min-h-[44px] flex-1 rounded-xl bg-accent text-[14px] font-semibold text-black disabled:opacity-50"
             on:click={() => pick(0)}
-            disabled={starting}
+            disabled={starting || scanning}
           >
             Use top match · Start rip
+          </button>
+        {/if}
+        {#if titleScanSupported && scanProfileID}
+          <button
+            class="min-h-[44px] flex-1 rounded-xl border border-border text-[14px] text-text-2 disabled:opacity-50"
+            on:click={pickTitles}
+            disabled={starting || scanning}
+            data-testid="pick-titles"
+          >
+            {scanning ? 'Scanning titles…' : 'Pick titles…'}
           </button>
         {/if}
         <button
@@ -371,5 +441,8 @@
         Skip
       </button>
     </div>
+    {#if scanError}
+      <div class="mt-2 text-[12px] text-error">{scanError}</div>
+    {/if}
   {/if}
 </div>

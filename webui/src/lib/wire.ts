@@ -142,7 +142,7 @@ export interface JobStep {
   notes?: Record<string, unknown>;
 }
 
-export type JobKind = 'rip' | 'transcode';
+export type JobKind = 'rip' | 'transcode' | 'scan';
 
 export interface Job {
   id: string;

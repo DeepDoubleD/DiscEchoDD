@@ -68,6 +68,7 @@ var engineSchemas = map[string]EngineSchema{
 		Options: map[string]OptionSchema{
 			"min_title_seconds": {Type: OptInt},
 			"keep_all_tracks":   {Type: OptBool},
+			"show_title_picker": {Type: OptBool}, // route through pre-rip title picker
 		},
 		StepCount: 6,
 	},
@@ -78,6 +79,7 @@ var engineSchemas = map[string]EngineSchema{
 		Options: map[string]OptionSchema{
 			"min_title_seconds": {Type: OptInt},
 			"keep_all_tracks":   {Type: OptBool},
+			"show_title_picker": {Type: OptBool}, // route through pre-rip title picker
 		},
 		StepCount: 7,
 	},
@@ -91,6 +93,7 @@ var engineSchemas = map[string]EngineSchema{
 			"dvd_selection_mode": {Type: OptString},
 			"quality_rf":         {Type: OptInt},
 			"encoder_preset":     {Type: OptString},
+			"show_title_picker":  {Type: OptBool}, // route through pre-rip title picker
 		},
 		StepCount: 7,
 	},

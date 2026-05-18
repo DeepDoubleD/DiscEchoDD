@@ -369,10 +369,22 @@ export async function startDisc(
   discID: string,
   profileID: string,
   candidateIndex?: number,
+  titleIDs?: number[],
 ): Promise<Job> {
-  const body: { profile_id: string; candidate_index?: number } = { profile_id: profileID };
+  const body: { profile_id: string; candidate_index?: number; title_ids?: number[] } = {
+    profile_id: profileID,
+  };
   if (candidateIndex !== undefined) body.candidate_index = candidateIndex;
+  if (titleIDs && titleIDs.length > 0) body.title_ids = titleIDs;
   return apiPost<Job>(`/api/discs/${discID}/start`, body);
+}
+
+// scanDisc kicks off a kind='scan' job that enumerates titles via
+// MakeMKV / HandBrake. The picker UI surfaces once the daemon
+// persists the title list to disc.metadata_json.scan and the
+// disc.changed SSE event re-renders the awaiting-decision card.
+export async function scanDisc(discID: string, profileID: string): Promise<Job> {
+  return apiPost<Job>(`/api/discs/${discID}/scan`, { profile_id: profileID });
 }
 
 export async function cancelJob(jobID: string): Promise<void> {

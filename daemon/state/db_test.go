@@ -24,8 +24,8 @@ func TestOpen_AppliesMigrationsOnFreshDB(t *testing.T) {
 	if err := row.Scan(&v); err != nil {
 		t.Fatalf("scan version: %v", err)
 	}
-	if v != 14 {
-		t.Errorf("schema_migrations max version: want 14, got %d", v)
+	if v != 15 {
+		t.Errorf("schema_migrations max version: want 15, got %d", v)
 	}
 
 	for _, tbl := range []string{
@@ -63,8 +63,8 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	if err := row.Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 14 {
-		t.Errorf("schema_migrations rows after second open: want 14, got %d", n)
+	if n != 15 {
+		t.Errorf("schema_migrations rows after second open: want 15, got %d", n)
 	}
 }
 
@@ -307,7 +307,7 @@ func TestMigration009_CollapsesDuplicateDiscsAndReparentsJobs(t *testing.T) {
 	// The unique index must be back so future dupes are blocked.
 	_, err = db.Conn().ExecContext(ctx, `
 		INSERT INTO discs (id, drive_id, type, toc_hash, candidates_json, metadata_json, created_at)
-		VALUES ('d-dupe', 'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-15T14:00:00Z')`)
+		VALUES ('d-dupe', 'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-15T15:00:00Z')`)
 	if err == nil {
 		t.Error("insert with duplicate (drive_id, toc_hash) should fail after migration")
 	}

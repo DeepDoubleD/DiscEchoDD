@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
@@ -179,8 +180,10 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 }
 
 // RunRip is the drive-bound half. Steps: detect, identify, MakeMKV
-// rip into spoolDir/rip/<file>.mkv, eject. On return the drive is no
-// longer needed and the orchestrator releases it.
+// rip into spoolDir/rip/, eject. When disc.metadata_json carries
+// selected_title_ids (user came through the picker), rips exactly
+// those titles; otherwise falls back to pickLongestTitle (legacy
+// single-title behaviour). Drive freed on return.
 func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, spoolDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
 	sink.OnStepStart(state.StepDetect)
 	sink.OnStepDone(state.StepDetect, nil)
@@ -204,13 +207,21 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("makemkv scan: %w", err)
 	}
-	picked, err := pickLongestTitle(titles, prof)
+
+	// Pick titles to rip: user selection wins when present, otherwise
+	// fall back to the legacy longest-title heuristic so movie-profile
+	// auto-flow keeps working.
+	picked, err := selectTitles(titles, prof, disc)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, err
 	}
-	sink.OnLog(state.LogLevelInfo, "MakeMKV: scan complete, picked title %d (longest %s)",
-		picked.ID, pipelines.HumanDuration(time.Duration(picked.DurationSec)*time.Second))
+	if len(picked) > 1 {
+		sink.OnLog(state.LogLevelInfo, "MakeMKV: scan complete, ripping %d titles", len(picked))
+	} else {
+		sink.OnLog(state.LogLevelInfo, "MakeMKV: scan complete, picked title %d (%s)",
+			picked[0].ID, pipelines.HumanDuration(time.Duration(picked[0].DurationSec)*time.Second))
+	}
 
 	ripDir := filepath.Join(spoolDir, "rip")
 	if err := os.MkdirAll(ripDir, 0o755); err != nil {
@@ -218,22 +229,43 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 		return pipelines.RipResult{}, err
 	}
 	ripStart := time.Now()
-	if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, picked.ID, ripDir, pipelines.NewStepSink(sink, state.StepRip)); err != nil {
-		sink.OnStepFailed(state.StepRip, err)
-		return pipelines.RipResult{}, fmt.Errorf("makemkv rip: %w", err)
+	for _, t := range picked {
+		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, pipelines.NewStepSink(sink, state.StepRip)); err != nil {
+			sink.OnStepFailed(state.StepRip, err)
+			return pipelines.RipResult{}, fmt.Errorf("makemkv rip title %d: %w", t.ID, err)
+		}
 	}
-	rippedFile, err := singleMKVIn(ripDir)
+	// Collect every .mkv MakeMKV wrote into ripDir. Multi-title rips
+	// produce one .mkv per title; MakeMKV's CLI names them per the
+	// source-file convention so no collisions even across multiple
+	// Rip calls into the same dir.
+	rippedFiles, err := listMKVIn(ripDir)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, err
 	}
-	var ripSize int64
-	if fi, statErr := os.Stat(rippedFile); statErr == nil {
-		ripSize = fi.Size()
+	if len(rippedFiles) == 0 {
+		err := fmt.Errorf("no .mkv produced in %s", ripDir)
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, err
 	}
-	sink.OnLog(state.LogLevelInfo, "MakeMKV: rip complete, %s in %s",
-		pipelines.HumanBytes(ripSize), pipelines.HumanDuration(time.Since(ripStart)))
-	sink.OnStepDone(state.StepRip, map[string]any{"title_id": picked.ID, "duration_sec": picked.DurationSec})
+	var totalSize int64
+	for _, f := range rippedFiles {
+		if fi, statErr := os.Stat(f); statErr == nil {
+			totalSize += fi.Size()
+		}
+	}
+	sink.OnLog(state.LogLevelInfo, "MakeMKV: rip complete, %d file(s) %s in %s",
+		len(rippedFiles), pipelines.HumanBytes(totalSize), pipelines.HumanDuration(time.Since(ripStart)))
+	notes := map[string]any{
+		"title_id":     picked[0].ID,
+		"duration_sec": picked[0].DurationSec,
+		"rip_file":     rippedFiles[0],
+	}
+	if len(rippedFiles) > 1 {
+		notes["rip_file_count"] = len(rippedFiles)
+	}
+	sink.OnStepDone(state.StepRip, notes)
 
 	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
 		Tools:       h.deps.Tools,
@@ -243,35 +275,97 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	return pipelines.RipResult{
 		SpoolPath: spoolDir,
 		Notes: map[string]any{
-			"title_id":     picked.ID,
-			"duration_sec": picked.DurationSec,
-			"rip_file":     rippedFile,
+			"title_id":     picked[0].ID,
+			"duration_sec": picked[0].DurationSec,
+			"rip_file":     rippedFiles[0],
+			"rip_files":    rippedFiles,
 		},
 	}, nil
 }
 
-// RunTranscode is the compute-bound half. Steps: HandBrake encode the
-// MakeMKV output into spool/out.mkv (transcode), skip compress, atomic
-// move into the library (move), fire Apprise (notify). The compute
-// worker handles spool cleanup on success.
+// selectTitles returns the user-picked titles when
+// disc.metadata_json.selected_title_ids is set, otherwise falls back
+// to a single-element slice containing the longest title meeting
+// the profile's min_title_seconds floor. Returns an error when no
+// title qualifies for the fallback.
+func selectTitles(titles []tools.MakeMKVTitle, prof *state.Profile, disc *state.Disc) ([]tools.MakeMKVTitle, error) {
+	if ids := pipelines.SelectedTitleIDsFromDisc(disc); len(ids) > 0 {
+		idSet := make(map[int]bool, len(ids))
+		for _, id := range ids {
+			idSet[id] = true
+		}
+		picked := make([]tools.MakeMKVTitle, 0, len(ids))
+		// Preserve user order: iterate ids and look up each in titles.
+		byID := make(map[int]tools.MakeMKVTitle, len(titles))
+		for _, t := range titles {
+			byID[t.ID] = t
+		}
+		for _, id := range ids {
+			if t, ok := byID[id]; ok {
+				picked = append(picked, t)
+			}
+		}
+		if len(picked) == 0 {
+			return nil, fmt.Errorf("none of selected title IDs %v found in MakeMKV scan", ids)
+		}
+		return picked, nil
+	}
+	t, err := pickLongestTitle(titles, prof)
+	if err != nil {
+		return nil, err
+	}
+	return []tools.MakeMKVTitle{t}, nil
+}
+
+// listMKVIn lists every .mkv file at the top level of dir. Returns a
+// stable lexical order so multi-title rips have predictable output
+// naming downstream.
+func listMKVIn(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".mkv" {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// RunTranscode is the compute-bound half. Steps: HandBrake encode each
+// MakeMKV rip output (transcode), skip compress, atomic-move into the
+// library (move), fire Apprise (notify). Multi-title rips encode each
+// title in turn and append a `-titleNN` suffix to the rendered output
+// path when paths would collide (typical for movie templates that
+// don't reference {{.EpisodeNumber}}). Spool cleanup is the compute
+// worker's responsibility.
 func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
-	rippedFile, err := singleMKVIn(filepath.Join(result.SpoolPath, "rip"))
+	rippedFiles, err := listMKVIn(filepath.Join(result.SpoolPath, "rip"))
 	if err != nil {
 		sink.OnStepStart(state.StepTranscode)
 		sink.OnStepFailed(state.StepTranscode, err)
 		return err
 	}
+	if len(rippedFiles) == 0 {
+		err := fmt.Errorf("no .mkv rip output under %s/rip", result.SpoolPath)
+		sink.OnStepStart(state.StepTranscode)
+		sink.OnStepFailed(state.StepTranscode, err)
+		return err
+	}
 
-	sink.OnStepStart(state.StepTranscode)
-	transcodedFile := filepath.Join(result.SpoolPath, "out.mkv")
 	if h.deps.Tools == nil {
 		err := errors.New("bdmv: tools registry not configured")
+		sink.OnStepStart(state.StepTranscode)
 		sink.OnStepFailed(state.StepTranscode, err)
 		return err
 	}
 	hb, ok := h.deps.Tools.Get("handbrake")
 	if !ok {
 		err := errors.New("bdmv: handbrake tool not registered")
+		sink.OnStepStart(state.StepTranscode)
 		sink.OnStepFailed(state.StepTranscode, err)
 		return err
 	}
@@ -287,52 +381,59 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 	case "x264", "x265":
 		encoder = "x265_10bit"
 	}
+
+	sink.OnStepStart(state.StepTranscode)
 	if fellBack {
 		sink.OnLog(state.LogLevelWarn,
 			"NVENC requested but unavailable on host; falling back to %s software encoder", encoder)
 	}
-	hbArgs := []string{
-		"--input", rippedFile,
-		"--output", transcodedFile,
-		"--format", "av_mkv",
-		"--encoder", encoder,
-		"--quality", "19",
-		"--all-audio",
-		"--markers",
+	transcodedFiles := make([]string, 0, len(rippedFiles))
+	for i, rippedFile := range rippedFiles {
+		transcodedFile := filepath.Join(result.SpoolPath, fmt.Sprintf("out_%02d.mkv", i+1))
+		hbArgs := []string{
+			"--input", rippedFile,
+			"--output", transcodedFile,
+			"--format", "av_mkv",
+			"--encoder", encoder,
+			"--quality", "19",
+			"--all-audio",
+			"--markers",
+			// BDMV output is always MKV — keep every subtitle track the
+			// disc carries rather than filtering to one language.
+			"--all-subtitles",
+		}
+		sink.OnLog(state.LogLevelInfo, "HandBrake: encoding %s", filepath.Base(rippedFile))
+		encStart := time.Now()
+		if err := hb.Run(ctx, hbArgs, nil, result.SpoolPath, pipelines.NewStepSink(sink, state.StepTranscode)); err != nil {
+			sink.OnStepFailed(state.StepTranscode, err)
+			return fmt.Errorf("handbrake encode %s: %w", filepath.Base(rippedFile), err)
+		}
+		var encSize int64
+		if fi, statErr := os.Stat(transcodedFile); statErr == nil {
+			encSize = fi.Size()
+		}
+		sink.OnLog(state.LogLevelInfo, "HandBrake: %s done, %s in %s",
+			filepath.Base(rippedFile),
+			pipelines.HumanBytes(encSize), pipelines.HumanDuration(time.Since(encStart)))
+		transcodedFiles = append(transcodedFiles, transcodedFile)
 	}
-	// BDMV output is always MKV — keep every subtitle track the disc
-	// carries rather than filtering to one language.
-	hbArgs = append(hbArgs, "--all-subtitles")
-	sink.OnLog(state.LogLevelInfo, "HandBrake: encoding %s", filepath.Base(rippedFile))
-	encStart := time.Now()
-	if err := hb.Run(ctx, hbArgs, nil, result.SpoolPath, pipelines.NewStepSink(sink, state.StepTranscode)); err != nil {
-		sink.OnStepFailed(state.StepTranscode, err)
-		return fmt.Errorf("handbrake encode: %w", err)
-	}
-	var encSize int64
-	if fi, statErr := os.Stat(transcodedFile); statErr == nil {
-		encSize = fi.Size()
-	}
-	sink.OnLog(state.LogLevelInfo, "HandBrake: encode complete, %s in %s",
-		pipelines.HumanBytes(encSize), pipelines.HumanDuration(time.Since(encStart)))
 	sink.OnStepDone(state.StepTranscode, nil)
 
-	// move — atomic rename to library.
+	// move — atomic rename to library, one file per encoded title.
 	sink.OnStepStart(state.StepMove)
-	rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, pipelines.OutputFields{
-		Title: disc.Title, Year: disc.Year,
-	})
+	moved, err := h.moveMultiTitle(transcodedFiles, disc, prof)
 	if err != nil {
 		sink.OnStepFailed(state.StepMove, err)
-		return err
+		return fmt.Errorf("move: %w", err)
 	}
-	dst := filepath.Join(h.deps.LibraryRoot, rel)
-	if err := pipelines.AtomicMove(transcodedFile, dst); err != nil {
-		sink.OnStepFailed(state.StepMove, err)
-		return err
+	for _, p := range moved {
+		sink.OnLog(state.LogLevelInfo, "move: → %s", p)
 	}
-	sink.OnLog(state.LogLevelInfo, "move: → %s", dst)
-	sink.OnStepDone(state.StepMove, map[string]any{"path": dst})
+	if len(moved) == 1 {
+		sink.OnStepDone(state.StepMove, map[string]any{"path": moved[0]})
+	} else {
+		sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
+	}
 
 	pipelines.RunNotifyStep(ctx, sink, pipelines.NotifyDeps{
 		Tools:          h.deps.Tools,
@@ -340,6 +441,47 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 		LibraryRoot:    h.deps.LibraryRoot,
 	}, disc)
 	return nil
+}
+
+// moveMultiTitle atomic-moves each transcoded file into the library
+// under the rendered template. When multiple titles would collide on
+// the same path (template ignores EpisodeNumber), appends a
+// `-titleNN` suffix before the extension to disambiguate.
+func (h *Handler) moveMultiTitle(srcs []string, disc *state.Disc, prof *state.Profile) ([]string, error) {
+	// Render all targets first so we can detect collisions and append
+	// per-title suffixes only when needed.
+	rendered := make([]string, len(srcs))
+	for i := range srcs {
+		rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, pipelines.OutputFields{
+			Title:         disc.Title,
+			Year:          disc.Year,
+			Show:          disc.Title,
+			EpisodeNumber: i + 1,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("render template: %w", err)
+		}
+		rendered[i] = rel
+	}
+	counts := map[string]int{}
+	for _, r := range rendered {
+		counts[r]++
+	}
+	for i, r := range rendered {
+		if counts[r] > 1 {
+			ext := filepath.Ext(r)
+			rendered[i] = strings.TrimSuffix(r, ext) + fmt.Sprintf("-title%02d", i+1) + ext
+		}
+	}
+	moved := make([]string, 0, len(srcs))
+	for i, src := range srcs {
+		dst := filepath.Join(h.deps.LibraryRoot, rendered[i])
+		if err := pipelines.AtomicMove(src, dst); err != nil {
+			return moved, err
+		}
+		moved = append(moved, dst)
+	}
+	return moved, nil
 }
 
 func (h *Handler) createWorkDir(discID string) (string, error) {
@@ -405,17 +547,4 @@ func pickLongestTitle(titles []tools.MakeMKVTitle, prof *state.Profile) (tools.M
 		return tools.MakeMKVTitle{}, fmt.Errorf("no title with duration >= %ds", min)
 	}
 	return best, nil
-}
-
-func singleMKVIn(dir string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", err
-	}
-	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".mkv" {
-			return filepath.Join(dir, e.Name()), nil
-		}
-	}
-	return "", fmt.Errorf("no .mkv produced in %s", dir)
 }

@@ -304,24 +304,52 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 	}
 	isMovie := IsMovieProfile(prof)
 
-	// Movie profiles delegate title selection to HandBrake's own
-	// `--main-feature` flag, which reads the IFO's main-feature bit
-	// rather than guessing by duration. Series profiles still need
-	// our scan-and-filter logic to enumerate episode titles.
-	encodeTitles := selectEncodeTitles(titles, prof)
-	if !isMovie && len(encodeTitles) == 0 {
-		err := errors.New("no titles to encode")
-		sink.OnStepFailed(state.StepTranscode, err)
-		return err
-	}
-	if isMovie {
-		// Single encode using --main-feature. encodeTitles is set to
-		// the scan's longest title only so the duration-floor check
-		// below has a number to compare the output bytes to.
-		encodeTitles = []tools.HandBrakeTitle{longestTitle(titles)}
-		if err := validateMovieTitleSelection(encodeTitles[0], prof); err != nil {
+	// User picked specific titles via the picker — honour them and
+	// skip the auto-pick heuristic entirely (movie/series mode no
+	// longer matters; main-feature is dropped since the user told us
+	// what to rip).
+	pickedIDs := pipelines.SelectedTitleIDsFromDisc(disc)
+	var encodeTitles []tools.HandBrakeTitle
+	switch {
+	case len(pickedIDs) > 0:
+		byNumber := make(map[int]tools.HandBrakeTitle, len(titles))
+		for _, t := range titles {
+			byNumber[t.Number] = t
+		}
+		encodeTitles = make([]tools.HandBrakeTitle, 0, len(pickedIDs))
+		for _, id := range pickedIDs {
+			if t, ok := byNumber[id]; ok {
+				encodeTitles = append(encodeTitles, t)
+			}
+		}
+		if len(encodeTitles) == 0 {
+			err := fmt.Errorf("none of selected title IDs %v found in HandBrake scan", pickedIDs)
 			sink.OnStepFailed(state.StepTranscode, err)
 			return err
+		}
+		// Force per-title mode so the encoder loop emits --title N for
+		// each pick rather than --main-feature.
+		isMovie = false
+	default:
+		// Movie profiles delegate title selection to HandBrake's own
+		// `--main-feature` flag, which reads the IFO's main-feature bit
+		// rather than guessing by duration. Series profiles still need
+		// our scan-and-filter logic to enumerate episode titles.
+		encodeTitles = selectEncodeTitles(titles, prof)
+		if !isMovie && len(encodeTitles) == 0 {
+			err := errors.New("no titles to encode")
+			sink.OnStepFailed(state.StepTranscode, err)
+			return err
+		}
+		if isMovie {
+			// Single encode using --main-feature. encodeTitles is set to
+			// the scan's longest title only so the duration-floor check
+			// below has a number to compare the output bytes to.
+			encodeTitles = []tools.HandBrakeTitle{longestTitle(titles)}
+			if err := validateMovieTitleSelection(encodeTitles[0], prof); err != nil {
+				sink.OnStepFailed(state.StepTranscode, err)
+				return err
+			}
 		}
 	}
 
