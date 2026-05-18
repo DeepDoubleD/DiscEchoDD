@@ -16,6 +16,11 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/tools"
 )
 
+// Compile-time assertion that BDMV satisfies SplittableHandler — the
+// orchestrator's type-assert depends on it, so a future signature
+// drift here is caught by the build, not at runtime.
+var _ pipelines.SplittableHandler = (*bdmv.Handler)(nil)
+
 // fakeProber returns a fixed DVDInfo (BDMV reuses the existing DVD
 // prober for volume-label reading).
 type fakeProber struct {
@@ -165,6 +170,94 @@ func TestBDMVHandler_Plan_CompressSkipped(t *testing.T) {
 	}
 }
 
+func TestBDMVHandler_PlanRip_MarksTranscodeHalfSkipped(t *testing.T) {
+	h := bdmv.New(bdmv.Deps{})
+	plan := h.PlanRip(&state.Disc{}, &state.Profile{})
+	if len(plan) != 8 {
+		t.Fatalf("PlanRip: want 8 step plans (canonical), got %d", len(plan))
+	}
+	wantSkipped := map[state.StepID]bool{
+		state.StepTranscode: true, state.StepCompress: true,
+		state.StepMove: true, state.StepNotify: true,
+	}
+	for _, sp := range plan {
+		if want, got := wantSkipped[sp.ID], sp.Skip; want != got {
+			t.Errorf("PlanRip step %s: skip=%v, want %v", sp.ID, got, want)
+		}
+	}
+}
+
+func TestBDMVHandler_PlanTranscode_CompressSkipped(t *testing.T) {
+	h := bdmv.New(bdmv.Deps{})
+	plan := h.PlanTranscode(&state.Disc{}, &state.Profile{})
+	if len(plan) != 4 {
+		t.Fatalf("PlanTranscode: want 4 step plans, got %d", len(plan))
+	}
+	for _, sp := range plan {
+		if sp.ID == state.StepCompress && !sp.Skip {
+			t.Errorf("PlanTranscode: compress should be skipped (BDMV has no compress step)")
+		}
+		if sp.ID != state.StepCompress && sp.Skip {
+			t.Errorf("PlanTranscode: %s should NOT be skipped", sp.ID)
+		}
+	}
+}
+
+func TestBDMVHandler_RunRip_LeavesRipInSpool(t *testing.T) {
+	libRoot := t.TempDir()
+	spoolDir := t.TempDir()
+
+	reg, _, _, _ := newRegistry()
+	h := bdmv.New(bdmv.Deps{
+		MakeMKVScanner: &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+			{ID: 1, DurationSec: 7000, SourceFile: "00800.mpls"},
+		}},
+		MakeMKVRipper: &fakeMakeMKV{stubName: "title_t01.mkv"},
+		Tools:         reg,
+		LibraryRoot:   libRoot,
+		WorkRoot:      t.TempDir(),
+	})
+	prof := &state.Profile{
+		ID: "p-bd", DiscType: state.DiscTypeBDMV, Name: "BD",
+		OutputPathTemplate: "{{.Title}}/{{.Title}}.mkv",
+		Options:            map[string]any{"min_title_seconds": float64(3600)},
+	}
+	disc := &state.Disc{ID: "disc-1", Type: state.DiscTypeBDMV, Title: "Arrival", Year: 2016}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	sink := testutil.NewRecordingSink()
+	result, err := h.RunRip(context.Background(), drv, disc, prof, spoolDir, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SpoolPath != spoolDir {
+		t.Errorf("SpoolPath = %s, want %s", result.SpoolPath, spoolDir)
+	}
+	// MakeMKV output must live in spool/rip/<file>.mkv for the transcode
+	// worker to find on a fresh boot.
+	ripped := filepath.Join(spoolDir, "rip", "title_t01.mkv")
+	if _, err := os.Stat(ripped); err != nil {
+		t.Errorf("rip output not at %s: %v", ripped, err)
+	}
+	// Library must NOT have the file yet — that's the transcode step's job.
+	if entries, _ := os.ReadDir(libRoot); len(entries) != 0 {
+		t.Errorf("library should be empty after RunRip, found: %v", entries)
+	}
+
+	steps := sink.StepSequence()
+	wantOrder := []state.StepID{
+		state.StepDetect, state.StepIdentify, state.StepRip, state.StepEject,
+	}
+	if len(steps) != len(wantOrder) {
+		t.Fatalf("RunRip emitted %d steps, want %d: %v", len(steps), len(wantOrder), steps)
+	}
+	for i, want := range wantOrder {
+		if steps[i] != want {
+			t.Errorf("RunRip step %d = %s, want %s", i, steps[i], want)
+		}
+	}
+}
+
 func TestBDMVHandler_Run_HappyPath(t *testing.T) {
 	libRoot := t.TempDir()
 	workRoot := t.TempDir()
@@ -201,10 +294,15 @@ func TestBDMVHandler_Run_HappyPath(t *testing.T) {
 		t.Errorf("expected file at %s: %v", want, err)
 	}
 
+	// Step order after the rip/transcode split: eject moves to the end
+	// of RunRip (drive-freed boundary), notify stays at the end of
+	// RunTranscode (file-in-library boundary). The monolithic Run path
+	// emits both halves back-to-back, so the recording sink sees the
+	// new combined order.
 	starts := sink.StepSequence()
 	wantOrder := []state.StepID{
-		state.StepDetect, state.StepIdentify, state.StepRip,
-		state.StepTranscode, state.StepMove, state.StepNotify, state.StepEject,
+		state.StepDetect, state.StepIdentify, state.StepRip, state.StepEject,
+		state.StepTranscode, state.StepMove, state.StepNotify,
 	}
 	if len(starts) != len(wantOrder) {
 		t.Fatalf("started %d steps, want %d: %v", len(starts), len(wantOrder), starts)

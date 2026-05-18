@@ -17,14 +17,23 @@
 
   function statusFor(step: StepID): 'done' | 'active' | 'pending' | 'skipped' {
     const stp = job.steps?.find((s) => s.step === step);
-    if (stp?.state === 'skipped') return 'skipped';
-    if (stp?.state === 'done') return 'done';
+    if (!stp) {
+      // kind='transcode' child jobs only materialise the 4 transcode-
+      // half rows; absent rip-half rows render as skipped so the dot
+      // row collapses to the steps that actually run. Pre-snapshot
+      // (steps undefined) still honours active_step.
+      if (job.steps && job.steps.length > 0) return 'skipped';
+      if (job.active_step === step) return 'active';
+      return 'pending';
+    }
+    if (stp.state === 'skipped') return 'skipped';
+    if (stp.state === 'done') return 'done';
     // Stale 'running' on a terminal job means the daemon was killed
     // mid-step. Render as done so the mini dot row doesn't keep
     // showing an animated active indicator forever.
-    if (stp?.state === 'running' && TERMINAL_STATES.has(job.state)) return 'done';
+    if (stp.state === 'running' && TERMINAL_STATES.has(job.state)) return 'done';
     if (job.active_step === step) return 'active';
-    if (stp?.state === 'failed') return 'done';
+    if (stp.state === 'failed') return 'done';
     return 'pending';
   }
 

@@ -81,7 +81,12 @@ type SplittableHandler interface {
 	PlanRip(disc *state.Disc, profile *state.Profile) []StepPlan
 	PlanTranscode(disc *state.Disc, profile *state.Profile) []StepPlan
 
-	RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, profile *state.Profile, sink EventSink) (RipResult, error)
+	// spoolDir is the absolute path the orchestrator pre-allocated for
+	// this rip job's intermediate output. Handlers write into it and
+	// typically return RipResult{SpoolPath: spoolDir}. Handlers may
+	// override SpoolPath if they want the transcode worker to read
+	// from a different path (e.g. a future network-mount mode).
+	RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, profile *state.Profile, spoolDir string, sink EventSink) (RipResult, error)
 	RunTranscode(ctx context.Context, ripResult RipResult, disc *state.Disc, profile *state.Profile, sink EventSink) error
 }
 

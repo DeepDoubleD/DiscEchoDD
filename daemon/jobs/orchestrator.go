@@ -314,7 +314,7 @@ func (o *Orchestrator) runSplittable(
 		return fmt.Errorf("spool create: %w", err)
 	}
 
-	result, runErr := handler.RunRip(ctx, drv, disc, prof, sink)
+	result, runErr := handler.RunRip(ctx, drv, disc, prof, spoolPath, sink)
 	if runErr != nil {
 		// Spool cleanup best-effort: a half-written rip dir is not useful
 		// to anyone and would otherwise count against the soft cap.

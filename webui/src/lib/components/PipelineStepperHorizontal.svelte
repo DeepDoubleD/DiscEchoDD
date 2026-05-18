@@ -21,10 +21,19 @@
 
   function statusFor(step: StepID): Status {
     const stp = job.steps?.find((s) => s.step === step);
-    if (stp?.state === 'skipped') return 'skipped';
-    if (stp?.state === 'done') return 'done';
-    if (stp?.state === 'failed') return 'failed';
-    if (stp?.state === 'running' && TERMINAL_STATES.has(job.state)) return 'failed';
+    if (!stp) {
+      // kind='transcode' child jobs only materialise the 4 transcode-
+      // half rows; absent rip-half rows render as skipped so the dot
+      // row collapses. Pre-snapshot (steps empty / undefined) still
+      // honours active_step so the spinner doesn't lag the row.
+      if (job.steps && job.steps.length > 0) return 'skipped';
+      if (job.active_step === step) return 'active';
+      return 'pending';
+    }
+    if (stp.state === 'skipped') return 'skipped';
+    if (stp.state === 'done') return 'done';
+    if (stp.state === 'failed') return 'failed';
+    if (stp.state === 'running' && TERMINAL_STATES.has(job.state)) return 'failed';
     if (job.active_step === step) return 'active';
     return 'pending';
   }

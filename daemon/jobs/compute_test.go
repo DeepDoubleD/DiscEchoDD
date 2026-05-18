@@ -71,7 +71,7 @@ func (s *splittableStub) Run(ctx context.Context, drv *state.Drive, disc *state.
 	return errors.New("splittableStub.Run should not be invoked when split path is wired")
 }
 
-func (s *splittableStub) RunRip(ctx context.Context, _ *state.Drive, _ *state.Disc, _ *state.Profile, _ pipelines.EventSink) (pipelines.RipResult, error) {
+func (s *splittableStub) RunRip(ctx context.Context, _ *state.Drive, _ *state.Disc, _ *state.Profile, spoolDir string, _ pipelines.EventSink) (pipelines.RipResult, error) {
 	s.mu.Lock()
 	s.ripCalls++
 	started := s.ripStarted
@@ -92,7 +92,11 @@ func (s *splittableStub) RunRip(ctx context.Context, _ *state.Drive, _ *state.Di
 	if s.failOnRip != nil {
 		return pipelines.RipResult{}, s.failOnRip
 	}
-	return pipelines.RipResult{SpoolPath: s.ripSpoolPath}, nil
+	path := s.ripSpoolPath
+	if path == "" {
+		path = spoolDir
+	}
+	return pipelines.RipResult{SpoolPath: path}, nil
 }
 
 func (s *splittableStub) RunTranscode(ctx context.Context, result pipelines.RipResult, _ *state.Disc, _ *state.Profile, _ pipelines.EventSink) error {

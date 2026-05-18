@@ -115,7 +115,9 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 	return disc, cands, nil
 }
 
-// Plan returns the 7-active-step plan; only compress is skipped.
+// Plan returns the 7-active-step plan; only compress is skipped. Used
+// by the monolithic fallback path. The split-path orchestrator calls
+// PlanRip + PlanTranscode instead.
 func (h *Handler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
 	skipped := map[state.StepID]bool{state.StepCompress: true}
 	out := make([]pipelines.StepPlan, 0, 8)
@@ -125,59 +127,105 @@ func (h *Handler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
 	return out
 }
 
-// Run executes the BDMV pipeline.
-func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
-	sink.OnStepStart(state.StepDetect)
-	sink.OnStepDone(state.StepDetect, nil)
-	sink.OnStepStart(state.StepIdentify)
-	sink.OnStepDone(state.StepIdentify, nil)
+// PlanRip is the rip-half plan: full 8-step canonical list with
+// transcode/compress/move/notify marked Skip so they render as
+// 'skipped' on the rip-job row. Active steps: detect, identify, rip,
+// eject. The transcode-half steps run on the child transcode job
+// materialised by PlanTranscode.
+func (h *Handler) PlanRip(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
+	transcodeHalf := map[state.StepID]bool{
+		state.StepTranscode: true,
+		state.StepCompress:  true,
+		state.StepMove:      true,
+		state.StepNotify:    true,
+	}
+	out := make([]pipelines.StepPlan, 0, 8)
+	for _, sid := range state.CanonicalSteps() {
+		out = append(out, pipelines.StepPlan{ID: sid, Skip: transcodeHalf[sid]})
+	}
+	return out
+}
 
-	// rip — MakeMKV scan + decrypt+demux of the chosen title.
-	sink.OnStepStart(state.StepRip)
+// PlanTranscode is the transcode-half plan for the child compute-queue
+// job. BDMV doesn't run a compress step, so it's marked Skip. Active
+// steps: transcode, move, notify.
+func (h *Handler) PlanTranscode(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
+	out := make([]pipelines.StepPlan, 0, 4)
+	for _, sid := range state.CanonicalTranscodeSteps() {
+		out = append(out, pipelines.StepPlan{ID: sid, Skip: sid == state.StepCompress})
+	}
+	return out
+}
+
+// Run is the monolithic-fallback path. The orchestrator picks it when
+// Compute/Spool aren't wired; it allocates a tmpdir for the
+// intermediate output, runs RunRip then RunTranscode in sequence, and
+// cleans the tmpdir up afterwards. Existing callers (monolithic test
+// suite, future audio-CD-style pipelines) keep their semantics.
+func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
 	tmpdir, err := h.createWorkDir(disc.ID)
 	if err != nil {
+		sink.OnStepStart(state.StepRip)
 		sink.OnStepFailed(state.StepRip, err)
 		return err
 	}
 	defer func() { _ = os.RemoveAll(tmpdir) }()
 
+	result, err := h.RunRip(ctx, drv, disc, prof, tmpdir, sink)
+	if err != nil {
+		return err
+	}
+	return h.RunTranscode(ctx, result, disc, prof, sink)
+}
+
+// RunRip is the drive-bound half. Steps: detect, identify, MakeMKV
+// rip into spoolDir/rip/<file>.mkv, eject. On return the drive is no
+// longer needed and the orchestrator releases it.
+func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, spoolDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
+	sink.OnStepStart(state.StepDetect)
+	sink.OnStepDone(state.StepDetect, nil)
+	sink.OnStepStart(state.StepIdentify)
+	sink.OnStepDone(state.StepIdentify, nil)
+
+	sink.OnStepStart(state.StepRip)
 	if err := h.deps.LibraryProbe(h.deps.LibraryRoot); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return fmt.Errorf("library probe: %w", err)
+		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
 	if h.deps.MakeMKVScanner == nil || h.deps.MakeMKVRipper == nil {
 		err := errors.New("bdmv: MakeMKV not configured")
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 
 	sink.OnLog(state.LogLevelInfo, "MakeMKV: scanning %s", drv.DevPath)
 	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return fmt.Errorf("makemkv scan: %w", err)
+		return pipelines.RipResult{}, fmt.Errorf("makemkv scan: %w", err)
 	}
 	picked, err := pickLongestTitle(titles, prof)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 	sink.OnLog(state.LogLevelInfo, "MakeMKV: scan complete, picked title %d (longest %s)",
 		picked.ID, pipelines.HumanDuration(time.Duration(picked.DurationSec)*time.Second))
-	ripDir := filepath.Join(tmpdir, "rip")
+
+	ripDir := filepath.Join(spoolDir, "rip")
 	if err := os.MkdirAll(ripDir, 0o755); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 	ripStart := time.Now()
 	if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, picked.ID, ripDir, pipelines.NewStepSink(sink, state.StepRip)); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return fmt.Errorf("makemkv rip: %w", err)
+		return pipelines.RipResult{}, fmt.Errorf("makemkv rip: %w", err)
 	}
 	rippedFile, err := singleMKVIn(ripDir)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 	var ripSize int64
 	if fi, statErr := os.Stat(rippedFile); statErr == nil {
@@ -187,9 +235,35 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 		pipelines.HumanBytes(ripSize), pipelines.HumanDuration(time.Since(ripStart)))
 	sink.OnStepDone(state.StepRip, map[string]any{"title_id": picked.ID, "duration_sec": picked.DurationSec})
 
-	// transcode — HandBrake reads the rip and writes a transcoded mkv.
+	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
+		Tools:       h.deps.Tools,
+		ShouldEject: h.deps.ShouldEject,
+	}, drv)
+
+	return pipelines.RipResult{
+		SpoolPath: spoolDir,
+		Notes: map[string]any{
+			"title_id":     picked.ID,
+			"duration_sec": picked.DurationSec,
+			"rip_file":     rippedFile,
+		},
+	}, nil
+}
+
+// RunTranscode is the compute-bound half. Steps: HandBrake encode the
+// MakeMKV output into spool/out.mkv (transcode), skip compress, atomic
+// move into the library (move), fire Apprise (notify). The compute
+// worker handles spool cleanup on success.
+func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
+	rippedFile, err := singleMKVIn(filepath.Join(result.SpoolPath, "rip"))
+	if err != nil {
+		sink.OnStepStart(state.StepTranscode)
+		sink.OnStepFailed(state.StepTranscode, err)
+		return err
+	}
+
 	sink.OnStepStart(state.StepTranscode)
-	transcodedFile := filepath.Join(tmpdir, "out.mkv")
+	transcodedFile := filepath.Join(result.SpoolPath, "out.mkv")
 	if h.deps.Tools == nil {
 		err := errors.New("bdmv: tools registry not configured")
 		sink.OnStepFailed(state.StepTranscode, err)
@@ -231,7 +305,7 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 	hbArgs = append(hbArgs, "--all-subtitles")
 	sink.OnLog(state.LogLevelInfo, "HandBrake: encoding %s", filepath.Base(rippedFile))
 	encStart := time.Now()
-	if err := hb.Run(ctx, hbArgs, nil, tmpdir, pipelines.NewStepSink(sink, state.StepTranscode)); err != nil {
+	if err := hb.Run(ctx, hbArgs, nil, result.SpoolPath, pipelines.NewStepSink(sink, state.StepTranscode)); err != nil {
 		sink.OnStepFailed(state.StepTranscode, err)
 		return fmt.Errorf("handbrake encode: %w", err)
 	}
@@ -265,10 +339,6 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 		URLsForTrigger: h.deps.URLsForTrigger,
 		LibraryRoot:    h.deps.LibraryRoot,
 	}, disc)
-	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
-		Tools:       h.deps.Tools,
-		ShouldEject: h.deps.ShouldEject,
-	}, drv)
 	return nil
 }
 

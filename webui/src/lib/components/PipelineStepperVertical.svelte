@@ -22,13 +22,25 @@
 
   function status(step: StepID): 'done' | 'active' | 'pending' | 'skipped' | 'failed' {
     const stp = job.steps?.find((s) => s.step === step);
-    if (stp?.state === 'skipped') return 'skipped';
-    if (stp?.state === 'done') return 'done';
-    if (stp?.state === 'failed') return 'failed';
+    if (!stp) {
+      // Step not materialised for this job. Happens on kind='transcode'
+      // child jobs whose canonical step list is the 4-row transcode
+      // subset; the absent rip-half rows render as skipped so the
+      // stepper shows only the steps that actually run for this job.
+      // Pre-snapshot path (steps undefined / empty) still honours
+      // active_step so the spinner shows during the brief window
+      // before the SSE snapshot arrives.
+      if (job.steps && job.steps.length > 0) return 'skipped';
+      if (job.active_step === step) return 'active';
+      return 'pending';
+    }
+    if (stp.state === 'skipped') return 'skipped';
+    if (stp.state === 'done') return 'done';
+    if (stp.state === 'failed') return 'failed';
     // Belt-and-braces: a 'running' step on a terminal job means the
     // daemon was killed mid-step before it could flip the row. Render
     // as failed so the user doesn't see a stale spinner.
-    if (stp?.state === 'running' && TERMINAL_STATES.has(job.state)) return 'failed';
+    if (stp.state === 'running' && TERMINAL_STATES.has(job.state)) return 'failed';
     if (job.active_step === step) return 'active';
     return 'pending';
   }
