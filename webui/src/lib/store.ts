@@ -365,18 +365,49 @@ export function connect(): () => void {
 
 // ----- Imperatives ---------------------------------------------------------
 
+export interface StartDiscOpts {
+  titleIDs?: number[];
+  season?: number;
+  episodeMap?: Record<number, number>; // titleID → episode number (TMDB ep_number)
+}
+
 export async function startDisc(
   discID: string,
   profileID: string,
   candidateIndex?: number,
-  titleIDs?: number[],
+  titleIDsOrOpts?: number[] | StartDiscOpts,
 ): Promise<Job> {
-  const body: { profile_id: string; candidate_index?: number; title_ids?: number[] } = {
-    profile_id: profileID,
-  };
+  const body: {
+    profile_id: string;
+    candidate_index?: number;
+    title_ids?: number[];
+    season?: number;
+    episode_map?: Record<number, number>;
+  } = { profile_id: profileID };
   if (candidateIndex !== undefined) body.candidate_index = candidateIndex;
-  if (titleIDs && titleIDs.length > 0) body.title_ids = titleIDs;
+  if (Array.isArray(titleIDsOrOpts)) {
+    if (titleIDsOrOpts.length > 0) body.title_ids = titleIDsOrOpts;
+  } else if (titleIDsOrOpts) {
+    const o = titleIDsOrOpts;
+    if (o.titleIDs && o.titleIDs.length > 0) body.title_ids = o.titleIDs;
+    if (o.season && o.season > 0) body.season = o.season;
+    if (o.episodeMap && Object.keys(o.episodeMap).length > 0) body.episode_map = o.episodeMap;
+  }
   return apiPost<Job>(`/api/discs/${discID}/start`, body);
+}
+
+// fetchEpisodes asks the daemon for the TMDB episode list for a tv-
+// kind disc at the given season. Returns [] when TMDB is unconfigured
+// or the season is unknown.
+export interface EpisodeInfo {
+  number: number;
+  name: string;
+  runtime_sec?: number;
+  overview?: string;
+  air_date?: string;
+}
+export async function fetchEpisodes(discID: string, season: number): Promise<EpisodeInfo[]> {
+  return apiGet<EpisodeInfo[]>(`/api/discs/${discID}/episodes?season=${season}`);
 }
 
 // scanDisc kicks off a kind='scan' job that enumerates titles via

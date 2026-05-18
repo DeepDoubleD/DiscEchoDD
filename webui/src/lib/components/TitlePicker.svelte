@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { discs, profiles, startDisc } from '$lib/store';
+  import { discs, profiles, startDisc, fetchEpisodes, type EpisodeInfo } from '$lib/store';
   import type { Disc } from '$lib/wire';
   import DiscTypeBadge from './DiscTypeBadge.svelte';
   import DiscArt from './DiscArt.svelte';
@@ -19,6 +19,11 @@
   // alongside any prior metadata keys (cover_url, dvd_titles, …).
   $: liveDisc = $discs[disc.id] ?? disc;
   $: titles = parseScanTitles(liveDisc.metadata_json ?? '');
+  // TV discs (TMDB media_type='tv') get the episode-mapping column.
+  // Movies skip it entirely so the picker is a simple title list.
+  $: isTV = (liveDisc.candidates ?? []).some(
+    (c) => c.media_type === 'tv' && c.tmdb_id && c.tmdb_id > 0,
+  );
 
   function parseScanTitles(blob: string): TitleInfo[] {
     if (!blob || blob === '{}') return [];
@@ -45,13 +50,75 @@
     initialised = true;
   }
 
+  // Selected order preserves user click sequence (insertion order on
+  // the object); we keep them sorted by title id so multi-title
+  // auto-mapping is deterministic.
   $: selectedIDs = titles.filter((t) => selected[t.id]).map((t) => t.id);
   $: anySelected = selectedIDs.length > 0;
 
-  // Profile resolution mirrors AwaitingDecisionCard.profileForCandidate
-  // but without a candidate slot — the picker fires after the user has
-  // already engaged with the candidates step, so the top candidate's
-  // profile is what we want.
+  // ─── TV episode mapping ──────────────────────────────────────────
+  let season = 1;
+  let episodes: EpisodeInfo[] = [];
+  let episodesPending = false;
+  let episodesError = '';
+  let episodeMap: Record<number, number> = {}; // titleID → episode number
+
+  async function loadEpisodes(): Promise<void> {
+    if (!isTV) return;
+    episodesPending = true;
+    episodesError = '';
+    try {
+      episodes = await fetchEpisodes(liveDisc.id, season);
+      autoAssignEpisodes();
+    } catch (e) {
+      episodesError = (e as Error).message;
+      episodes = [];
+    } finally {
+      episodesPending = false;
+    }
+  }
+
+  // Auto-assign episodes in selected order: title 1 → episode N1,
+  // title 2 → episode N2, etc. Users can override per-title via the
+  // dropdown. Re-runs when season changes (because episodes refresh)
+  // or selection changes. Preserves user overrides where possible.
+  function autoAssignEpisodes(): void {
+    if (episodes.length === 0) return;
+    const next: Record<number, number> = {};
+    let nextEpIdx = 0;
+    for (const id of selectedIDs) {
+      if (episodeMap[id] && episodes.some((e) => e.number === episodeMap[id])) {
+        // Preserve a still-valid user override.
+        next[id] = episodeMap[id];
+      } else {
+        if (nextEpIdx < episodes.length) {
+          next[id] = episodes[nextEpIdx].number;
+        }
+      }
+      nextEpIdx++;
+    }
+    episodeMap = next;
+  }
+
+  // Refetch episodes when the user changes season. Initial fetch
+  // happens on $: isTV transition below.
+  let seasonInit = false;
+  $: if (isTV && !seasonInit) {
+    seasonInit = true;
+    void loadEpisodes();
+  }
+  let lastSeason = season;
+  $: if (isTV && season !== lastSeason) {
+    lastSeason = season;
+    void loadEpisodes();
+  }
+  // Re-run auto-assign when selection changes (without re-fetching
+  // episodes — they only depend on season).
+  $: if (isTV && episodes.length > 0 && selectedIDs.length > 0) {
+    autoAssignEpisodes();
+  }
+
+  // ─── Profile + submit ────────────────────────────────────────────
   function profileID(): string {
     const enabled = $profiles.filter((p) => p.enabled);
     if (liveDisc.type === 'DVD') {
@@ -75,10 +142,11 @@
     starting = true;
     errMsg = '';
     try {
-      // Candidate index 0 = top match; the user has already had the
-      // chance to override via the candidates step before opening the
-      // picker, so we honour their last metadata choice.
-      await startDisc(liveDisc.id, pid, 0, selectedIDs);
+      await startDisc(liveDisc.id, pid, 0, {
+        titleIDs: selectedIDs,
+        season: isTV ? season : undefined,
+        episodeMap: isTV ? episodeMap : undefined,
+      });
     } catch (e) {
       starting = false;
       errMsg = (e as Error).message;
@@ -136,20 +204,49 @@
     </div>
   </div>
 
+  {#if isTV}
+    <div class="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-border p-3">
+      <label class="flex items-center gap-2 text-[12px] text-text-2">
+        Season
+        <input
+          type="number"
+          min="0"
+          max="99"
+          step="1"
+          bind:value={season}
+          class="w-16 rounded-md border border-border bg-surface-2 px-2 py-1 text-[13px]"
+        />
+      </label>
+      {#if episodesPending}
+        <span class="text-[11px] text-text-3">Loading episodes…</span>
+      {:else if episodesError}
+        <span class="text-[11px] text-error">Episodes: {episodesError}</span>
+      {:else if episodes.length === 0}
+        <span class="text-[11px] text-text-3">No episodes found for this season.</span>
+      {:else}
+        <span class="text-[11px] text-text-3"
+          >{episodes.length} episode{episodes.length === 1 ? '' : 's'} from TMDB</span
+        >
+      {/if}
+    </div>
+  {/if}
+
   <div class="space-y-2">
     {#each titles as t (t.id)}
-      <label
+      <div
         class="flex w-full min-h-[44px] items-center gap-3 rounded-xl border p-3 text-left"
         style="
           border-color: {selected[t.id] ? 'rgba(0,214,143,0.35)' : 'var(--border)'};
           background: {selected[t.id] ? 'rgba(0,214,143,0.04)' : 'transparent'};
         "
       >
-        <input
-          type="checkbox"
-          bind:checked={selected[t.id]}
-          class="h-5 w-5 cursor-pointer accent-accent"
-        />
+        <label class="flex items-center gap-3">
+          <input
+            type="checkbox"
+            bind:checked={selected[t.id]}
+            class="h-5 w-5 cursor-pointer accent-accent"
+          />
+        </label>
         <div class="min-w-0 flex-1">
           <div class="font-mono text-[13px] text-text">
             Title {t.id}
@@ -161,7 +258,22 @@
               : ''}{t.size_bytes ? ` · ${formatBytes(t.size_bytes)}` : ''}
           </div>
         </div>
-      </label>
+        {#if isTV && selected[t.id] && episodes.length > 0}
+          <label class="flex shrink-0 items-center gap-2 text-[11px] text-text-3">
+            Episode
+            <select
+              bind:value={episodeMap[t.id]}
+              class="rounded-md border border-border bg-surface-2 px-2 py-1 font-mono text-[12px] text-text"
+            >
+              {#each episodes as ep (ep.number)}
+                <option value={ep.number}>
+                  E{String(ep.number).padStart(2, '0')} — {ep.name}
+                </option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+      </div>
     {/each}
   </div>
 

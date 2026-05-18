@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
@@ -19,10 +20,21 @@ import (
 // disc.metadata_json.selected_title_ids and rips exactly those
 // titles instead of running its auto-pick heuristic. Empty / absent
 // preserves today's behaviour.
+//
+// Season + EpisodeMap drive the per-episode naming path. The
+// handler reads `selected_season` and `selected_title_episodes`
+// from disc.metadata_json to render output paths with the canonical
+// `Show - S##E## - Episode Title` shape Plex/Jellyfin auto-classify.
+// EpisodeMap keys are title IDs (matching one of TitleIDs); values
+// are TMDB episode numbers within the season. The daemon resolves
+// each episode number to its TMDB-known title at /start time so the
+// handler doesn't need to re-fetch from TMDB at rip time.
 type startDiscRequest struct {
-	ProfileID      string `json:"profile_id"`
-	CandidateIndex int    `json:"candidate_index"`
-	TitleIDs       []int  `json:"title_ids,omitempty"`
+	ProfileID      string      `json:"profile_id"`
+	CandidateIndex int         `json:"candidate_index"`
+	TitleIDs       []int       `json:"title_ids,omitempty"`
+	Season         int         `json:"season,omitempty"`
+	EpisodeMap     map[int]int `json:"episode_map,omitempty"` // title id → tmdb episode number
 }
 
 // StartDisc creates a job for the given disc + profile and queues it on
@@ -135,6 +147,17 @@ func (h *Handlers) StartDisc(w http.ResponseWriter, r *http.Request) {
 			_ = json.Unmarshal([]byte(disc.MetadataJSON), &merged)
 		}
 		merged["selected_title_ids"] = req.TitleIDs
+		if req.Season > 0 {
+			merged["selected_season"] = req.Season
+		}
+		// Resolve TMDB episode names for the picked map so the rip
+		// handler can render the canonical `Show - S##E## - Episode
+		// Title` naming without re-fetching from TMDB. Best-effort:
+		// a TMDB error or empty season yields a number-only map so
+		// the handler still gets the right S##E## naming.
+		if len(req.EpisodeMap) > 0 && req.Season > 0 && h.TMDB != nil {
+			merged["selected_title_episodes"] = h.resolveEpisodeMap(r.Context(), disc, req.Season, req.EpisodeMap)
+		}
 		body, err := json.Marshal(merged)
 		if err == nil {
 			if err := h.Store.UpdateDiscMetadataBlob(r.Context(), disc.ID, string(body)); err != nil {
@@ -213,6 +236,111 @@ func (h *Handlers) ScanDisc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+// GetDiscEpisodes returns the TMDB episode list for the given disc's
+// TV series + a season number from the query string. Used by the
+// TitlePicker UI to populate the per-title episode dropdowns.
+//
+// Errors:
+//
+//	400 missing or non-integer ?season=N
+//	404 disc not found
+//	422 disc has no TMDB id or its top candidate isn't tv
+//	502 TMDB upstream error
+//
+// Returns 200 with `[]` when the season is unknown to TMDB (404) or
+// TMDB isn't configured — the picker hides the episode column
+// gracefully on an empty list.
+func (h *Handlers) GetDiscEpisodes(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	seasonStr := r.URL.Query().Get("season")
+	if seasonStr == "" {
+		writeError(w, http.StatusBadRequest, "season query parameter required")
+		return
+	}
+	season, err := strconv.Atoi(seasonStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "season must be an integer")
+		return
+	}
+
+	disc, err := h.Store.GetDisc(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "disc not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	tmdbID, err := strconv.Atoi(disc.MetadataID)
+	if err != nil || tmdbID <= 0 {
+		writeError(w, http.StatusUnprocessableEntity, "disc has no TMDB id")
+		return
+	}
+	// Confirm the top candidate is tv — fetching episodes for a movie
+	// returns nothing useful and would mislead the picker into showing
+	// an empty episode column.
+	isTV := false
+	for _, c := range disc.Candidates {
+		if c.TMDBID == tmdbID && c.MediaType == "tv" {
+			isTV = true
+			break
+		}
+	}
+	if !isTV {
+		writeError(w, http.StatusUnprocessableEntity, "disc is not a TV series")
+		return
+	}
+	if h.TMDB == nil {
+		writeJSON(w, http.StatusOK, []identify.EpisodeInfo{})
+		return
+	}
+	episodes, err := h.TMDB.SeasonEpisodes(r.Context(), tmdbID, season)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if episodes == nil {
+		episodes = []identify.EpisodeInfo{}
+	}
+	writeJSON(w, http.StatusOK, episodes)
+}
+
+// resolveEpisodeMap turns a {titleID: episodeNumber} map into a
+// {titleID: {episode, title}} blob so the rip handler can render
+// `S##E## - Episode Title` without re-hitting TMDB. The lookup is
+// best-effort: when TMDB is unconfigured, the disc has no TMDB id,
+// or the season fetch errors, the map falls back to number-only
+// entries (the handler renders `S##E##` without the title piece).
+func (h *Handlers) resolveEpisodeMap(ctx context.Context, disc *state.Disc, season int, picks map[int]int) map[string]map[string]any {
+	out := make(map[string]map[string]any, len(picks))
+	// Seed with number-only entries so a TMDB failure still yields a
+	// usable map.
+	for titleID, epNum := range picks {
+		out[strconv.Itoa(titleID)] = map[string]any{"episode": epNum}
+	}
+	tmdbID, err := strconv.Atoi(disc.MetadataID)
+	if err != nil || tmdbID <= 0 || h.TMDB == nil {
+		return out
+	}
+	episodes, err := h.TMDB.SeasonEpisodes(ctx, tmdbID, season)
+	if err != nil || len(episodes) == 0 {
+		return out
+	}
+	byNum := make(map[int]identify.EpisodeInfo, len(episodes))
+	for _, e := range episodes {
+		byNum[e.Number] = e
+	}
+	for titleID, epNum := range picks {
+		entry := map[string]any{"episode": epNum}
+		if e, ok := byNum[epNum]; ok && e.Name != "" {
+			entry["title"] = e.Name
+		}
+		out[strconv.Itoa(titleID)] = entry
+	}
+	return out
 }
 
 // DeleteDisc removes a disc row by id. Used by the dashboard's Skip

@@ -40,9 +40,25 @@ type TMDBClient interface {
 	// /api/discs/{id}/start so the pane has rich data on first paint.
 	MovieDetails(ctx context.Context, tmdbID int) (DiscMetadata, error)
 	TVDetails(ctx context.Context, tmdbID int) (DiscMetadata, error)
+	// SeasonEpisodes fetches /tv/{id}/season/{n} and returns the
+	// episode list for that season. Used by the scan-job orchestrator
+	// path so the picker UI can offer per-title episode mapping for
+	// TV box sets. Returns (nil, nil) when the API is unconfigured
+	// or the show/season pair isn't known (HTTP 404).
+	SeasonEpisodes(ctx context.Context, tvID, seasonNumber int) ([]EpisodeInfo, error)
 	// Reconfigure atomically swaps the active config (APIKey + Language).
 	// BaseURL / HTTPClient defaults are re-applied for zero fields.
 	Reconfigure(cfg TMDBConfig)
+}
+
+// EpisodeInfo is one episode from a TMDB season response, in the
+// minimal shape the picker UI + handlers need.
+type EpisodeInfo struct {
+	Number   int    `json:"number"`
+	Name     string `json:"name"`
+	Runtime  int    `json:"runtime_sec,omitempty"`
+	Overview string `json:"overview,omitempty"`
+	AirDate  string `json:"air_date,omitempty"`
 }
 
 // DiscMetadata is the extended display payload the pane needs.
@@ -157,6 +173,72 @@ func (c *tmdbClient) MovieRuntime(ctx context.Context, tmdbID int) (int, error) 
 		return 0, fmt.Errorf("decode movie response: %w", err)
 	}
 	return detail.Runtime * 60, nil
+}
+
+// SeasonEpisodes fetches `/tv/{id}/season/{n}` and returns the
+// episode list. Used by the title-picker flow so the user can map
+// each ripped title to the correct episode (and the move-step
+// template renders the canonical `Show - S##E## - Episode Title`
+// shape Plex/Jellyfin auto-classify). Returns (nil, nil) when the
+// API isn't configured, the tv/season pair is unknown (404), or no
+// episodes are returned — callers fall back to bare title naming
+// in those cases.
+func (c *tmdbClient) SeasonEpisodes(ctx context.Context, tvID, seasonNumber int) ([]EpisodeInfo, error) {
+	snap := c.snapshot()
+	if snap.APIKey == "" || tvID <= 0 || seasonNumber < 0 {
+		return nil, nil
+	}
+	endpoint := fmt.Sprintf("/tv/%d/season/%d", tvID, seasonNumber)
+	u, err := url.Parse(strings.TrimRight(snap.BaseURL, "/") + endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("build url: %w", err)
+	}
+	q := u.Query()
+	q.Set("api_key", snap.APIKey)
+	q.Set("language", snap.Language)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := snap.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("tmdb tv/%d/season/%d: status %d: %s", tvID, seasonNumber, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var detail struct {
+		Episodes []struct {
+			EpisodeNumber int    `json:"episode_number"`
+			Name          string `json:"name"`
+			Runtime       int    `json:"runtime"` // minutes
+			Overview      string `json:"overview"`
+			AirDate       string `json:"air_date"`
+		} `json:"episodes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return nil, fmt.Errorf("decode season response: %w", err)
+	}
+	out := make([]EpisodeInfo, 0, len(detail.Episodes))
+	for _, e := range detail.Episodes {
+		out = append(out, EpisodeInfo{
+			Number:   e.EpisodeNumber,
+			Name:     e.Name,
+			Runtime:  e.Runtime * 60,
+			Overview: e.Overview,
+			AirDate:  e.AirDate,
+		})
+	}
+	return out, nil
 }
 
 // MovieDetails returns the extended pane metadata for a TMDB movie.

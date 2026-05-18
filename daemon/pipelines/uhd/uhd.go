@@ -351,18 +351,34 @@ func listMKVIn(dir string) ([]string, error) {
 }
 
 // moveMultiTitle atomic-moves each ripped MakeMKV output into the
-// library under the rendered template. When multiple titles would
-// collide on the same path (template ignores EpisodeNumber), appends
-// a `-titleNN` suffix before the extension to disambiguate.
+// library. When the picker recorded per-title TMDB episode mappings
+// (selected_title_episodes), those drive EpisodeNumber + EpisodeTitle
+// in the rendered template. Otherwise EpisodeNumber falls back to
+// the 1-based title index and EpisodeTitle is empty. Colliding
+// rendered paths get a `-titleNN` suffix to disambiguate.
 func (h *Handler) moveMultiTitle(srcs []string, disc *state.Disc, prof *state.Profile) ([]string, error) {
+	titleIDs := pipelines.SelectedTitleIDsFromDisc(disc)
+	epMap := pipelines.SelectedEpisodeMapFromDisc(disc)
+	season := pipelines.SelectedSeasonFromDisc(disc)
+
 	rendered := make([]string, len(srcs))
 	for i := range srcs {
-		rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, pipelines.OutputFields{
+		fields := pipelines.OutputFields{
 			Title:         disc.Title,
 			Year:          disc.Year,
 			Show:          disc.Title,
+			Season:        season,
 			EpisodeNumber: i + 1,
-		})
+		}
+		if i < len(titleIDs) {
+			if ea, ok := epMap[titleIDs[i]]; ok {
+				if ea.Episode > 0 {
+					fields.EpisodeNumber = ea.Episode
+				}
+				fields.EpisodeTitle = ea.EpisodeTitle
+			}
+		}
+		rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, fields)
 		if err != nil {
 			return nil, fmt.Errorf("render template: %w", err)
 		}

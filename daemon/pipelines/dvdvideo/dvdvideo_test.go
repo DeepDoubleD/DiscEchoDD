@@ -84,6 +84,9 @@ func (f *fakeTMDB) SearchBoth(_ context.Context, _ string) ([]state.Candidate, e
 	return f.cands, f.err
 }
 func (f *fakeTMDB) MovieRuntime(_ context.Context, _ int) (int, error) { return 0, nil }
+func (f *fakeTMDB) SeasonEpisodes(_ context.Context, _, _ int) ([]identify.EpisodeInfo, error) {
+	return nil, nil
+}
 func (f *fakeTMDB) MovieDetails(_ context.Context, _ int) (identify.DiscMetadata, error) {
 	return identify.DiscMetadata{}, nil
 }

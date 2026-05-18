@@ -652,9 +652,15 @@ func warnOnRuntimeMismatch(disc *state.Disc, titles []tools.HandBrakeTitle) {
 	}
 }
 
-func (h *Handler) moveOutputs(transcoded []string, _ []tools.HandBrakeTitle,
+func (h *Handler) moveOutputs(transcoded []string, encodeTitles []tools.HandBrakeTitle,
 	disc *state.Disc, prof *state.Profile) ([]string, error) {
+	// Picker-recorded season overrides the per-profile default — TV
+	// box-set users pick the season per disc, not per profile.
 	season := pipelines.IntOption(prof, "season", 1)
+	if s := pipelines.SelectedSeasonFromDisc(disc); s > 0 {
+		season = s
+	}
+	epMap := pipelines.SelectedEpisodeMapFromDisc(disc)
 
 	var moved []string
 	for episodeIdx, src := range transcoded {
@@ -668,6 +674,16 @@ func (h *Handler) moveOutputs(transcoded []string, _ []tools.HandBrakeTitle,
 			Show:          disc.Title,
 			Season:        season,
 			EpisodeNumber: episodeIdx + 1,
+		}
+		// When the user mapped this title to a TMDB episode, the
+		// picker's choice wins over the title-index fallback.
+		if episodeIdx < len(encodeTitles) {
+			if ea, ok := epMap[encodeTitles[episodeIdx].Number]; ok {
+				if ea.Episode > 0 {
+					fields.EpisodeNumber = ea.Episode
+				}
+				fields.EpisodeTitle = ea.EpisodeTitle
+			}
 		}
 		rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, fields)
 		if err != nil {

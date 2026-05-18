@@ -444,20 +444,39 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 }
 
 // moveMultiTitle atomic-moves each transcoded file into the library
-// under the rendered template. When multiple titles would collide on
-// the same path (template ignores EpisodeNumber), appends a
-// `-titleNN` suffix before the extension to disambiguate.
+// under the rendered template. When the picker recorded per-title
+// TMDB episode mappings (selected_title_episodes), those drive the
+// EpisodeNumber + EpisodeTitle fields so series templates render the
+// canonical `Show - S##E## - Episode Title` shape. Without a
+// mapping, EpisodeNumber falls back to the 1-based title index and
+// EpisodeTitle is empty. Colliding rendered paths get a `-titleNN`
+// suffix to disambiguate (movie templates that ignore EpisodeNumber).
 func (h *Handler) moveMultiTitle(srcs []string, disc *state.Disc, prof *state.Profile) ([]string, error) {
-	// Render all targets first so we can detect collisions and append
-	// per-title suffixes only when needed.
+	titleIDs := pipelines.SelectedTitleIDsFromDisc(disc)
+	epMap := pipelines.SelectedEpisodeMapFromDisc(disc)
+	season := pipelines.SelectedSeasonFromDisc(disc)
+
 	rendered := make([]string, len(srcs))
 	for i := range srcs {
-		rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, pipelines.OutputFields{
+		fields := pipelines.OutputFields{
 			Title:         disc.Title,
 			Year:          disc.Year,
 			Show:          disc.Title,
-			EpisodeNumber: i + 1,
-		})
+			Season:        season,
+			EpisodeNumber: i + 1, // fallback: 1-based title index
+		}
+		// Look up the matching picker entry by title id when available.
+		// MakeMKV may write rip files in a different order than the
+		// user picked, so we use the i-th titleID as the lookup key.
+		if i < len(titleIDs) {
+			if ea, ok := epMap[titleIDs[i]]; ok {
+				if ea.Episode > 0 {
+					fields.EpisodeNumber = ea.Episode
+				}
+				fields.EpisodeTitle = ea.EpisodeTitle
+			}
+		}
+		rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, fields)
 		if err != nil {
 			return nil, fmt.Errorf("render template: %w", err)
 		}

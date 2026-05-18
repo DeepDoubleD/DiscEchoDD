@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
@@ -89,6 +90,85 @@ type SplittableHandler interface {
 	// from a different path (e.g. a future network-mount mode).
 	RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, profile *state.Profile, spoolDir string, sink EventSink) (RipResult, error)
 	RunTranscode(ctx context.Context, ripResult RipResult, disc *state.Disc, profile *state.Profile, sink EventSink) error
+}
+
+// EpisodeAssignment is the per-title TV-episode metadata the picker
+// persisted onto disc.metadata_json under selected_title_episodes.
+// Used by BDMV/UHD/DVD multi-title rip to populate the OutputFields
+// EpisodeNumber + EpisodeTitle so output paths render as the
+// canonical `Show - S##E## - Episode Title` shape.
+type EpisodeAssignment struct {
+	Episode      int
+	EpisodeTitle string
+}
+
+// SelectedSeasonFromDisc returns the season number the picker
+// recorded for a TV rip, or 0 when unset. Stored under the
+// "selected_season" key in metadata_json.
+func SelectedSeasonFromDisc(disc *state.Disc) int {
+	if disc == nil || disc.MetadataJSON == "" || disc.MetadataJSON == "{}" {
+		return 0
+	}
+	var blob map[string]any
+	if err := json.Unmarshal([]byte(disc.MetadataJSON), &blob); err != nil {
+		return 0
+	}
+	raw, ok := blob["selected_season"]
+	if !ok {
+		return 0
+	}
+	switch n := raw.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	}
+	return 0
+}
+
+// SelectedEpisodeMapFromDisc returns the per-title episode
+// assignments the picker recorded, keyed by title ID. Empty map
+// when no mapping was persisted (movie rip, audio CD, picker-less
+// rip, etc.). Caller decides whether to fall back to title-index
+// based EpisodeNumber.
+func SelectedEpisodeMapFromDisc(disc *state.Disc) map[int]EpisodeAssignment {
+	if disc == nil || disc.MetadataJSON == "" || disc.MetadataJSON == "{}" {
+		return nil
+	}
+	var blob map[string]any
+	if err := json.Unmarshal([]byte(disc.MetadataJSON), &blob); err != nil {
+		return nil
+	}
+	raw, ok := blob["selected_title_episodes"]
+	if !ok {
+		return nil
+	}
+	asMap, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[int]EpisodeAssignment, len(asMap))
+	for k, v := range asMap {
+		// Title IDs are strings on the wire (JSON object keys); parse
+		// back to int so callers can match against TitleInfo.ID.
+		var tid int
+		if _, err := fmt.Sscanf(k, "%d", &tid); err != nil {
+			continue
+		}
+		entry, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		ea := EpisodeAssignment{}
+		if f, ok := entry["episode"].(float64); ok {
+			ea.Episode = int(f)
+		}
+		if s, ok := entry["title"].(string); ok {
+			ea.EpisodeTitle = s
+		}
+		out[tid] = ea
+	}
+	return out
 }
 
 // SelectedTitleIDsFromDisc returns the user-picked title IDs from a

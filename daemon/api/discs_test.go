@@ -553,6 +553,9 @@ func (f *fakeTMDBForAPI) SearchBoth(_ context.Context, _ string) ([]state.Candid
 	return f.cands, nil
 }
 func (f *fakeTMDBForAPI) MovieRuntime(_ context.Context, _ int) (int, error) { return 0, nil }
+func (f *fakeTMDBForAPI) SeasonEpisodes(_ context.Context, _, _ int) ([]identify.EpisodeInfo, error) {
+	return nil, nil
+}
 func (f *fakeTMDBForAPI) MovieDetails(_ context.Context, _ int) (identify.DiscMetadata, error) {
 	return f.movieDetails, nil
 }

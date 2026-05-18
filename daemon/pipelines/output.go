@@ -64,9 +64,10 @@ type OutputFields struct {
 	TrackNumber   int
 	Title         string
 	DiscNumber    int
-	Show          string // DVD-Series episodes
-	Season        int    // DVD-Series episodes
-	EpisodeNumber int    // DVD-Series episodes (1-based after filtering)
+	Show          string // TV episodes
+	Season        int    // TV episodes
+	EpisodeNumber int    // TV episodes (1-based; from TMDB mapping when present, else title index)
+	EpisodeTitle  string // TV episodes (TMDB episode name; empty when no mapping)
 	Region        string
 }
 
@@ -106,6 +107,7 @@ func (f OutputFields) asMap() map[string]any {
 		"Show":          sanitizeFieldValue(f.Show),
 		"Season":        f.Season,
 		"EpisodeNumber": f.EpisodeNumber,
+		"EpisodeTitle":  sanitizeFieldValue(f.EpisodeTitle),
 		"Region":        sanitizeFieldValue(f.Region),
 	}
 }

@@ -343,7 +343,7 @@ func seedDVDProfiles(ctx context.Context, store *state.Store) error {
 				"quality_rf":         18,
 				"encoder_preset":     "slow",
 			},
-			OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}} - S{{printf "%02d" .Season}}E{{printf "%02d" .EpisodeNumber}}.mkv`,
+			OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}} - S{{printf "%02d" .Season}}E{{printf "%02d" .EpisodeNumber}}{{if .EpisodeTitle}} - {{.EpisodeTitle}}{{end}}.mkv`,
 			Enabled:            true,
 			StepCount:          7,
 			CreatedAt:          now,

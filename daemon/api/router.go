@@ -94,6 +94,8 @@ func NewRouter(h *Handlers, static http.Handler) http.Handler {
 			authed.Get("/system/integrations", h.GetSystemIntegrations)
 			authed.Get("/system/spool", h.GetSystemSpool)
 
+			authed.Get("/discs/{id}/episodes", h.GetDiscEpisodes)
+
 			authed.Post("/jobs/{id}/retry-transcode", h.RetryTranscode)
 		})
 

@@ -24,8 +24,8 @@ func TestOpen_AppliesMigrationsOnFreshDB(t *testing.T) {
 	if err := row.Scan(&v); err != nil {
 		t.Fatalf("scan version: %v", err)
 	}
-	if v != 15 {
-		t.Errorf("schema_migrations max version: want 15, got %d", v)
+	if v != 16 {
+		t.Errorf("schema_migrations max version: want 16, got %d", v)
 	}
 
 	for _, tbl := range []string{
@@ -63,8 +63,8 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	if err := row.Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 15 {
-		t.Errorf("schema_migrations rows after second open: want 15, got %d", n)
+	if n != 16 {
+		t.Errorf("schema_migrations rows after second open: want 16, got %d", n)
 	}
 }
 
@@ -231,7 +231,7 @@ func TestMigration009_CollapsesDuplicateDiscsAndReparentsJobs(t *testing.T) {
 	// last one is the "keeper") + jobs scattered across all three.
 	if _, err := db.Conn().ExecContext(ctx, `
 		INSERT INTO drives (id, model, bus, dev_path, state, last_seen_at)
-		VALUES ('drv-x', 'Test', 'USB', '/dev/sr0', 'idle', '2026-05-15T13:00:00Z');
+		VALUES ('drv-x', 'Test', 'USB', '/dev/sr0', 'idle', '2026-05-16T13:00:00Z');
 
 		INSERT INTO profiles (id, disc_type, name, engine, format, preset,
 		                      container, video_codec, quality_preset,
@@ -242,20 +242,20 @@ func TestMigration009_CollapsesDuplicateDiscsAndReparentsJobs(t *testing.T) {
 		        'AccurateRip', 'FLAC', '', 'AccurateRip', 'any',
 		        '{}',
 		        '{{.Title}}/{{.Title}}.flac',
-		        1, 6, '2026-05-15T13:00:00Z', '2026-05-15T13:00:00Z');
+		        1, 6, '2026-05-16T13:00:00Z', '2026-05-16T13:00:00Z');
 
 		INSERT INTO discs (id, drive_id, type, toc_hash, candidates_json,
 		                   metadata_json, created_at)
 		VALUES
-		  ('d-old',  'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-15T12:00:00Z'),
-		  ('d-mid',  'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-15T12:30:00Z'),
-		  ('d-new',  'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-15T13:00:00Z');
+		  ('d-old',  'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-16T12:00:00Z'),
+		  ('d-mid',  'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-16T12:30:00Z'),
+		  ('d-new',  'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-16T13:00:00Z');
 
 		INSERT INTO jobs (id, disc_id, drive_id, profile_id, state, created_at)
 		VALUES
-		  ('j-old', 'd-old', 'drv-x', 'prof-x', 'failed', '2026-05-15T12:05:00Z'),
-		  ('j-mid', 'd-mid', 'drv-x', 'prof-x', 'failed', '2026-05-15T12:35:00Z'),
-		  ('j-new', 'd-new', 'drv-x', 'prof-x', 'running', '2026-05-15T13:05:00Z');
+		  ('j-old', 'd-old', 'drv-x', 'prof-x', 'failed', '2026-05-16T12:05:00Z'),
+		  ('j-mid', 'd-mid', 'drv-x', 'prof-x', 'failed', '2026-05-16T12:35:00Z'),
+		  ('j-new', 'd-new', 'drv-x', 'prof-x', 'running', '2026-05-16T13:05:00Z');
 	`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestMigration009_CollapsesDuplicateDiscsAndReparentsJobs(t *testing.T) {
 	// The unique index must be back so future dupes are blocked.
 	_, err = db.Conn().ExecContext(ctx, `
 		INSERT INTO discs (id, drive_id, type, toc_hash, candidates_json, metadata_json, created_at)
-		VALUES ('d-dupe', 'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-15T15:00:00Z')`)
+		VALUES ('d-dupe', 'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-16T16:00:00Z')`)
 	if err == nil {
 		t.Error("insert with duplicate (drive_id, toc_hash) should fail after migration")
 	}
