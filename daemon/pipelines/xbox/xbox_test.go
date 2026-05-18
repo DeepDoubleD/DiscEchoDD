@@ -200,11 +200,13 @@ func TestRun_HappyPath(t *testing.T) {
 		t.Errorf("expected file at %s: %v", want, err)
 	}
 
-	// Step ordering: detect → identify → rip → move → notify → eject (no compress).
+	// Step ordering after the rip/transcode split: detect → identify →
+	// rip → eject (RunRip), then move → notify (RunTranscode). Xbox has
+	// no compress step.
 	starts := sink.StepSequence()
 	wantOrder := []state.StepID{
-		state.StepDetect, state.StepIdentify, state.StepRip,
-		state.StepMove, state.StepNotify, state.StepEject,
+		state.StepDetect, state.StepIdentify, state.StepRip, state.StepEject,
+		state.StepMove, state.StepNotify,
 	}
 	if len(starts) != len(wantOrder) {
 		t.Fatalf("started %d steps, want %d: %v", len(starts), len(wantOrder), starts)
@@ -269,5 +271,6 @@ func TestXboxIdentify_BootCodeIndexFallback(t *testing.T) {
 	}
 }
 
-// Compile-time guard.
+// Compile-time guards.
 var _ = pipelines.ErrNoCandidates
+var _ pipelines.SplittableHandler = (*xbox.Handler)(nil)

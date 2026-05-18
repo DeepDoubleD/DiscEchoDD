@@ -136,6 +136,7 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 }
 
 // Plan returns the 8-step plan; only `compress` is skipped for DVD.
+// Used by the monolithic Run fallback.
 func (h *Handler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
 	skipped := map[state.StepID]bool{state.StepCompress: true}
 	out := make([]pipelines.StepPlan, 0, 8)
@@ -145,63 +146,132 @@ func (h *Handler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
 	return out
 }
 
-// Run executes the DVD-Video pipeline. The rip step uses dvdbackup
-// (GPL, libdvdcss-backed) to mirror the disc's VIDEO_TS into a local
-// workdir; the transcode step then asks HandBrake to scan the local
-// tree, picks titles by profile, and encodes each one from the
-// filesystem. HandBrake never touches /dev/sr0, so a spurious kernel
-// media-change uevent during a long read can't truncate the output.
-// MakeMKV is no longer needed for DVD — the rolling beta-key dance
-// is restricted to BDMV / UHD where MakeMKV is the only viable
-// decoder.
+// PlanRip — rip-half: detect, identify, rip, eject. Transcode-half marked Skip.
+func (h *Handler) PlanRip(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
+	transcodeHalf := map[state.StepID]bool{
+		state.StepTranscode: true,
+		state.StepCompress:  true,
+		state.StepMove:      true,
+		state.StepNotify:    true,
+	}
+	out := make([]pipelines.StepPlan, 0, 8)
+	for _, sid := range state.CanonicalSteps() {
+		out = append(out, pipelines.StepPlan{ID: sid, Skip: transcodeHalf[sid]})
+	}
+	return out
+}
+
+// PlanTranscode — transcode-half: DVD runs HandBrake (transcode),
+// skips compress, runs move + notify.
+func (h *Handler) PlanTranscode(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
+	out := make([]pipelines.StepPlan, 0, 4)
+	for _, sid := range state.CanonicalTranscodeSteps() {
+		out = append(out, pipelines.StepPlan{ID: sid, Skip: sid == state.StepCompress})
+	}
+	return out
+}
+
+// Run is the monolithic fallback path: allocates a tmpdir as spool,
+// runs RunRip + RunTranscode in sequence, cleans up.
 func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
+	tmpdir, err := h.createWorkDir(disc.ID)
+	if err != nil {
+		sink.OnStepStart(state.StepRip)
+		sink.OnStepFailed(state.StepRip, err)
+		return err
+	}
+	defer func() { _ = os.RemoveAll(tmpdir) }()
+	result, err := h.RunRip(ctx, drv, disc, prof, tmpdir, sink)
+	if err != nil {
+		return err
+	}
+	return h.RunTranscode(ctx, result, disc, prof, sink)
+}
+
+// RunRip executes the drive-bound half: detect, identify, dvdbackup
+// mirror of VIDEO_TS into spoolDir/rip/<VOLUME_LABEL>/, eject. The
+// transcode step (HandBrake) reads from the spooled local mirror, so
+// the drive is free for the next disc as soon as eject completes.
+func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, spoolDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
 	sink.OnStepStart(state.StepDetect)
 	sink.OnStepDone(state.StepDetect, nil)
 	sink.OnStepStart(state.StepIdentify)
 	sink.OnStepDone(state.StepIdentify, nil)
 
-	// rip — dvdbackup mirror of the entire DVD-Video tree.
 	sink.OnStepStart(state.StepRip)
-	tmpdir, err := h.createWorkDir(disc.ID)
-	if err != nil {
-		sink.OnStepFailed(state.StepRip, err)
-		return err
-	}
-	defer func() { _ = os.RemoveAll(tmpdir) }()
-
 	if err := h.deps.LibraryProbe(h.deps.LibraryRoot); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return fmt.Errorf("library probe: %w", err)
+		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
 	if h.deps.DVDBackup == nil {
 		err := errors.New("dvdvideo: DVDBackup not configured")
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 	if h.deps.HandBrakeScanner == nil {
 		err := errors.New("dvdvideo: HandBrakeScanner not configured")
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 
-	ripDir := filepath.Join(tmpdir, "rip")
+	ripDir := filepath.Join(spoolDir, "rip")
 	if err := os.MkdirAll(ripDir, 0o755); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return fmt.Errorf("create rip dir: %w", err)
+		return pipelines.RipResult{}, fmt.Errorf("create rip dir: %w", err)
 	}
-	sink.OnLog(state.LogLevelInfo, "dvdbackup: mirroring %s → workdir", drv.DevPath)
+	sink.OnLog(state.LogLevelInfo, "dvdbackup: mirroring %s → spool", drv.DevPath)
 	mirrorStart := time.Now()
 	source, err := h.deps.DVDBackup.Mirror(ctx, drv.DevPath, ripDir, pipelines.NewStepSink(sink, state.StepRip))
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return fmt.Errorf("dvdbackup mirror: %w", err)
+		return pipelines.RipResult{}, fmt.Errorf("dvdbackup mirror: %w", err)
 	}
 	sink.OnLog(state.LogLevelInfo, "dvdbackup: complete in %s",
 		pipelines.HumanDuration(time.Since(mirrorStart)))
 	sink.OnStepDone(state.StepRip, map[string]any{"source": source})
 
-	// transcode — HandBrake scans the local VIDEO_TS, we pick titles
-	// by profile, then HandBrake encodes each one from the local mirror.
+	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
+		Tools:       h.deps.Tools,
+		ShouldEject: h.deps.ShouldEject,
+	}, drv)
+
+	return pipelines.RipResult{
+		SpoolPath: spoolDir,
+		Notes:     map[string]any{"source": source},
+	}, nil
+}
+
+// RunTranscode executes the compute-bound half: HandBrake scan + per-
+// title encode → spool/title*.{mkv,mp4}, atomic move to library, notify.
+// Resolves the dvdbackup source dir by walking spool/rip/ so a
+// daemon-crash + restart can still find the right input (Notes is
+// in-memory only).
+func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
+	source := stringFromNotes(result.Notes, "source")
+	if source == "" {
+		// Fallback after a daemon-crash restart: walk the rip dir for
+		// the single VOLUME_LABEL subdirectory dvdbackup created.
+		ripDir := filepath.Join(result.SpoolPath, "rip")
+		entries, err := os.ReadDir(ripDir)
+		if err != nil {
+			sink.OnStepStart(state.StepTranscode)
+			sink.OnStepFailed(state.StepTranscode, err)
+			return fmt.Errorf("transcode: %w", err)
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				source = filepath.Join(ripDir, e.Name())
+				break
+			}
+		}
+		if source == "" {
+			err := errors.New("transcode: no dvdbackup output found in spool/rip/")
+			sink.OnStepStart(state.StepTranscode)
+			sink.OnStepFailed(state.StepTranscode, err)
+			return err
+		}
+	}
+
 	sink.OnStepStart(state.StepTranscode)
 	sink.OnLog(state.LogLevelInfo, "HandBrake: scanning titles")
 	titles, err := h.deps.HandBrakeScanner.Scan(ctx, source)
@@ -255,26 +325,19 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 		}
 	}
 
-	// Select the HandBrake encoder once per job: NVENC if the
-	// profile asks for it and the GPU was detected at boot,
-	// software otherwise.
 	encoder, fellBack := pipelines.SelectHandBrakeEncoder(prof, h.deps.NVENCAvailable)
 	if fellBack {
 		sink.OnLog(state.LogLevelWarn,
 			"NVENC requested but unavailable on host; falling back to %s software encoder", encoder)
 	}
 
-	// Encode quality is a real, per-profile setting. quality_rf is the
-	// x264/x265 constant-rate-factor (lower = larger/better); encoder_preset
-	// trades CPU time for compression efficiency. Defaults match the
-	// seeded DVD profiles: RF 18 + slow → near-transparent DVD archives.
 	qualityRF := pipelines.IntOption(prof, "quality_rf", 18)
 	encoderPreset := pipelines.StringOption(prof, "encoder_preset", "slow")
 
 	transcoded := make([]string, 0, len(encodeTitles))
 	for i, t := range encodeTitles {
 		titleIdx := i + 1
-		out := filepath.Join(tmpdir, fmt.Sprintf("title%02d.%s", t.Number, ext))
+		out := filepath.Join(result.SpoolPath, fmt.Sprintf("title%02d.%s", t.Number, ext))
 		args := []string{
 			"--input", source,
 			"--output", out,
@@ -290,13 +353,8 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 			args = append(args, "--title", strconv.Itoa(t.Number))
 		}
 		if ext == "mkv" {
-			// Archival MKV: keep every subtitle track the disc carries
-			// (VOBSUB bitmap, native to Matroska). No language filter —
-			// a rip should preserve what's on the disc.
 			args = append(args, "--all-subtitles")
 		} else if h.deps.SubsLang != "" {
-			// MP4 can't cleanly hold VOBSUB, so keep the
-			// language-filtered selection for the MP4 path.
 			args = append(args, "--subtitle-lang-list", h.deps.SubsLang, "--subtitle-forced=auto")
 		}
 		if ext == "mp4" {
@@ -310,7 +368,7 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 		stepSink := pipelines.NewStepSink(sink, state.StepTranscode)
 		sink.OnLog(state.LogLevelInfo, "HandBrake: encoding title %d → %s", t.Number, filepath.Base(out))
 		encStart := time.Now()
-		if err := whb.Run(ctx, args, env, tmpdir, stepSink); err != nil {
+		if err := whb.Run(ctx, args, env, result.SpoolPath, stepSink); err != nil {
 			sink.OnStepFailed(state.StepTranscode, err)
 			return fmt.Errorf("handbrake encode title %d: %w", t.Number, err)
 		}
@@ -328,7 +386,6 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 	}
 	sink.OnStepDone(state.StepTranscode, nil)
 
-	// move
 	sink.OnStepStart(state.StepMove)
 	moved, err := h.moveOutputs(transcoded, encodeTitles, disc, prof)
 	if err != nil {
@@ -345,11 +402,19 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 		URLsForTrigger: h.deps.URLsForTrigger,
 		LibraryRoot:    h.deps.LibraryRoot,
 	}, disc)
-	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
-		Tools:       h.deps.Tools,
-		ShouldEject: h.deps.ShouldEject,
-	}, drv)
 	return nil
+}
+
+// stringFromNotes extracts a string-valued key from a RipResult.Notes
+// bag, tolerating an absent or wrong-typed entry.
+func stringFromNotes(notes map[string]any, key string) string {
+	if notes == nil {
+		return ""
+	}
+	if v, ok := notes[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 // minEncodedBytesPerSecond is our lower-bound on the bytes-per-second

@@ -894,3 +894,6 @@ func TestDVD_Run_EncodeArgs_ProfileOverridesQuality(t *testing.T) {
 		t.Errorf("--encoder-preset: want medium (profile override), got %q", v)
 	}
 }
+
+// Compile-time assertion that DVD satisfies SplittableHandler.
+var _ pipelines.SplittableHandler = (*dvdvideo.Handler)(nil)

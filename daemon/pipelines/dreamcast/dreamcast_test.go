@@ -199,11 +199,12 @@ func TestRun_PostRipMD5Hit(t *testing.T) {
 		t.Errorf("expected file at %s: %v", want, err)
 	}
 
-	// Step ordering: detect → identify → rip → compress → move → notify → eject.
+	// Step ordering after the rip/transcode split: detect → identify →
+	// rip → eject (RunRip), then compress → move → notify (RunTranscode).
 	starts := sink.StepSequence()
 	wantOrder := []state.StepID{
-		state.StepDetect, state.StepIdentify, state.StepRip,
-		state.StepCompress, state.StepMove, state.StepNotify, state.StepEject,
+		state.StepDetect, state.StepIdentify, state.StepRip, state.StepEject,
+		state.StepCompress, state.StepMove, state.StepNotify,
 	}
 	if len(starts) != len(wantOrder) {
 		t.Fatalf("started %d steps, want %d: %v", len(starts), len(wantOrder), starts)
@@ -318,5 +319,6 @@ func (f *fakeDCIPBin) Read(_ context.Context, _ string) (*identify.DCIPBin, erro
 	return f.info, f.err
 }
 
-// Compile-time guard.
+// Compile-time guards.
 var _ = pipelines.ErrNoCandidates
+var _ pipelines.SplittableHandler = (*dreamcast.Handler)(nil)

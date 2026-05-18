@@ -121,6 +121,8 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 }
 
 // Plan returns the 6-active-step plan; transcode + compress skipped.
+// Used by the monolithic Run fallback. Split-path callers use PlanRip
+// + PlanTranscode.
 func (h *Handler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
 	skipped := map[state.StepID]bool{
 		state.StepTranscode: true,
@@ -133,60 +135,96 @@ func (h *Handler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
 	return out
 }
 
-// Run executes the UHD pipeline: scan → rip → move → notify → eject.
-// transcode + compress are SKIPPED — neither step is even started so
-// the recording sink never sees them. The MakeMKV output IS the
-// artifact (HDR/DV/lossless audio preserved).
+// PlanRip — full 8-step canonical list with the transcode-half marked
+// Skip. Active rip-half steps: detect, identify, rip, eject.
+func (h *Handler) PlanRip(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
+	transcodeHalf := map[state.StepID]bool{
+		state.StepTranscode: true,
+		state.StepCompress:  true,
+		state.StepMove:      true,
+		state.StepNotify:    true,
+	}
+	out := make([]pipelines.StepPlan, 0, 8)
+	for _, sid := range state.CanonicalSteps() {
+		out = append(out, pipelines.StepPlan{ID: sid, Skip: transcodeHalf[sid]})
+	}
+	return out
+}
+
+// PlanTranscode — UHD has no transcode or compress (MakeMKV output IS
+// the artifact, HDR/DV/lossless preserved), so both are marked Skip.
+// Active transcode-half steps: move, notify.
+func (h *Handler) PlanTranscode(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
+	out := make([]pipelines.StepPlan, 0, 4)
+	for _, sid := range state.CanonicalTranscodeSteps() {
+		skip := sid == state.StepTranscode || sid == state.StepCompress
+		out = append(out, pipelines.StepPlan{ID: sid, Skip: skip})
+	}
+	return out
+}
+
+// Run is the monolithic fallback path. Allocates a tmpdir as spool,
+// runs RunRip + RunTranscode, cleans up.
 func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
+	tmpdir, err := h.createWorkDir(disc.ID)
+	if err != nil {
+		sink.OnStepStart(state.StepRip)
+		sink.OnStepFailed(state.StepRip, err)
+		return err
+	}
+	defer func() { _ = os.RemoveAll(tmpdir) }()
+	result, err := h.RunRip(ctx, drv, disc, prof, tmpdir, sink)
+	if err != nil {
+		return err
+	}
+	return h.RunTranscode(ctx, result, disc, prof, sink)
+}
+
+// RunRip executes the drive-bound half: detect, identify, MakeMKV
+// scan + decrypt → spoolDir/rip/*.mkv, eject. Drive is freed on return.
+func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, spoolDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
 	sink.OnStepStart(state.StepDetect)
 	sink.OnStepDone(state.StepDetect, nil)
 	sink.OnStepStart(state.StepIdentify)
 	sink.OnStepDone(state.StepIdentify, nil)
 
 	sink.OnStepStart(state.StepRip)
-	tmpdir, err := h.createWorkDir(disc.ID)
-	if err != nil {
-		sink.OnStepFailed(state.StepRip, err)
-		return err
-	}
-	defer func() { _ = os.RemoveAll(tmpdir) }()
-
 	if err := h.deps.LibraryProbe(h.deps.LibraryRoot); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return fmt.Errorf("library probe: %w", err)
+		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
 	if h.deps.MakeMKVScanner == nil || h.deps.MakeMKVRipper == nil {
 		err := errors.New("uhd: MakeMKV not configured")
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 	sink.OnLog(state.LogLevelInfo, "MakeMKV: scanning %s (UHD)", drv.DevPath)
 	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return fmt.Errorf("makemkv scan: %w", err)
+		return pipelines.RipResult{}, fmt.Errorf("makemkv scan: %w", err)
 	}
 	picked, err := pickLongestTitle(titles, prof)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 	sink.OnLog(state.LogLevelInfo, "MakeMKV: scan complete, picked title %d (longest %s)",
 		picked.ID, pipelines.HumanDuration(time.Duration(picked.DurationSec)*time.Second))
-	ripDir := filepath.Join(tmpdir, "rip")
+	ripDir := filepath.Join(spoolDir, "rip")
 	if err := os.MkdirAll(ripDir, 0o755); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 	ripStart := time.Now()
 	if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, picked.ID, ripDir, pipelines.NewStepSink(sink, state.StepRip)); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return fmt.Errorf("makemkv rip: %w", err)
+		return pipelines.RipResult{}, fmt.Errorf("makemkv rip: %w", err)
 	}
 	rippedFile, err := singleMKVIn(ripDir)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
-		return err
+		return pipelines.RipResult{}, err
 	}
 	var ripSize int64
 	if fi, statErr := os.Stat(rippedFile); statErr == nil {
@@ -196,7 +234,32 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 		pipelines.HumanBytes(ripSize), pipelines.HumanDuration(time.Since(ripStart)))
 	sink.OnStepDone(state.StepRip, map[string]any{"title_id": picked.ID, "duration_sec": picked.DurationSec})
 
-	// move — atomic rename of the MakeMKV output directly into the library.
+	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
+		Tools:       h.deps.Tools,
+		ShouldEject: h.deps.ShouldEject,
+	}, drv)
+
+	return pipelines.RipResult{
+		SpoolPath: spoolDir,
+		Notes: map[string]any{
+			"title_id":     picked.ID,
+			"duration_sec": picked.DurationSec,
+			"rip_file":     rippedFile,
+		},
+	}, nil
+}
+
+// RunTranscode executes the compute-bound half. UHD has no transcode
+// or compress steps — the MakeMKV remux IS the deliverable — so the
+// pipeline is just move + notify.
+func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
+	rippedFile, err := singleMKVIn(filepath.Join(result.SpoolPath, "rip"))
+	if err != nil {
+		sink.OnStepStart(state.StepMove)
+		sink.OnStepFailed(state.StepMove, err)
+		return err
+	}
+
 	sink.OnStepStart(state.StepMove)
 	rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, pipelines.OutputFields{
 		Title: disc.Title, Year: disc.Year,
@@ -218,10 +281,6 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 		URLsForTrigger: h.deps.URLsForTrigger,
 		LibraryRoot:    h.deps.LibraryRoot,
 	}, disc)
-	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
-		Tools:       h.deps.Tools,
-		ShouldEject: h.deps.ShouldEject,
-	}, drv)
 	return nil
 }
 

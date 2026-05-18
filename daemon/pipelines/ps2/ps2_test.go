@@ -247,5 +247,6 @@ func TestPS2Identify_NoMatchAnywhere(t *testing.T) {
 	}
 }
 
-// Compile-time guard.
+// Compile-time guards.
 var _ = pipelines.ErrNoCandidates
+var _ pipelines.SplittableHandler = (*ps2.Handler)(nil)

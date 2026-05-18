@@ -199,9 +199,12 @@ func TestUHDHandler_Run_HappyPath(t *testing.T) {
 			t.Errorf("step %s should not have started for UHD", st)
 		}
 	}
+	// Split semantics: eject fires at the end of RunRip (drive-freed
+	// boundary). The monolithic Run delegate runs RunRip then
+	// RunTranscode back-to-back so the recording sink sees them inline.
 	wantOrder := []state.StepID{
-		state.StepDetect, state.StepIdentify, state.StepRip,
-		state.StepMove, state.StepNotify, state.StepEject,
+		state.StepDetect, state.StepIdentify, state.StepRip, state.StepEject,
+		state.StepMove, state.StepNotify,
 	}
 	if len(starts) != len(wantOrder) {
 		t.Fatalf("started %d steps, want %d: %v", len(starts), len(wantOrder), starts)
@@ -215,3 +218,6 @@ func TestUHDHandler_Run_HappyPath(t *testing.T) {
 
 // Compile-time check that ErrNoCandidates is reachable for grep-greppers.
 var _ = pipelines.ErrNoCandidates
+
+// Compile-time assertion that UHD satisfies SplittableHandler.
+var _ pipelines.SplittableHandler = (*uhd.Handler)(nil)
