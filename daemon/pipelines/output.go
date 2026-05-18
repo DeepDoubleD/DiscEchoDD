@@ -68,6 +68,7 @@ type OutputFields struct {
 	Season        int    // TV episodes
 	EpisodeNumber int    // TV episodes (1-based; from TMDB mapping when present, else title index)
 	EpisodeTitle  string // TV episodes (TMDB episode name; empty when no mapping)
+	IsExtra       bool   // true when this output is a bonus-material title; handlers override the path to land under extras/
 	Region        string
 }
 
@@ -108,6 +109,7 @@ func (f OutputFields) asMap() map[string]any {
 		"Season":        f.Season,
 		"EpisodeNumber": f.EpisodeNumber,
 		"EpisodeTitle":  sanitizeFieldValue(f.EpisodeTitle),
+		"IsExtra":       f.IsExtra,
 		"Region":        sanitizeFieldValue(f.Region),
 	}
 }

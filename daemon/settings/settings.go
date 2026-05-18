@@ -275,17 +275,19 @@ func seedLibraryRoots(ctx context.Context, store *state.Store, getenv func(strin
 }
 
 const (
-	cdFlacProfileName    = "CD-FLAC"
-	dvdMovieProfileName  = "DVD-Movie"
-	dvdSeriesProfileName = "DVD-Series"
-	bdProfileName        = "BD-1080p"
-	uhdProfileName       = "UHD-Remux"
-	psxProfileName       = "PSX-CHD"
-	ps2ProfileName       = "PS2-CHD"
-	saturnProfileName    = "Saturn-CHD"
-	dcProfileName        = "DC-CHD"
-	xboxProfileName      = "XBOX-ISO"
-	dataProfileName      = "Data-ISO"
+	cdFlacProfileName         = "CD-FLAC"
+	dvdMovieProfileName       = "DVD-Movie"
+	dvdMovieExtrasProfileName = "DVD-Movie + Extras"
+	dvdSeriesProfileName      = "DVD-Series"
+	bdProfileName             = "BD-1080p"
+	bdExtrasProfileName       = "BD-1080p + Extras"
+	uhdProfileName            = "UHD-Remux"
+	psxProfileName            = "PSX-CHD"
+	ps2ProfileName            = "PS2-CHD"
+	saturnProfileName         = "Saturn-CHD"
+	dcProfileName             = "DC-CHD"
+	xboxProfileName           = "XBOX-ISO"
+	dataProfileName           = "Data-ISO"
 )
 
 func seedDVDProfiles(ctx context.Context, store *state.Store) error {
@@ -314,6 +316,35 @@ func seedDVDProfiles(ctx context.Context, store *state.Store) error {
 				"dvd_selection_mode": "main_feature",
 				"quality_rf":         18,
 				"encoder_preset":     "slow",
+			},
+			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+		if err := store.CreateProfile(ctx, p); err != nil {
+			return err
+		}
+	}
+	if !have[dvdMovieExtrasProfileName] {
+		p := &state.Profile{
+			DiscType:      state.DiscTypeDVD,
+			Name:          dvdMovieExtrasProfileName,
+			Engine:        "HandBrake",
+			Format:        "MKV",
+			Preset:        "x264 RF 18 · slow · + extras",
+			Container:     "MKV",
+			VideoCodec:    "x264",
+			QualityPreset: "x264 RF 18 · slow · + extras",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"dvd_selection_mode": "main_feature",
+				"quality_rf":         18,
+				"encoder_preset":     "slow",
+				"include_extras":     true,
+				"min_extra_seconds":  60,
+				"extras_max_ratio":   90,
 			},
 			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
 			Enabled:            true,
@@ -475,30 +506,62 @@ func seedBDMVProfile(ctx context.Context, store *state.Store) error {
 	if err != nil {
 		return err
 	}
+	have := map[string]bool{}
 	for _, p := range existing {
-		if p.Name == bdProfileName {
-			return nil
-		}
+		have[p.Name] = true
 	}
 	now := time.Now()
-	return store.CreateProfile(ctx, &state.Profile{
-		DiscType:           state.DiscTypeBDMV,
-		Name:               bdProfileName,
-		Engine:             "MakeMKV+HandBrake",
-		Format:             "MKV",
-		Preset:             "x265 RF 19 10-bit",
-		Container:          "MKV",
-		VideoCodec:         "x265",
-		QualityPreset:      "x265 RF 19 10-bit",
-		HDRPipeline:        "passthrough",
-		DrivePolicy:        "any",
-		Options:            map[string]any{"min_title_seconds": 3600, "keep_all_tracks": false},
-		OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
-		Enabled:            true,
-		StepCount:          7,
-		CreatedAt:          now,
-		UpdatedAt:          now,
-	})
+	if !have[bdProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:           state.DiscTypeBDMV,
+			Name:               bdProfileName,
+			Engine:             "MakeMKV+HandBrake",
+			Format:             "MKV",
+			Preset:             "x265 RF 19 10-bit",
+			Container:          "MKV",
+			VideoCodec:         "x265",
+			QualityPreset:      "x265 RF 19 10-bit",
+			HDRPipeline:        "passthrough",
+			DrivePolicy:        "any",
+			Options:            map[string]any{"min_title_seconds": 3600, "keep_all_tracks": false},
+			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	if !have[bdExtrasProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:      state.DiscTypeBDMV,
+			Name:          bdExtrasProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "x265 RF 19 10-bit · + extras",
+			Container:     "MKV",
+			VideoCodec:    "x265",
+			QualityPreset: "x265 RF 19 10-bit · + extras",
+			HDRPipeline:   "passthrough",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"min_title_seconds": 3600,
+				"keep_all_tracks":   false,
+				"include_extras":    true,
+				"min_extra_seconds": 60,
+				"extras_max_ratio":  90,
+			},
+			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func seedUHDProfile(ctx context.Context, store *state.Store) error {

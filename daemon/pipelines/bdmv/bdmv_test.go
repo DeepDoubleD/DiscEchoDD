@@ -3,6 +3,7 @@ package bdmv_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,22 +65,36 @@ type fakeMakeMKV struct {
 	scanTitles []tools.MakeMKVTitle
 	scanErr    error
 	ripErr     error
-	stubName   string
+	// stubName overrides the per-title naming for the single-title
+	// tests that pre-date multi-title rip. When empty, the fake writes
+	// `title_t<NN>.mkv` with NN derived from the requested title id
+	// so multi-title rips produce one file per Rip call.
+	stubName string
+	// stubBytes lets tests vary the per-Rip file size so extras-mode
+	// indexOfLargestFile picks deterministically. Keyed by title id;
+	// titles without an entry get a 4-byte stub.
+	stubBytes map[int]int
 }
 
 func (f *fakeMakeMKV) Scan(_ context.Context, _ string) ([]tools.MakeMKVTitle, error) {
 	return f.scanTitles, f.scanErr
 }
 
-func (f *fakeMakeMKV) Rip(_ context.Context, _ string, _ int, outDir string, _ tools.Sink) error {
+func (f *fakeMakeMKV) Rip(_ context.Context, _ string, titleID int, outDir string, _ tools.Sink) error {
 	if f.ripErr != nil {
 		return f.ripErr
 	}
 	name := f.stubName
 	if name == "" {
-		name = "title_t00.mkv"
+		name = fmt.Sprintf("title_t%02d.mkv", titleID)
 	}
-	return os.WriteFile(filepath.Join(outDir, name), []byte("STUB"), 0o644)
+	size := 4
+	if f.stubBytes != nil {
+		if n, ok := f.stubBytes[titleID]; ok {
+			size = n
+		}
+	}
+	return os.WriteFile(filepath.Join(outDir, name), make([]byte, size), 0o644)
 }
 
 // fakeHandBrake satisfies tools.Tool. On Run: writes a stub file at
@@ -471,4 +486,66 @@ func TestBDMV_Run_NVENCH264HardwarePassthrough(t *testing.T) {
 	if got := bdmvEncoderArg(hb); got != "nvenc_h264" {
 		t.Errorf("--encoder: got %q, want nvenc_h264", got)
 	}
+}
+
+// TestBDMV_Run_Extras_RipsMainPlusExtras drives the include_extras
+// profile path through the monolithic Run delegate. Scan returns
+// main (7000s), one extras-band title (480s), and a navigation
+// loop (30s). The encode set should be main + the extra; the nav
+// loop drops below min_extra_seconds. Output: main at top-level,
+// extra under `<mainDir>/extras/extra-01.mkv`.
+func TestBDMV_Run_Extras_RipsMainPlusExtras(t *testing.T) {
+	libRoot := t.TempDir()
+	reg, _, _, _ := newRegistry()
+	h := bdmv.New(bdmv.Deps{
+		MakeMKVScanner: &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+			{ID: 0, DurationSec: 30, SourceFile: "00000.mpls"},   // nav loop
+			{ID: 1, DurationSec: 7000, SourceFile: "00800.mpls"}, // main
+			{ID: 2, DurationSec: 480, SourceFile: "00010.mpls"},  // extra
+		}},
+		MakeMKVRipper: &fakeMakeMKV{stubBytes: map[int]int{
+			1: 10_000, // main: largest file → indexOfLargestFile picks it
+			2: 1_000,  // extra
+		}},
+		Tools:       reg,
+		LibraryRoot: libRoot,
+		WorkRoot:    t.TempDir(),
+	})
+	prof := &state.Profile{
+		ID:                 "p-bd-extras",
+		DiscType:           state.DiscTypeBDMV,
+		Name:               "BD-1080p + Extras",
+		Preset:             "x265 RF 19 10-bit · + extras",
+		OutputPathTemplate: "{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv",
+		Options: map[string]any{
+			"min_title_seconds": float64(3600),
+			"include_extras":    true,
+			"min_extra_seconds": 60,
+			"extras_max_ratio":  90,
+		},
+	}
+	disc := &state.Disc{ID: "disc-bd-ex", Type: state.DiscTypeBDMV, Title: "Arrival", Year: 2016}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatal(err)
+	}
+
+	wantMain := filepath.Join(libRoot, "Arrival (2016)", "Arrival (2016).mkv")
+	if _, err := os.Stat(wantMain); err != nil {
+		t.Errorf("main feature missing at %s: %v", wantMain, err)
+	}
+	wantExtra := filepath.Join(libRoot, "Arrival (2016)", "extras", "extra-01.mkv")
+	if _, err := os.Stat(wantExtra); err != nil {
+		t.Errorf("extra missing at %s: %v", wantExtra, err)
+	}
+	// Sanity: no navigation loop output should have been moved.
+	navUnexpected := filepath.Join(libRoot, "Arrival (2016)", "extras", "extra-02.mkv")
+	if _, err := os.Stat(navUnexpected); err == nil {
+		t.Errorf("nav loop should have been dropped; found %s", navUnexpected)
+	}
+
+	// Silence unused-import warning on fmt — package-level use suffices.
+	_ = fmt.Sprintf
 }

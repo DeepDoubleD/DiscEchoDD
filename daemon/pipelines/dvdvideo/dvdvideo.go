@@ -307,9 +307,12 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 	// User picked specific titles via the picker — honour them and
 	// skip the auto-pick heuristic entirely (movie/series mode no
 	// longer matters; main-feature is dropped since the user told us
-	// what to rip).
+	// what to rip). mainNum is the title number to treat as the main
+	// feature; 0 means "no extras flow" so moveOutputs renders every
+	// title via the standard template.
 	pickedIDs := pipelines.SelectedTitleIDsFromDisc(disc)
 	var encodeTitles []tools.HandBrakeTitle
+	mainNum := 0
 	switch {
 	case len(pickedIDs) > 0:
 		byNumber := make(map[int]tools.HandBrakeTitle, len(titles))
@@ -345,10 +348,28 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 			// Single encode using --main-feature. encodeTitles is set to
 			// the scan's longest title only so the duration-floor check
 			// below has a number to compare the output bytes to.
-			encodeTitles = []tools.HandBrakeTitle{longestTitle(titles)}
-			if err := validateMovieTitleSelection(encodeTitles[0], prof); err != nil {
+			main := longestTitle(titles)
+			encodeTitles = []tools.HandBrakeTitle{main}
+			if err := validateMovieTitleSelection(main, prof); err != nil {
 				sink.OnStepFailed(state.StepTranscode, err)
 				return err
+			}
+			// When the profile opts into extras, fold every other title
+			// in the [min_extra_seconds, main_duration × extras_max_ratio]
+			// duration band into the encode set. Main feature stays at
+			// index 0; extras follow in scan order so the per-title
+			// loop encodes them in turn. mainNum unlocks the extras
+			// layout in moveOutputs and forces the encoder to use
+			// --title N instead of --main-feature for the rest.
+			if pipelines.IncludeExtrasFromProfile(prof) {
+				extras := selectExtras(titles, main,
+					pipelines.MinExtraSecondsFromProfile(prof),
+					pipelines.ExtrasMaxRatioFromProfile(prof))
+				if len(extras) > 0 {
+					encodeTitles = append(encodeTitles, extras...)
+					mainNum = main.Number
+					sink.OnLog(state.LogLevelInfo, "extras: ripping %d bonus title(s) alongside main feature", len(extras))
+				}
 			}
 		}
 	}
@@ -375,7 +396,11 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 			"--all-audio",
 			"--markers",
 		}
-		if isMovie {
+		// --main-feature lets HandBrake pick the title via the IFO bit
+		// when we're in pure-movie mode (no extras, no user picks).
+		// Extras flow uses --title N explicitly per entry so the
+		// encoder doesn't keep re-ripping the main feature.
+		if isMovie && mainNum == 0 {
 			args = append(args, "--main-feature")
 		} else {
 			args = append(args, "--title", strconv.Itoa(t.Number))
@@ -415,7 +440,7 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 	sink.OnStepDone(state.StepTranscode, nil)
 
 	sink.OnStepStart(state.StepMove)
-	moved, err := h.moveOutputs(transcoded, encodeTitles, disc, prof)
+	moved, err := h.moveOutputs(transcoded, encodeTitles, mainNum, disc, prof)
 	if err != nil {
 		sink.OnStepFailed(state.StepMove, err)
 		return fmt.Errorf("move: %w", err)
@@ -653,7 +678,7 @@ func warnOnRuntimeMismatch(disc *state.Disc, titles []tools.HandBrakeTitle) {
 }
 
 func (h *Handler) moveOutputs(transcoded []string, encodeTitles []tools.HandBrakeTitle,
-	disc *state.Disc, prof *state.Profile) ([]string, error) {
+	mainNum int, disc *state.Disc, prof *state.Profile) ([]string, error) {
 	// Picker-recorded season overrides the per-profile default — TV
 	// box-set users pick the season per disc, not per profile.
 	season := pipelines.IntOption(prof, "season", 1)
@@ -662,35 +687,65 @@ func (h *Handler) moveOutputs(transcoded []string, encodeTitles []tools.HandBrak
 	}
 	epMap := pipelines.SelectedEpisodeMapFromDisc(disc)
 
+	// In the extras flow (mainNum > 0) we need the rendered main
+	// path first to derive `<mainDir>/extras/` for the bonus files.
+	// Pre-resolve it here so the first extra in the loop knows where
+	// to land. extraIdx counts the bonus title order across the loop.
+	var mainDir string
+	var extraIdx int
+	if mainNum > 0 {
+		mainFields := pipelines.OutputFields{
+			Title: disc.Title,
+			Year:  disc.Year,
+			Show:  disc.Title,
+		}
+		mainRel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, mainFields)
+		if err != nil {
+			return nil, fmt.Errorf("render main template: %w", err)
+		}
+		mainDir = filepath.Dir(mainRel)
+	}
+
 	var moved []string
 	for episodeIdx, src := range transcoded {
 		// We want the file extension that came out of HandBrake, not the
 		// profile's extension — they always agree today, but stay
 		// defensive in case a profile flips formats mid-job.
 		ext := strings.TrimPrefix(filepath.Ext(src), ".")
-		fields := pipelines.OutputFields{
-			Title:         disc.Title,
-			Year:          disc.Year,
-			Show:          disc.Title,
-			Season:        season,
-			EpisodeNumber: episodeIdx + 1,
-		}
-		// When the user mapped this title to a TMDB episode, the
-		// picker's choice wins over the title-index fallback.
-		if episodeIdx < len(encodeTitles) {
-			if ea, ok := epMap[encodeTitles[episodeIdx].Number]; ok {
-				if ea.Episode > 0 {
-					fields.EpisodeNumber = ea.Episode
-				}
-				fields.EpisodeTitle = ea.EpisodeTitle
+		isExtra := mainNum > 0 && episodeIdx < len(encodeTitles) &&
+			encodeTitles[episodeIdx].Number != mainNum
+
+		var rel string
+		if isExtra {
+			extraIdx++
+			rel = filepath.Join(mainDir, "extras",
+				fmt.Sprintf("extra-%02d.%s", extraIdx, ext))
+		} else {
+			fields := pipelines.OutputFields{
+				Title:         disc.Title,
+				Year:          disc.Year,
+				Show:          disc.Title,
+				Season:        season,
+				EpisodeNumber: episodeIdx + 1,
 			}
-		}
-		rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, fields)
-		if err != nil {
-			return moved, fmt.Errorf("render template: %w", err)
-		}
-		if filepath.Ext(rel) == "" {
-			rel += "." + ext
+			// When the user mapped this title to a TMDB episode, the
+			// picker's choice wins over the title-index fallback.
+			if episodeIdx < len(encodeTitles) {
+				if ea, ok := epMap[encodeTitles[episodeIdx].Number]; ok {
+					if ea.Episode > 0 {
+						fields.EpisodeNumber = ea.Episode
+					}
+					fields.EpisodeTitle = ea.EpisodeTitle
+				}
+			}
+			r, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, fields)
+			if err != nil {
+				return moved, fmt.Errorf("render template: %w", err)
+			}
+			rel = r
+			if filepath.Ext(rel) == "" {
+				rel += "." + ext
+			}
 		}
 		dst := filepath.Join(h.deps.LibraryRoot, rel)
 		if err := pipelines.AtomicMove(src, dst); err != nil {
@@ -699,6 +754,26 @@ func (h *Handler) moveOutputs(transcoded []string, encodeTitles []tools.HandBrak
 		moved = append(moved, dst)
 	}
 	return moved, nil
+}
+
+// selectExtras picks every title in the duration band
+// [minSec, mainDur × maxRatio] that isn't the main title itself.
+// Returns the matches in the order they appear in titles (scan
+// order) so deterministic output ordering survives upstream
+// changes in HandBrake's output.
+func selectExtras(titles []tools.HandBrakeTitle, main tools.HandBrakeTitle, minSec int, maxRatio float64) []tools.HandBrakeTitle {
+	maxSec := int(float64(main.DurationSeconds) * maxRatio)
+	out := make([]tools.HandBrakeTitle, 0)
+	for _, t := range titles {
+		if t.Number == main.Number {
+			continue
+		}
+		if t.DurationSeconds < minSec || t.DurationSeconds > maxSec {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // mergeMetadataField reads the current blob, sets one top-level key to

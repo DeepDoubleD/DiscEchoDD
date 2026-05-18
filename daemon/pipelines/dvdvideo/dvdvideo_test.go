@@ -898,5 +898,88 @@ func TestDVD_Run_EncodeArgs_ProfileOverridesQuality(t *testing.T) {
 	}
 }
 
+// TestDVD_Run_MovieExtras_RipsMainPlusExtras verifies the
+// include_extras profile path: HandBrake scan returns a main feature,
+// one extras-band title, and a navigation loop; the encode set picks
+// up main + the extra, the nav loop is dropped, the main lands at
+// the top-level path and the extra at <mainDir>/extras/extra-01.mkv.
+func TestDVD_Run_MovieExtras_RipsMainPlusExtras(t *testing.T) {
+	libRoot := t.TempDir()
+
+	hb := &fakeHandBrake{scanTitles: []tools.HandBrakeTitle{
+		{Number: 1, DurationSeconds: 5400}, // main feature (90 min)
+		{Number: 2, DurationSeconds: 480},  // extra (8 min, within band)
+		{Number: 3, DurationSeconds: 20},   // navigation loop (drop)
+	}}
+	bk := &fakeDVDBackup{label: "ARRIVAL"}
+	reg := tools.NewRegistry()
+	reg.Register(hb)
+	reg.Register(tools.NewMockTool("apprise", []tools.MockEvent{}))
+	reg.Register(tools.NewMockTool("eject", []tools.MockEvent{}))
+
+	h := dvdvideo.New(dvdvideo.Deps{
+		Tools:                    reg,
+		LibraryRoot:              libRoot,
+		WorkRoot:                 t.TempDir(),
+		LibraryProbe:             func(string) error { return nil },
+		DVDBackup:                bk,
+		HandBrakeScanner:         hb,
+		MinEncodedBytesPerSecond: -1, // fake encoder writes a stub byte
+	})
+
+	drv := &state.Drive{ID: "drv-1", DevPath: "/dev/sr0"}
+	disc := &state.Disc{
+		ID: "disc-extras", Type: state.DiscTypeDVD, DriveID: "drv-1",
+		Title: "Arrival", Year: 2016,
+		MetadataID: "329865", MetadataProvider: "TMDB",
+		Candidates: []state.Candidate{
+			{Source: "TMDB", Title: "Arrival", Year: 2016, MediaType: "movie", TMDBID: 329865, Confidence: 80},
+		},
+	}
+	prof := &state.Profile{
+		DiscType: state.DiscTypeDVD, Engine: "HandBrake", Format: "MKV",
+		OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+		Options: map[string]any{
+			"dvd_selection_mode": "main_feature",
+			"include_extras":     true,
+			"min_extra_seconds":  60,
+			"extras_max_ratio":   90,
+		},
+	}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Two HandBrake encode calls: main + the one qualifying extra.
+	// Nav loop (20s) is dropped before the encoder loop.
+	if len(hb.calls) != 2 {
+		t.Errorf("encode calls: want 2 (main + extra), got %d", len(hb.calls))
+	}
+	// Main encode uses --title 1 (extras flow forces explicit titles
+	// instead of --main-feature so subsequent extras don't re-rip
+	// the main).
+	for i, c := range hb.calls {
+		args := c.args
+		if hasFlag(args, "--main-feature") {
+			t.Errorf("call %d: extras flow should not use --main-feature: %v", i, args)
+		}
+		titleNum := flagValue(args, "--title")
+		if titleNum == "" {
+			t.Errorf("call %d: missing --title: %v", i, args)
+		}
+	}
+
+	wantMain := filepath.Join(libRoot, "Arrival (2016)", "Arrival (2016).mkv")
+	if _, err := os.Stat(wantMain); err != nil {
+		t.Errorf("main feature missing at %s: %v", wantMain, err)
+	}
+	wantExtra := filepath.Join(libRoot, "Arrival (2016)", "extras", "extra-01.mkv")
+	if _, err := os.Stat(wantExtra); err != nil {
+		t.Errorf("extra missing at %s: %v", wantExtra, err)
+	}
+}
+
 // Compile-time assertion that DVD satisfies SplittableHandler.
 var _ pipelines.SplittableHandler = (*dvdvideo.Handler)(nil)

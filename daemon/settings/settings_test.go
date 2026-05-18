@@ -333,15 +333,19 @@ func TestLoad_DVDProfilesSeeded(t *testing.T) {
 	}
 
 	dvds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
-	if len(dvds) != 2 {
-		t.Fatalf("want 2 DVD profiles, got %d", len(dvds))
+	if len(dvds) != 3 {
+		t.Fatalf("want 3 DVD profiles, got %d", len(dvds))
 	}
 	byName := map[string]*state.Profile{}
 	for i := range dvds {
 		byName[dvds[i].Name] = &dvds[i]
 	}
-	if byName["DVD-Movie"] == nil || byName["DVD-Series"] == nil {
+	if byName["DVD-Movie"] == nil || byName["DVD-Movie + Extras"] == nil || byName["DVD-Series"] == nil {
 		t.Fatalf("missing seed names: %v", byName)
+	}
+	mvExtras := byName["DVD-Movie + Extras"]
+	if v, _ := mvExtras.Options["include_extras"].(bool); !v {
+		t.Errorf("DVD-Movie + Extras should have include_extras=true; opts=%v", mvExtras.Options)
 	}
 
 	mv := byName["DVD-Movie"]
@@ -384,7 +388,7 @@ func TestLoad_DVDProfilesSeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	dvds2, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
-	if len(dvds2) != 2 {
+	if len(dvds2) != 3 {
 		t.Errorf("after re-Load: %d", len(dvds2))
 	}
 }
@@ -424,10 +428,17 @@ func TestSeedBDMVProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bds) != 1 || bds[0].Name != "BD-1080p" {
-		t.Errorf("BDMV profiles = %+v, want [BD-1080p]", bds)
+	if len(bds) != 2 {
+		t.Fatalf("BDMV profiles = %d, want 2 (BD-1080p, BD-1080p + Extras): %+v", len(bds), bds)
 	}
-	p := bds[0]
+	byName := map[string]*state.Profile{}
+	for i := range bds {
+		byName[bds[i].Name] = &bds[i]
+	}
+	p := byName["BD-1080p"]
+	if p == nil {
+		t.Fatalf("missing BD-1080p; got %v", byName)
+	}
 	if p.Engine != "MakeMKV+HandBrake" {
 		t.Errorf("BD-1080p engine = %q", p.Engine)
 	}
@@ -442,6 +453,13 @@ func TestSeedBDMVProfile(t *testing.T) {
 	}
 	if !p.Enabled {
 		t.Errorf("BD-1080p should be enabled")
+	}
+	pe := byName["BD-1080p + Extras"]
+	if pe == nil {
+		t.Fatalf("missing BD-1080p + Extras; got %v", byName)
+	}
+	if v, _ := pe.Options["include_extras"].(bool); !v {
+		t.Errorf("BD-1080p + Extras should have include_extras=true; opts=%v", pe.Options)
 	}
 }
 
@@ -492,8 +510,12 @@ func TestSeedVideoProfiles_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	bds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeBDMV)
-	if len(bds) != 1 {
-		t.Errorf("BDMV after 2 loads = %d, want 1", len(bds))
+	if len(bds) != 2 {
+		t.Errorf("BDMV after 2 loads = %d, want 2", len(bds))
+	}
+	dvds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
+	if len(dvds) != 3 {
+		t.Errorf("DVD after 2 loads = %d, want 3", len(dvds))
 	}
 	uhds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeUHD)
 	if len(uhds) != 1 {

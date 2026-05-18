@@ -69,6 +69,9 @@ var engineSchemas = map[string]EngineSchema{
 			"min_title_seconds": {Type: OptInt},
 			"keep_all_tracks":   {Type: OptBool},
 			"show_title_picker": {Type: OptBool}, // route through pre-rip title picker
+			"include_extras":    {Type: OptBool}, // auto-include bonus-material titles in the rip
+			"min_extra_seconds": {Type: OptInt},  // shortest title duration considered an extra (default 60)
+			"extras_max_ratio":  {Type: OptInt},  // longest extra as % of main duration (default 90)
 		},
 		StepCount: 6,
 	},
@@ -80,6 +83,9 @@ var engineSchemas = map[string]EngineSchema{
 			"min_title_seconds": {Type: OptInt},
 			"keep_all_tracks":   {Type: OptBool},
 			"show_title_picker": {Type: OptBool}, // route through pre-rip title picker
+			"include_extras":    {Type: OptBool},
+			"min_extra_seconds": {Type: OptInt},
+			"extras_max_ratio":  {Type: OptInt},
 		},
 		StepCount: 7,
 	},
@@ -93,7 +99,10 @@ var engineSchemas = map[string]EngineSchema{
 			"dvd_selection_mode": {Type: OptString},
 			"quality_rf":         {Type: OptInt},
 			"encoder_preset":     {Type: OptString},
-			"show_title_picker":  {Type: OptBool}, // route through pre-rip title picker
+			"show_title_picker":  {Type: OptBool},
+			"include_extras":     {Type: OptBool},
+			"min_extra_seconds":  {Type: OptInt},
+			"extras_max_ratio":   {Type: OptInt},
 		},
 		StepCount: 7,
 	},
