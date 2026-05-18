@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-05-18
+
+### Added
+- Per-rip profile dropdown on the awaiting-decision card and the title picker. When a disc type has more than one enabled profile (e.g. `DVD-Movie` vs `DVD-Movie + Extras`, or a hand-rolled custom profile), the user gets a `<select>` to pick which profile this rip uses instead of being stuck with the auto-pick-by-name. Default tracks the existing auto-pick; user override sticks for the lifetime of the card. The title picker's default mirrors the profile of the most-recent scan job for that disc so a choice made on the card carries through to the picker submit. The dropdown is hidden when there's only one enabled profile for the disc type — no UI noise for the common single-profile case.
+
 ## [0.23.1] - 2026-05-18
 
 ### Fixed

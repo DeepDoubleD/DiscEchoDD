@@ -37,9 +37,23 @@
   // so audio CDs / game discs / DATA discs don't show a button that
   // would 422 from the server.
   $: titleScanSupported = ['BDMV', 'UHD', 'DVD'].includes(liveDisc.type);
-  // Resolve the profile a Pick-titles click would scan + rip with —
-  // the top candidate's natural profile (movie/series split for DVD).
-  $: scanProfileID = pickerProfileID(liveDisc, $profiles, candidates[0]);
+
+  // Per-rip profile selector. When a disc type has more than one
+  // enabled profile (e.g. DVD-Movie vs DVD-Movie + Extras), the user
+  // gets a dropdown to pick which one this rip uses. Default tracks
+  // today's auto-pick by name; user override is sticky for the
+  // remainder of the card's lifetime via profileTouched.
+  $: availableProfiles = $profiles.filter((p) => p.enabled && p.disc_type === liveDisc.type);
+  $: defaultProfileID = pickerProfileID(liveDisc, $profiles, candidates[0]);
+  let profileTouched = false;
+  let chosenProfileID = '';
+  $: if (!profileTouched && chosenProfileID !== defaultProfileID) {
+    chosenProfileID = defaultProfileID;
+  }
+  // scanProfileID is what the "Pick titles…" button hands to /scan.
+  // Mirrors the chosen profile when there's a non-empty selection so
+  // the picker UI later inherits the same choice via the scan job row.
+  $: scanProfileID = chosenProfileID || defaultProfileID;
 
   function pickerProfileID(d: typeof liveDisc, pros: typeof $profiles, top?: Candidate): string {
     const enabled = pros.filter((p) => p.enabled);
@@ -48,6 +62,12 @@
       return enabled.find((p) => p.disc_type === 'DVD' && p.name === wantName)?.id ?? '';
     }
     return enabled.find((p) => p.disc_type === d.type)?.id ?? '';
+  }
+
+  function onProfileChange(e: Event): void {
+    const v = (e.target as HTMLSelectElement).value;
+    chosenProfileID = v;
+    profileTouched = true;
   }
   // The manual-search backend dispatches on disc.type — MB for audio
   // CDs, IGDB for game discs, TMDB for video — so the placeholder +
@@ -102,7 +122,10 @@
     if (starting) return;
     cancelled = true;
     clearInterval(timer);
-    const profileId = dataProfileID();
+    // DATA discs respect the user's per-rip pick when they touched
+    // the dropdown (e.g. picked a custom DATA profile); otherwise
+    // fall back to the first enabled DATA profile.
+    const profileId = profileTouched && chosenProfileID ? chosenProfileID : dataProfileID();
     if (!profileId) return;
     starting = true;
     try {
@@ -129,7 +152,10 @@
     clearInterval(timer);
     const c = candidates[idx];
     if (!c) return;
-    const profileId = profileForCandidate(c);
+    // User's per-rip dropdown pick wins over the auto-pick-by-name
+    // (profileForCandidate). When untouched, chosenProfileID tracks
+    // the default so movie/series resolution still works.
+    const profileId = profileTouched && chosenProfileID ? chosenProfileID : profileForCandidate(c);
     if (!profileId) return;
     starting = true;
     try {
@@ -155,12 +181,12 @@
     let profileId: string;
     let candidateIndex: number | undefined;
     if (liveDisc.type === 'DATA') {
-      profileId = dataProfileID();
+      profileId = profileTouched && chosenProfileID ? chosenProfileID : dataProfileID();
       candidateIndex = undefined;
     } else {
       const c = candidates[0];
       if (!c) return;
-      profileId = profileForCandidate(c);
+      profileId = profileTouched && chosenProfileID ? chosenProfileID : profileForCandidate(c);
       candidateIndex = 0;
     }
     if (!profileId) return;
@@ -396,6 +422,28 @@
         </button>
       {/each}
     </div>
+
+    {#if availableProfiles.length > 1}
+      <div class="mt-4 flex items-center gap-2">
+        <label
+          class="text-[11px] uppercase tracking-[0.14em] text-text-3"
+          for={`profile-${liveDisc.id}`}
+        >
+          Profile
+        </label>
+        <select
+          id={`profile-${liveDisc.id}`}
+          class="min-h-[36px] flex-1 rounded-xl border border-border bg-surface-2 px-2 text-[13px] text-text"
+          value={chosenProfileID}
+          on:change={onProfileChange}
+          data-testid="profile-select"
+        >
+          {#each availableProfiles as p (p.id)}
+            <option value={p.id}>{p.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/if}
 
     <div class="mt-5 flex flex-col gap-2 sm:flex-row">
       {#if liveDisc.type === 'DATA'}

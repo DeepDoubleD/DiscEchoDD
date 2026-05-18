@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { discs, profiles, startDisc, fetchEpisodes, type EpisodeInfo } from '$lib/store';
+  import { discs, jobs, profiles, startDisc, fetchEpisodes, type EpisodeInfo } from '$lib/store';
   import type { Disc } from '$lib/wire';
   import DiscTypeBadge from './DiscTypeBadge.svelte';
   import DiscArt from './DiscArt.svelte';
@@ -119,14 +119,34 @@
   }
 
   // ─── Profile + submit ────────────────────────────────────────────
-  function profileID(): string {
-    const enabled = $profiles.filter((p) => p.enabled);
-    if (liveDisc.type === 'DVD') {
-      const top = liveDisc.candidates?.[0];
+  // Default profile resolution: prefer the profile of the most-recent
+  // scan job for this disc (so the user's per-rip pick from the
+  // awaiting-decision card carries through), else fall back to the
+  // auto-pick-by-name heuristic.
+  function autoProfileID(d: Disc, pros: typeof $profiles): string {
+    const enabled = pros.filter((p) => p.enabled);
+    if (d.type === 'DVD') {
+      const top = d.candidates?.[0];
       const wantName = top?.media_type === 'tv' ? 'DVD-Series' : 'DVD-Movie';
       return enabled.find((p) => p.disc_type === 'DVD' && p.name === wantName)?.id ?? '';
     }
-    return enabled.find((p) => p.disc_type === liveDisc.type)?.id ?? '';
+    return enabled.find((p) => p.disc_type === d.type)?.id ?? '';
+  }
+
+  $: latestScanJob = $jobs
+    .filter((j) => j.disc_id === liveDisc.id && j.kind === 'scan')
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+  $: availableProfiles = $profiles.filter((p) => p.enabled && p.disc_type === liveDisc.type);
+  $: defaultProfileID = latestScanJob?.profile_id || autoProfileID(liveDisc, $profiles);
+  let profileTouched = false;
+  let chosenProfileID = '';
+  $: if (!profileTouched && chosenProfileID !== defaultProfileID) {
+    chosenProfileID = defaultProfileID;
+  }
+
+  function onProfileChange(e: Event): void {
+    chosenProfileID = (e.target as HTMLSelectElement).value;
+    profileTouched = true;
   }
 
   let starting = false;
@@ -134,15 +154,14 @@
 
   async function onConfirm(): Promise<void> {
     if (starting || !anySelected) return;
-    const pid = profileID();
-    if (!pid) {
+    if (!chosenProfileID) {
       errMsg = 'No matching profile for this disc type.';
       return;
     }
     starting = true;
     errMsg = '';
     try {
-      await startDisc(liveDisc.id, pid, 0, {
+      await startDisc(liveDisc.id, chosenProfileID, 0, {
         titleIDs: selectedIDs,
         season: isTV ? season : undefined,
         episodeMap: isTV ? episodeMap : undefined,
@@ -203,6 +222,28 @@
       </div>
     </div>
   </div>
+
+  {#if availableProfiles.length > 1}
+    <div class="mb-3 flex items-center gap-2">
+      <label
+        class="text-[11px] uppercase tracking-[0.14em] text-text-3"
+        for={`tp-profile-${liveDisc.id}`}
+      >
+        Profile
+      </label>
+      <select
+        id={`tp-profile-${liveDisc.id}`}
+        class="min-h-[36px] flex-1 rounded-xl border border-border bg-surface-2 px-2 text-[13px] text-text"
+        value={chosenProfileID}
+        on:change={onProfileChange}
+        data-testid="title-picker-profile-select"
+      >
+        {#each availableProfiles as p (p.id)}
+          <option value={p.id}>{p.name}</option>
+        {/each}
+      </select>
+    </div>
+  {/if}
 
   {#if isTV}
     <div class="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-border p-3">
