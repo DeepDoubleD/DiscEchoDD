@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/uhd"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/xbox"
 	"github.com/jumpingmushroom/DiscEcho/daemon/settings"
+	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 	"github.com/jumpingmushroom/DiscEcho/daemon/tools"
 	"github.com/jumpingmushroom/DiscEcho/daemon/version"
@@ -384,11 +386,34 @@ func main() {
 		ShouldEject:    shouldEjectOnFinish,
 	}))
 
+	// Spool + Compute pool back the splittable rip→transcode flow. The
+	// pool size reads from compute.concurrent_encodes (default 1); the
+	// orchestrator type-asserts handlers to pipelines.SplittableHandler
+	// and routes through Compute when both Spool and Compute are wired.
+	// Audio CD + DATA stay on the monolithic Run path because their
+	// handlers don't implement SplittableHandler.
+	spoolStore, err := spool.New(filepath.Join(dataPath, "spool"))
+	if err != nil {
+		slog.Error("spool.New", "err", err)
+		os.Exit(1)
+	}
+	encConc := readIntSetting(store, "compute.concurrent_encodes", 1)
+	compute := jobs.NewCompute(jobs.ComputeConfig{
+		Store:       store,
+		Broadcaster: bc,
+		Pipelines:   pipeReg,
+		Spool:       spoolStore,
+		Concurrency: encConc,
+	})
+	defer compute.Close()
+
 	// Orchestrator drives jobs through the pipeline.
 	orch := jobs.NewOrchestrator(jobs.OrchestratorConfig{
 		Store:       store,
 		Broadcaster: bc,
 		Pipelines:   pipeReg,
+		Compute:     compute,
+		Spool:       spoolStore,
 	})
 	defer orch.Close()
 
@@ -488,4 +513,20 @@ func firstEnv(name, def string) string {
 		return v
 	}
 	return def
+}
+
+// readIntSetting reads an integer-valued setting from the store and
+// returns def on any error (missing key, parse error, store unreachable).
+// Used at startup for values like compute.concurrent_encodes where a
+// missing row should never block daemon boot.
+func readIntSetting(store *state.Store, key string, def int) int {
+	v, err := store.GetSetting(context.Background(), key)
+	if err != nil || v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }

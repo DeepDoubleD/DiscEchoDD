@@ -838,19 +838,23 @@ func (s *Store) CreateJob(ctx context.Context, j *Job) error {
 		return fmt.Errorf("CreateJob: invalid kind %q", j.Kind)
 	}
 
-	// All jobs materialize the canonical 8-step row list today; entries
-	// pre-populated in j.Steps act as a skipSet for which step rows land
-	// as 'skipped' vs 'pending'. The split-pipeline work (PR-2+) will
-	// extend this so kind='transcode' jobs materialize only the
-	// CanonicalTranscodeSteps subset; for now PR-1 is pure scaffolding
-	// and the old contract is preserved.
+	// Step materialisation. rip-kind jobs (monolithic + split rip-half)
+	// always emit the full canonical 8-step row list; entries in j.Steps
+	// act as a skipSet so split-rip handlers can mark the transcode-half
+	// steps as 'skipped'. transcode-kind child jobs emit only the
+	// 4-step transcode subset.
 	skipSet := map[StepID]bool{}
 	for _, st := range j.Steps {
 		if st.State == JobStepStateSkipped {
 			skipSet[st.Step] = true
 		}
 	}
-	stepIDs := CanonicalSteps()
+	var stepIDs []StepID
+	if j.Kind == JobKindTranscode {
+		stepIDs = CanonicalTranscodeSteps()
+	} else {
+		stepIDs = CanonicalSteps()
+	}
 
 	tx, err := s.db.Conn().BeginTx(ctx, nil)
 	if err != nil {

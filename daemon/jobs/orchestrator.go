@@ -8,14 +8,23 @@ import (
 	"sync"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
+	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
 
 // OrchestratorConfig configures NewOrchestrator.
+//
+// Compute + Spool are optional: when nil the orchestrator routes every
+// handler through the monolithic Run path, even handlers that
+// implement SplittableHandler. The splittable path requires both
+// (Spool to allocate the staging dir, Compute to drain the resulting
+// transcode jobs).
 type OrchestratorConfig struct {
 	Store       *state.Store
 	Broadcaster *state.Broadcaster
 	Pipelines   *pipelines.Registry
+	Compute     *Compute
+	Spool       *spool.Spool
 }
 
 // Orchestrator owns job lifecycle: queueing, per-drive serialization,
@@ -121,18 +130,22 @@ func (o *Orchestrator) Submit(ctx context.Context, discID, profileID string) (*s
 
 // Cancel signals the running job to stop. If the job is queued (not
 // yet picked up) it's flipped to cancelled in the store so the worker
-// skips it when it pops.
+// skips it when it pops. Transcode-kind jobs live in the Compute
+// pool's cancel map, so we route to whichever pool owns the job.
 func (o *Orchestrator) Cancel(jobID string) error {
 	o.mu.Lock()
 	cancel, ok := o.cancels[jobID]
 	o.mu.Unlock()
-	if !ok {
-		if err := o.cfg.Store.UpdateJobState(context.Background(), jobID, state.JobStateCancelled, ""); err != nil {
-			return fmt.Errorf("cancel: %w", err)
-		}
+	if ok {
+		cancel()
 		return nil
 	}
-	cancel()
+	if o.cfg.Compute != nil && o.cfg.Compute.Owns(jobID) {
+		return o.cfg.Compute.Cancel(jobID)
+	}
+	if err := o.cfg.Store.UpdateJobState(context.Background(), jobID, state.JobStateCancelled, ""); err != nil {
+		return fmt.Errorf("cancel: %w", err)
+	}
 	return nil
 }
 
@@ -237,7 +250,16 @@ func (o *Orchestrator) runJob(jobID string) {
 	o.cfg.Broadcaster.Publish(state.Event{Name: "drive.changed", Payload: map[string]any{"drive_id": drv.ID, "state": "ripping"}})
 
 	sink := NewPersistentSink(o.cfg.Store, o.cfg.Broadcaster, jobID)
-	runErr := handler.Run(ctx, drv, disc, prof, sink)
+
+	// Route through the splittable path when the handler advertises it
+	// AND both Compute + Spool are wired. Otherwise fall back to the
+	// monolithic Run that drives the whole 8-step chain inline.
+	var runErr error
+	if splittable, ok := handler.(pipelines.SplittableHandler); ok && o.cfg.Compute != nil && o.cfg.Spool != nil {
+		runErr = o.runSplittable(ctx, splittable, drv, disc, prof, job, sink)
+	} else {
+		runErr = handler.Run(ctx, drv, disc, prof, sink)
+	}
 
 	// Determine final state
 	var final state.JobState
@@ -270,4 +292,76 @@ func (o *Orchestrator) runJob(jobID string) {
 	case state.JobStateFailed:
 		o.cfg.Broadcaster.Publish(state.Event{Name: "job.failed", Payload: map[string]any{"job_id": jobID, "error": errMsg}})
 	}
+}
+
+// runSplittable drives the drive-bound half of a split pipeline: it
+// allocates the spool dir, hands the rip-job sink to the handler's
+// RunRip, and on success enqueues a child kind='transcode' job onto
+// the Compute pool. The drive is freed when this function returns.
+//
+// A failed RunRip cleans up the spool dir (no transcode job will run
+// against it) and bubbles the error so the caller flips the job to
+// failed. A succeeded RunRip leaves the spool intact for the compute
+// worker; that worker owns cleanup on transcode-done.
+func (o *Orchestrator) runSplittable(
+	ctx context.Context,
+	handler pipelines.SplittableHandler,
+	drv *state.Drive, disc *state.Disc, prof *state.Profile,
+	ripJob *state.Job, sink pipelines.EventSink,
+) error {
+	spoolPath, err := o.cfg.Spool.Create(ripJob.ID)
+	if err != nil {
+		return fmt.Errorf("spool create: %w", err)
+	}
+
+	result, runErr := handler.RunRip(ctx, drv, disc, prof, sink)
+	if runErr != nil {
+		// Spool cleanup best-effort: a half-written rip dir is not useful
+		// to anyone and would otherwise count against the soft cap.
+		if cleanupErr := o.cfg.Spool.Cleanup(ripJob.ID); cleanupErr != nil {
+			slog.Warn("orchestrator: spool cleanup after rip failure", "id", ripJob.ID, "err", cleanupErr)
+		}
+		return runErr
+	}
+	// Default the spool path to the one we allocated when the handler
+	// didn't override it. Handlers normally just write into the
+	// allocated dir and return it; preserving the override keeps the
+	// door open for handlers that stash output elsewhere (e.g. a future
+	// network-mount mode).
+	if result.SpoolPath == "" {
+		result.SpoolPath = spoolPath
+	}
+
+	// Materialise the child transcode job + enqueue it.
+	transcodePlan := handler.PlanTranscode(disc, prof)
+	steps := make([]state.JobStep, 0, len(transcodePlan))
+	for _, sp := range transcodePlan {
+		st := state.JobStepStatePending
+		if sp.Skip {
+			st = state.JobStepStateSkipped
+		}
+		steps = append(steps, state.JobStep{Step: sp.ID, State: st})
+	}
+	child := &state.Job{
+		DiscID:      disc.ID,
+		ProfileID:   prof.ID,
+		Kind:        state.JobKindTranscode,
+		ParentJobID: ripJob.ID,
+		SpoolPath:   result.SpoolPath,
+		State:       state.JobStateQueued,
+		Steps:       steps,
+	}
+	if err := o.cfg.Store.CreateJob(ctx, child); err != nil {
+		// Spool stays — the user can manually retry by re-running the rip,
+		// at which point the new rip job's spool dir takes precedence.
+		return fmt.Errorf("create transcode job: %w", err)
+	}
+	o.cfg.Broadcaster.Publish(state.Event{
+		Name:    "job.created",
+		Payload: map[string]any{"job": child},
+	})
+	if err := o.cfg.Compute.Enqueue(child.ID); err != nil {
+		return fmt.Errorf("compute enqueue: %w", err)
+	}
+	return nil
 }
