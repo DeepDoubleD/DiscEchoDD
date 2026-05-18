@@ -91,6 +91,15 @@ func (h *Handlers) PutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Hot-reload side effects: compute pool concurrency picks up the
+	// new value without a daemon restart. Spool cap is read on each
+	// backpressure check by the orchestrator so it requires no explicit
+	// notification here.
+	if v, ok := encoded["compute.concurrent_encodes"]; ok && h.Compute != nil {
+		if n, err := strconv.Atoi(v); err == nil {
+			h.Compute.SetConcurrency(n)
+		}
+	}
 	if h.Broadcaster != nil {
 		h.Broadcaster.Publish(state.Event{
 			Name:    "settings.changed",
@@ -145,6 +154,39 @@ var allowedSettings = map[string]func(any) (string, error){
 		}
 		return strconv.FormatBool(b), nil
 	},
+	"compute.concurrent_encodes": intRangeValidator(1, 8),
+	"spool.cap_bytes":            intRangeValidator(1<<20, 10*1024*1024*1024*1024), // 1 MiB .. 10 TiB
+}
+
+// intRangeValidator returns a validator that accepts a JSON number or
+// a string representation, parses it as an int64, and asserts the
+// value falls within [lo, hi] inclusive. JSON numbers decode as
+// float64 so the validator tolerates both shapes — the webui sends
+// numbers, but a curl one-liner sending a string still works.
+func intRangeValidator(lo, hi int64) func(any) (string, error) {
+	return func(v any) (string, error) {
+		var n int64
+		switch x := v.(type) {
+		case float64:
+			n = int64(x)
+		case string:
+			s := strings.TrimSpace(x)
+			if s == "" {
+				return "", fmt.Errorf("must not be empty")
+			}
+			parsed, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				return "", fmt.Errorf("must be an integer: %w", err)
+			}
+			n = parsed
+		default:
+			return "", fmt.Errorf("must be an integer")
+		}
+		if n < lo || n > hi {
+			return "", fmt.Errorf("must be between %d and %d", lo, hi)
+		}
+		return strconv.FormatInt(n, 10), nil
+	}
 }
 
 func absolutePathValidator(v any) (string, error) {

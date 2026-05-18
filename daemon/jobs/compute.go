@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
@@ -26,20 +27,38 @@ type ComputeConfig struct {
 	Concurrency int
 }
 
+// maxComputeWorkers caps the worker-pool size. The actual number of
+// in-flight transcodes is governed by limit (atomic, settable via
+// SetConcurrency). Setting maxComputeWorkers higher than the UI's
+// "Concurrent encodes" max (currently 8) is wasteful but harmless;
+// matching the UI cap keeps idle goroutine count predictable.
+const maxComputeWorkers = 8
+
 // Compute is the post-drive worker pool. Splittable pipelines' rip
 // phases run on the per-drive orchestrator queue; once a rip job
 // succeeds the orchestrator creates a kind='transcode' child job and
-// calls Compute.Enqueue with its ID. The pool drains the queue at the
-// configured concurrency, freeing the drive while transcodes work.
+// calls Compute.Enqueue with its ID. The pool drains the queue at
+// limit transcodes in parallel.
 //
-// Concurrency reload (Phase 5) is not implemented yet — the cap is
-// fixed at construction. Bumping the setting today requires a daemon
-// restart.
+// Live concurrency reload: SetConcurrency(n) updates the atomic
+// limit; existing workers respect the new value on next acquire.
+// The worker pool size itself is fixed at maxComputeWorkers, so
+// raising limit takes effect immediately without spawning new
+// goroutines.
 type Compute struct {
 	cfg ComputeConfig
 
 	queue chan computeItem
-	sem   chan struct{}
+
+	// Concurrency control. limit is the max number of in-flight
+	// transcodes; inFlight tracks the current count. acquire()
+	// CAS-bumps inFlight under limit; release() decrements + wakes
+	// waiters via wake. wake is a buffered chan so a single
+	// release notifies one waiter; SetConcurrency-raise broadcasts
+	// by sending up to limit wakeups.
+	limit    atomic.Int64
+	inFlight atomic.Int64
+	wake     chan struct{}
 
 	mu       sync.Mutex
 	cancels  map[string]context.CancelFunc
@@ -52,28 +71,94 @@ type computeItem struct {
 	jobID string
 }
 
-// NewCompute constructs a Compute and spawns its worker goroutines.
-// Workers run until Close. Concurrency<=0 normalises to 1.
+// NewCompute constructs a Compute and spawns maxComputeWorkers worker
+// goroutines. Workers run until Close. Concurrency<=0 normalises to 1
+// and is clamped at maxComputeWorkers.
 func NewCompute(cfg ComputeConfig) *Compute {
-	conc := cfg.Concurrency
-	if conc <= 0 {
-		conc = 1
-	}
+	conc := normaliseConcurrency(cfg.Concurrency)
 	c := &Compute{
 		cfg: cfg,
 		// Queue buffer matches the orchestrator's per-drive buffer (64).
 		// At a steady-state max-concurrency rip rate, the queue holds the
 		// backlog without blocking the orchestrator's enqueue side.
 		queue:   make(chan computeItem, 64),
-		sem:     make(chan struct{}, conc),
+		wake:    make(chan struct{}, maxComputeWorkers),
 		cancels: make(map[string]context.CancelFunc),
 		stopped: make(chan struct{}),
 	}
-	for i := 0; i < conc; i++ {
+	c.limit.Store(int64(conc))
+	for i := 0; i < maxComputeWorkers; i++ {
 		c.wg.Add(1)
 		go c.worker()
 	}
 	return c
+}
+
+// normaliseConcurrency clamps a requested value to [1, maxComputeWorkers].
+func normaliseConcurrency(n int) int {
+	if n <= 0 {
+		return 1
+	}
+	if n > maxComputeWorkers {
+		return maxComputeWorkers
+	}
+	return n
+}
+
+// SetConcurrency live-reloads the in-flight cap. n is clamped to
+// [1, maxComputeWorkers]. Existing in-flight transcodes are unaffected
+// (they finish naturally); the next acquire honours the new limit.
+// Raising the limit wakes up to limit waiters so backlogged jobs can
+// start immediately.
+func (c *Compute) SetConcurrency(n int) {
+	old := c.limit.Load()
+	next := int64(normaliseConcurrency(n))
+	if old == next {
+		return
+	}
+	c.limit.Store(next)
+	slog.Info("compute: concurrency updated", "old", old, "new", next)
+	// Broadcast up to `next` wakeups in case multiple workers are
+	// waiting; each non-blocking send wakes one waiter.
+	for i := int64(0); i < next; i++ {
+		select {
+		case c.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// Concurrency returns the current cap. Mostly for tests + diagnostics.
+func (c *Compute) Concurrency() int { return int(c.limit.Load()) }
+
+// acquire blocks until inFlight is under limit, then bumps inFlight
+// atomically. Cancellation comes from ctx (per-job context) or stopped
+// (Close). Hot path is a single atomic CAS; the wake channel sleeps
+// the goroutine when the queue is at the cap.
+func (c *Compute) acquire(ctx context.Context) error {
+	for {
+		cur := c.inFlight.Load()
+		lim := c.limit.Load()
+		if cur < lim && c.inFlight.CompareAndSwap(cur, cur+1) {
+			return nil
+		}
+		select {
+		case <-c.wake:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.stopped:
+			return errStopped
+		}
+	}
+}
+
+// release decrements inFlight and notifies one waiter.
+func (c *Compute) release() {
+	c.inFlight.Add(-1)
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Close stops every worker. Idempotent. In-flight transcodes get their
@@ -147,18 +232,16 @@ func (c *Compute) worker() {
 	}
 }
 
-// runOne owns the per-job lifecycle: acquire a sem slot, load the job
-// + sibling rows, dispatch to the splittable handler's RunTranscode,
-// persist terminal state, clean up the spool on success.
+// runOne owns the per-job lifecycle: acquire a concurrency slot,
+// load the job + sibling rows, dispatch to the splittable handler's
+// RunTranscode, persist terminal state, clean up the spool on success.
 func (c *Compute) runOne(jobID string) {
-	// Acquire concurrency slot first so a backlog of 5 jobs with
-	// concurrency=1 doesn't fan out 5 simultaneous loads from the store.
-	select {
-	case c.sem <- struct{}{}:
-	case <-c.stopped:
+	// Acquire concurrency slot first so a backlog of jobs at
+	// concurrency=1 doesn't fan out simultaneous loads from the store.
+	if err := c.acquire(context.Background()); err != nil {
 		return
 	}
-	defer func() { <-c.sem }()
+	defer c.release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c.mu.Lock()

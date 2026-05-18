@@ -332,6 +332,35 @@ func TestOrchestrator_FallbackPath_NonSplittableUsesMonolithicRun(t *testing.T) 
 	}
 }
 
+// TestCompute_SetConcurrency_NormalisesAndExposes verifies the new
+// limit takes effect and is clamped to [1, maxComputeWorkers].
+func TestCompute_SetConcurrency_NormalisesAndExposes(t *testing.T) {
+	store, bc, sp, _ := openSplit(t)
+	defer bc.Close()
+	reg := pipelines.NewRegistry()
+	compute := jobs.NewCompute(jobs.ComputeConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg, Spool: sp, Concurrency: 1,
+	})
+	t.Cleanup(compute.Close)
+
+	if got := compute.Concurrency(); got != 1 {
+		t.Errorf("initial Concurrency = %d, want 1", got)
+	}
+	compute.SetConcurrency(3)
+	if got := compute.Concurrency(); got != 3 {
+		t.Errorf("after SetConcurrency(3) = %d, want 3", got)
+	}
+	// Clamp to [1, maxComputeWorkers]=8: 100 → 8, -1 → 1.
+	compute.SetConcurrency(100)
+	if got := compute.Concurrency(); got != 8 {
+		t.Errorf("after SetConcurrency(100) = %d, want 8 (clamped)", got)
+	}
+	compute.SetConcurrency(-1)
+	if got := compute.Concurrency(); got != 1 {
+		t.Errorf("after SetConcurrency(-1) = %d, want 1 (clamped)", got)
+	}
+}
+
 // TestCompute_ConcurrencyLimits asserts the sem actually caps parallel
 // transcodes. Concurrency=1 + 2 enqueued jobs → only 1 in-flight at a
 // time. Uses atomic counter to detect any overlap.

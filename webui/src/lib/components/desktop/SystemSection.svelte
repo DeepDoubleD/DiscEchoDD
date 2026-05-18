@@ -198,10 +198,7 @@
         'spool.cap_bytes': String(spoolCapGiB * 1024 * 1024 * 1024),
       });
       encodingDirty = false;
-      pushToast(
-        'success',
-        'Encoding settings saved. Concurrency change takes effect on next daemon restart.',
-      );
+      pushToast('success', 'Encoding settings saved.');
     } catch (e) {
       encodingError = (e as Error).message;
     } finally {
@@ -490,7 +487,7 @@
           class="w-24 rounded-md border border-border bg-surface-1 px-2 py-1.5 text-[13px]"
         />
         <span class="text-[11px] text-text-3">
-          Transcodes that may run in parallel. Takes effect on next daemon restart.
+          Transcodes that may run in parallel. Takes effect immediately.
         </span>
       </div>
     </FormRow>

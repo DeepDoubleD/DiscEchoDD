@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -178,6 +179,11 @@ func (h *Handlers) ListJobLogs(w http.ResponseWriter, r *http.Request) {
 // step rows, and its log lines. Running jobs reject with 409 — use
 // CancelJob instead. Orphaned disc rows are pruned in the same
 // transaction so the /history page doesn't grow phantom entries.
+//
+// For kind=transcode jobs the spool dir is removed on the way out so
+// the user has a single "discard" path: delete the job row, the
+// staged rip is freed. The spool reclaim is best-effort — a stale
+// dir would otherwise get swept by the next startup GC anyway.
 func (h *Handlers) DeleteJob(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	job, err := h.Store.GetJob(r.Context(), id)
@@ -199,6 +205,16 @@ func (h *Handlers) DeleteJob(w http.ResponseWriter, r *http.Request) {
 	if err := h.Store.DeleteJobAndOrphans(r.Context(), id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if job.Kind == state.JobKindTranscode && job.SpoolPath != "" && h.Spool != nil {
+		// SpoolPath is owned by the parent rip job ID; derive the
+		// basename so we hand spool.Cleanup the same ID it expects.
+		parentID := filepath.Base(job.SpoolPath)
+		if err := h.Spool.Cleanup(parentID); err != nil {
+			// Non-fatal: row's gone, startup GC sweeps the orphan dir.
+			// Log only.
+			_ = err
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

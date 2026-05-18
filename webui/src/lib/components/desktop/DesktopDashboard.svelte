@@ -2,6 +2,7 @@
   import { drives, jobs, discs, profiles, selectedJobID, stats } from '$lib/store';
   import DriveHeroCard from './DriveHeroCard.svelte';
   import QueueTable from './QueueTable.svelte';
+  import EncodeQueueCard from './EncodeQueueCard.svelte';
   import JobDetailPanel from './JobDetailPanel.svelte';
   import RipCard from '$lib/components/RipCard.svelte';
   import StatsRow from './StatsRow.svelte';
@@ -16,7 +17,19 @@
   ];
 
   $: activeJobs = $jobs.filter((j) => !TERMINAL_STATES.includes(j.state));
-  $: orderedJobs = [...activeJobs].sort((a, b) => {
+  // Split active jobs by kind so the rip queue (per-drive) and the
+  // encode queue (global compute pool) render in separate cards. The
+  // user understands at a glance which side the bottleneck is on.
+  // Treat absent kind as 'rip' since that's the schema default for
+  // legacy / monolithic-pipeline jobs.
+  $: ripActiveJobs = activeJobs.filter((j) => (j.kind ?? 'rip') !== 'transcode');
+  $: transcodeActiveJobs = activeJobs.filter((j) => j.kind === 'transcode');
+  $: orderedJobs = [...ripActiveJobs].sort((a, b) => {
+    const aQ = a.state === 'queued' ? 1 : 0;
+    const bQ = b.state === 'queued' ? 1 : 0;
+    return aQ - bQ;
+  });
+  $: orderedTranscodeJobs = [...transcodeActiveJobs].sort((a, b) => {
     const aQ = a.state === 'queued' ? 1 : 0;
     const bQ = b.state === 'queued' ? 1 : 0;
     return aQ - bQ;
@@ -82,20 +95,58 @@
        otherwise the queue takes the full width. -->
   {#if selectedJob}
     <div class="grid gap-6" style="grid-template-columns: 1fr 360px">
-      <QueueTable
-        jobs={orderedJobs}
-        selectedJobID={$selectedJobID}
-        on:select={(e) => toggleSelected(e.detail)}
-      />
+      <div class="space-y-4">
+        <div>
+          <div class="mb-2 px-1 text-[10px] font-medium uppercase tracking-[0.14em] text-text-3">
+            Rip queue
+          </div>
+          <QueueTable
+            jobs={orderedJobs}
+            selectedJobID={$selectedJobID}
+            on:select={(e) => toggleSelected(e.detail)}
+          />
+        </div>
+        {#if orderedTranscodeJobs.length > 0}
+          <div>
+            <div class="mb-2 px-1 text-[10px] font-medium uppercase tracking-[0.14em] text-text-3">
+              Encode queue
+            </div>
+            <EncodeQueueCard
+              jobs={orderedTranscodeJobs}
+              selectedJobID={$selectedJobID}
+              on:select={(e) => toggleSelected(e.detail)}
+            />
+          </div>
+        {/if}
+      </div>
       <div class="sticky top-20 self-start">
         <JobDetailPanel job={selectedJob} />
       </div>
     </div>
   {:else}
-    <QueueTable
-      jobs={orderedJobs}
-      selectedJobID={null}
-      on:select={(e) => toggleSelected(e.detail)}
-    />
+    <div class="space-y-4">
+      <div>
+        <div class="mb-2 px-1 text-[10px] font-medium uppercase tracking-[0.14em] text-text-3">
+          Rip queue
+        </div>
+        <QueueTable
+          jobs={orderedJobs}
+          selectedJobID={null}
+          on:select={(e) => toggleSelected(e.detail)}
+        />
+      </div>
+      {#if orderedTranscodeJobs.length > 0}
+        <div>
+          <div class="mb-2 px-1 text-[10px] font-medium uppercase tracking-[0.14em] text-text-3">
+            Encode queue
+          </div>
+          <EncodeQueueCard
+            jobs={orderedTranscodeJobs}
+            selectedJobID={null}
+            on:select={(e) => toggleSelected(e.detail)}
+          />
+        </div>
+      {/if}
+    </div>
   {/if}
 </div>

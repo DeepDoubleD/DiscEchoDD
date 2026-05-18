@@ -4,6 +4,7 @@
   import DiscTypeBadge from './DiscTypeBadge.svelte';
   import ArtPlaceholder from './ArtPlaceholder.svelte';
   import { startDisc } from '$lib/store';
+  import { apiPost } from '$lib/api';
 
   export let row: HRow;
   const dispatch = createEventDispatcher<{ click: void }>();
@@ -23,6 +24,14 @@
   $: artLabel = row.disc.type === 'AUDIO_CD' ? 'cd' : 'cover';
   $: artRatio = (row.disc.type === 'AUDIO_CD' ? 'square' : 'portrait') as 'square' | 'portrait';
 
+  // A retry-encode button shows on rows whose latest job is a failed
+  // or interrupted transcode — the spool dir is still there and the
+  // user can resume without re-ripping the disc. The server checks
+  // disk presence and returns 410 if the spool was reaped; we surface
+  // that as a hint to use Re-rip instead.
+  $: canRetryEncode =
+    row.job.kind === 'transcode' && (state === 'failed' || state === 'interrupted');
+
   let busy = false;
   let errMsg = '';
 
@@ -33,6 +42,25 @@
       await startDisc(row.disc.id, row.job.profile_id, 0);
     } catch (e) {
       errMsg = (e as Error).message;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function onReencode(): Promise<void> {
+    busy = true;
+    errMsg = '';
+    try {
+      await apiPost(`/api/jobs/${encodeURIComponent(row.job.id)}/retry-transcode`);
+    } catch (e) {
+      const msg = (e as Error).message;
+      // 410 from the server means the spool was reaped — guide the
+      // user to the rerip path instead of leaving them stuck.
+      if (msg.includes('410') || msg.toLowerCase().includes('gone')) {
+        errMsg = 'Spool dir is gone — use Re-rip to start over.';
+      } else {
+        errMsg = msg;
+      }
     } finally {
       busy = false;
     }
@@ -65,6 +93,17 @@
       </div>
     </div>
   </button>
+  {#if canRetryEncode}
+    <button
+      type="button"
+      class="min-h-[36px] shrink-0 rounded-xl border border-border bg-surface-2 px-3 text-[13px] font-medium text-accent disabled:opacity-50"
+      on:click={onReencode}
+      disabled={busy}
+      data-testid="history-reencode"
+    >
+      {busy ? 'Queueing…' : 'Re-encode'}
+    </button>
+  {/if}
   <button
     type="button"
     class="min-h-[36px] shrink-0 rounded-xl border border-border bg-surface-2 px-3 text-[13px] font-medium text-accent disabled:opacity-50"

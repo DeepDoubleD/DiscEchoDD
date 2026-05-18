@@ -17,7 +17,21 @@
   ];
 
   $: activeJobs = $jobs.filter((j) => !TERMINAL_STATES.includes(j.state));
-  $: queuedJobs = activeJobs.filter((j) => j.state === 'queued');
+  // Per-drive rip queue and global encode queue render as separate
+  // sections; legacy / monolithic jobs without an explicit kind
+  // default to 'rip'.
+  $: queuedJobs = activeJobs.filter(
+    (j) => j.state === 'queued' && (j.kind ?? 'rip') !== 'transcode',
+  );
+  // Encode-queue rows include both queued AND in-flight transcodes
+  // so the user can see what's currently running on the compute pool.
+  $: encodeJobs = activeJobs
+    .filter((j) => j.kind === 'transcode')
+    .sort((a, b) => {
+      const aQ = a.state === 'queued' ? 1 : 0;
+      const bQ = b.state === 'queued' ? 1 : 0;
+      return aQ - bQ;
+    });
   $: queuedByDrive = activeJobs.reduce<Record<string, number>>((acc, j) => {
     if (j.state === 'queued' && j.drive_id) {
       acc[j.drive_id] = (acc[j.drive_id] ?? 0) + 1;
@@ -99,6 +113,24 @@
       </div>
     {/if}
   </div>
+
+  {#if encodeJobs.length > 0}
+    <div class="mt-5 px-4">
+      <div
+        class="mb-2 font-medium uppercase tracking-[0.14em] text-text-3"
+        style="font-size: var(--ts-overline)"
+      >
+        Encode queue ({encodeJobs.length})
+      </div>
+      <div class="overflow-hidden rounded-2xl border border-border bg-surface-1">
+        {#each encodeJobs as j (j.id)}
+          {@const disc = $discs[j.disc_id]}
+          {@const profile = $profiles.find((p) => p.id === j.profile_id)}
+          <QueuedRow job={j} {disc} {profile} />
+        {/each}
+      </div>
+    </div>
+  {/if}
 </div>
 
 <TabBar active="dashboard" />
