@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-05-18
+
+### Fixed
+- Awaiting-decision card never swapped in the TitlePicker after a scan finished. The daemon's `runScan` orchestrator path was firing a `disc.changed` SSE event with `{id, metadata_json}` once the title list landed, but the webui's SSE dispatcher had no handler for that event name — the picker only appeared after a manual page reload. Added the missing handler in `store.ts`, defensively overlaying only the keys actually present in the payload so a future field-omission can't undefine existing state. Same mitigation pattern as the v0.20.1 `drive.changed` regression.
+
 ## [0.23.0] - 2026-05-18
 
 ### Added

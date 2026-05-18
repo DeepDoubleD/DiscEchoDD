@@ -96,6 +96,7 @@ const SSE_EVENT_NAMES = [
   'drive.changed',
   'disc.detected',
   'disc.identified',
+  'disc.changed',
   'disc.deleted',
   'job.created',
   'job.step',
@@ -190,6 +191,26 @@ export function handleSSEEvent(name: string, payload: unknown): void {
         return rest;
       });
       pendingDiscID.update((cur) => (cur === id ? null : cur));
+      break;
+    }
+
+    case 'disc.changed': {
+      // Partial update for an existing disc. Today the only publisher
+      // is the scan-job orchestrator path, which sends
+      // {id, metadata_json} once the title list lands; AwaitingDecisionList
+      // re-runs hasScanResult on the updated disc and swaps in the
+      // TitlePicker. Defensive overlay: only the keys actually present
+      // in the payload get written so a future publisher omitting a
+      // field can't undefine it (mirrors the drive.changed pattern).
+      const id = p.id as string;
+      if (!id) break;
+      discs.update((m) => {
+        const existing = m[id];
+        if (!existing) return m;
+        const patch: Partial<Disc> = {};
+        if (typeof p.metadata_json === 'string') patch.metadata_json = p.metadata_json;
+        return { ...m, [id]: { ...existing, ...patch } };
+      });
       break;
     }
 
