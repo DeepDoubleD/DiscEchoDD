@@ -19,12 +19,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// StoreRefs is the slice of state.Store the spool GC needs. Defined as
+// an interface to keep the spool package free of state-import.
+type StoreRefs interface {
+	ActiveSpoolReferences(ctx context.Context) (ripIDs []string, transcodeSpoolBasenames []string, err error)
+}
 
 // Spool is the on-disk staging area accessor. Construct via New.
 type Spool struct {
@@ -97,6 +104,59 @@ func (s *Spool) Cleanup(jobID string) error {
 	}
 	s.gen.Add(1)
 	return nil
+}
+
+// GC scans the spool root and removes any subdirectory whose basename
+// isn't in the set the store considers in-use (active rip job IDs +
+// transcode jobs' spool_path basenames). Called at daemon startup so
+// a crash mid-pipeline doesn't leak the spool dir; on a clean shutdown
+// the running jobs flip to interrupted via MarkInterruptedJobs and
+// their spool stays for the user's retry-transcode flow.
+//
+// Files (not directories) directly under the root are also removed —
+// nothing should write loose files at the root.
+//
+// Returns the number of entries removed (best-effort: individual
+// remove errors are logged + skipped, not returned).
+func (s *Spool) GC(ctx context.Context, store StoreRefs) (int, error) {
+	if store == nil {
+		return 0, errors.New("spool: GC needs a StoreRefs")
+	}
+	ripIDs, transcodeBases, err := store.ActiveSpoolReferences(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("spool: load active references: %w", err)
+	}
+	keep := make(map[string]bool, len(ripIDs)+len(transcodeBases))
+	for _, id := range ripIDs {
+		keep[id] = true
+	}
+	for _, p := range transcodeBases {
+		keep[p] = true
+	}
+
+	entries, err := os.ReadDir(s.rootDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("spool: read root: %w", err)
+	}
+	removed := 0
+	for _, e := range entries {
+		if keep[e.Name()] {
+			continue
+		}
+		full := filepath.Join(s.rootDir, e.Name())
+		if err := os.RemoveAll(full); err != nil {
+			slog.Warn("spool: GC remove failed", "path", full, "err", err)
+			continue
+		}
+		removed++
+	}
+	if removed > 0 {
+		s.gen.Add(1)
+	}
+	return removed, nil
 }
 
 // UsageBytes returns the total bytes consumed under rootDir. Cached

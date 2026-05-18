@@ -1241,6 +1241,141 @@ func (s *Store) RecordOutputBytes(ctx context.Context, jobID string, bytes int64
 	return nil
 }
 
+// ActiveSpoolReferences returns the set of spool dir basenames the
+// store currently considers in-use. Spool dir name comes from two
+// places: (a) rip-kind jobs in pre-terminal states own the spool dir
+// named after their ID, (b) transcode-kind jobs in any state that
+// might still consume the spool (queued/running/failed/interrupted —
+// the failed+interrupted set is what powers the retry-transcode
+// flow) reference the spool dir via their spool_path basename.
+// Cancelled jobs are excluded — cancel is user intent to abandon.
+//
+// Returned ripIDs and transcodeSpoolBasenames are the names to keep;
+// anything else under the spool root is fair game for GC.
+func (s *Store) ActiveSpoolReferences(ctx context.Context) (ripIDs []string, transcodeSpoolBasenames []string, err error) {
+	rows, err := s.db.Conn().QueryContext(ctx, `
+		SELECT id FROM jobs
+		WHERE kind = 'rip'
+		  AND state IN ('queued','identifying','running','paused')`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, nil, err
+		}
+		ripIDs = append(ripIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	rows2, err := s.db.Conn().QueryContext(ctx, `
+		SELECT spool_path FROM jobs
+		WHERE kind = 'transcode'
+		  AND spool_path != ''
+		  AND state IN ('queued','identifying','running','paused','failed','interrupted')`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = rows2.Close() }()
+	for rows2.Next() {
+		var p string
+		if err := rows2.Scan(&p); err != nil {
+			return nil, nil, err
+		}
+		// Strip to basename so callers can match against on-disk dir names.
+		// The trailing-slash + path-separator scan handles both forward
+		// and back slashes for cross-platform safety.
+		for i := len(p) - 1; i >= 0; i-- {
+			if p[i] == '/' || p[i] == '\\' {
+				p = p[i+1:]
+				break
+			}
+		}
+		if p != "" {
+			transcodeSpoolBasenames = append(transcodeSpoolBasenames, p)
+		}
+	}
+	if err := rows2.Err(); err != nil {
+		return nil, nil, err
+	}
+	return ripIDs, transcodeSpoolBasenames, nil
+}
+
+// ResetTranscodeJob resets a transcode-kind job back to queued so the
+// compute worker re-runs it from the existing spool. Used by the
+// retry-transcode endpoint after a failed or interrupted transcode.
+// Clears job-level volatile fields (active_step, progress, speed,
+// error_message, started_at/finished_at) and flips every non-skipped
+// step row back to pending with the timestamps cleared. Validates
+// kind=transcode and state in {failed, interrupted}; returns
+// ErrInvalidJobKindForRetry / ErrInvalidJobStateForRetry otherwise.
+//
+// One transaction so the UI never sees a half-reset job.
+func (s *Store) ResetTranscodeJob(ctx context.Context, id string) error {
+	tx, err := s.db.Conn().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var kindStr, stateStr string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT kind, state FROM jobs WHERE id = ?`, id).
+		Scan(&kindStr, &stateStr); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if JobKind(kindStr) != JobKindTranscode {
+		return ErrInvalidJobKindForRetry
+	}
+	switch JobState(stateStr) {
+	case JobStateFailed, JobStateInterrupted:
+		// OK to retry.
+	default:
+		return ErrInvalidJobStateForRetry
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE jobs
+		   SET state         = 'queued',
+		       active_step   = '',
+		       active_substep= '',
+		       progress      = 0,
+		       speed         = '',
+		       eta_seconds   = 0,
+		       elapsed_seconds = 0,
+		       started_at    = '',
+		       finished_at   = '',
+		       error_message = ''
+		 WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE job_steps
+		   SET state       = 'pending',
+		       started_at  = '',
+		       finished_at = '',
+		       attempt_count = attempt_count + 1
+		 WHERE job_id = ? AND state != 'skipped'`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ErrInvalidJobKindForRetry is returned by ResetTranscodeJob when the
+// requested job isn't kind=transcode.
+var ErrInvalidJobKindForRetry = errors.New("state: job is not a transcode job")
+
+// ErrInvalidJobStateForRetry is returned by ResetTranscodeJob when the
+// requested job isn't in a retryable terminal state.
+var ErrInvalidJobStateForRetry = errors.New("state: job is not in a retryable state")
+
 // MarkInterruptedJobs flips every job in {queued, identifying, running}
 // to interrupted. Used at daemon startup so crashed-mid-rip jobs are
 // visible in the UI for resolution. Returns the count flipped.

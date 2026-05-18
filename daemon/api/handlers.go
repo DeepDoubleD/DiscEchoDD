@@ -9,6 +9,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/jobs"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/settings"
+	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
 
@@ -24,6 +25,8 @@ type Handlers struct {
 	Store         *state.Store
 	Broadcaster   *state.Broadcaster
 	Orchestrator  *jobs.Orchestrator
+	Compute       *jobs.Compute
+	Spool         *spool.Spool
 	Pipelines     *pipelines.Registry
 	Classifier    identify.Classifier
 	TMDB          identify.TMDBClient

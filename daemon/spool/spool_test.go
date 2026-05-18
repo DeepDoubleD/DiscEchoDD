@@ -92,6 +92,81 @@ func TestSpool_CreateRejectsEmptyJobID(t *testing.T) {
 	}
 }
 
+// fakeStoreRefs implements spool.StoreRefs for GC tests.
+type fakeStoreRefs struct {
+	ripIDs []string
+	tIDs   []string
+}
+
+func (f *fakeStoreRefs) ActiveSpoolReferences(_ context.Context) ([]string, []string, error) {
+	return f.ripIDs, f.tIDs, nil
+}
+
+func TestSpool_GC_RemovesOrphansKeepsReferenced(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	s, err := spool.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Three on-disk dirs: one referenced by an active rip, one by a
+	// failed transcode (kept for retry), one orphan.
+	for _, id := range []string{"keep-rip", "keep-transcode", "orphan"} {
+		if _, err := s.Create(id); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(s.Path(id), "rip.bin"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	refs := &fakeStoreRefs{
+		ripIDs: []string{"keep-rip"},
+		// Transcode jobs store the full spool_path; GC strips to basename
+		// when matching. Pass basenames here so the test mirrors what the
+		// store returns.
+		tIDs: []string{"keep-transcode"},
+	}
+	removed, err := s.GC(context.Background(), refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Errorf("removed = %d, want 1", removed)
+	}
+	for _, id := range []string{"keep-rip", "keep-transcode"} {
+		if _, err := os.Stat(s.Path(id)); err != nil {
+			t.Errorf("expected %s kept, stat err: %v", id, err)
+		}
+	}
+	if _, err := os.Stat(s.Path("orphan")); !os.IsNotExist(err) {
+		t.Errorf("expected orphan removed, stat err: %v", err)
+	}
+}
+
+func TestSpool_GC_NoOpOnEmptyRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	s, err := spool.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := s.GC(context.Background(), &fakeStoreRefs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Errorf("removed = %d, want 0", removed)
+	}
+}
+
+func TestSpool_GC_RejectsNilStore(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	s, _ := spool.New(root)
+	if _, err := s.GC(context.Background(), nil); err == nil {
+		t.Error("GC(nil) = nil, want error")
+	}
+}
+
 func TestSpool_UsageBytesCacheTTL(t *testing.T) {
 	root := t.TempDir()
 	s, err := spool.New(filepath.Join(root, "spool"))

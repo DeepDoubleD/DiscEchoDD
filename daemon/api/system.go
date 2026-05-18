@@ -434,3 +434,54 @@ func appriseVersion(ctx context.Context, bin string) (string, bool) {
 	}
 	return line, true
 }
+
+// SpoolInfo is the GET /api/system/spool payload. UsageBytes is the
+// current size of the spool root (cached 5s in the spool package);
+// CapBytes is the configured soft cap; Blocked is true when usage
+// has reached the cap and the per-drive worker is pausing new rips.
+type SpoolInfo struct {
+	UsageBytes int64 `json:"usage_bytes"`
+	CapBytes   int64 `json:"cap_bytes"`
+	Blocked    bool  `json:"blocked"`
+}
+
+// GetSystemSpool returns spool usage + cap for the dashboard / settings
+// widget. Cheap — spool.UsageBytes uses a 5s cache, so this is safe
+// to poll at SSE-tick frequency.
+func (h *Handlers) GetSystemSpool(w http.ResponseWriter, r *http.Request) {
+	if h.Spool == nil {
+		writeJSON(w, http.StatusOK, SpoolInfo{})
+		return
+	}
+	cap := spoolCapBytes(h.Store)
+	usage, err := h.Spool.UsageBytes(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, SpoolInfo{
+		UsageBytes: usage,
+		CapBytes:   cap,
+		Blocked:    cap > 0 && usage >= cap,
+	})
+}
+
+// spoolCapBytes reads spool.cap_bytes from the settings table. Missing
+// row or unparseable value falls back to the migration default
+// (100 GiB). Shared with the orchestrator's CapBytesFunc closure in
+// main.go so the same default lives in one logical place.
+func spoolCapBytes(store *state.Store) int64 {
+	const def int64 = 100 * 1024 * 1024 * 1024
+	if store == nil {
+		return def
+	}
+	v, err := store.GetSetting(context.Background(), "spool.cap_bytes")
+	if err != nil || v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
@@ -19,12 +20,20 @@ import (
 // implement SplittableHandler. The splittable path requires both
 // (Spool to allocate the staging dir, Compute to drain the resulting
 // transcode jobs).
+//
+// CapBytesFunc returns the current spool cap (bytes). When non-nil
+// and Spool is wired, the per-drive worker pauses new rip-job picks
+// while Spool.UsageBytes >= CapBytesFunc(). nil disables
+// backpressure entirely (legacy behaviour). The func is called once
+// per pause-check so a setting reload takes effect without a daemon
+// restart.
 type OrchestratorConfig struct {
-	Store       *state.Store
-	Broadcaster *state.Broadcaster
-	Pipelines   *pipelines.Registry
-	Compute     *Compute
-	Spool       *spool.Spool
+	Store        *state.Store
+	Broadcaster  *state.Broadcaster
+	Pipelines    *pipelines.Registry
+	Compute      *Compute
+	Spool        *spool.Spool
+	CapBytesFunc func() int64
 }
 
 // Orchestrator owns job lifecycle: queueing, per-drive serialization,
@@ -179,7 +188,9 @@ func (o *Orchestrator) enqueue(driveID, jobID string) error {
 }
 
 // worker drains one drive's queue serially. Exits when o.stopped is
-// closed; the queue itself is never closed (see Close).
+// closed; the queue itself is never closed (see Close). Backpressure:
+// before each runJob, the worker waits for spool capacity so a slow
+// transcode queue can't fill the disk while rips keep landing.
 func (o *Orchestrator) worker(driveID string, q chan jobItem) {
 	defer o.wg.Done()
 	for {
@@ -187,7 +198,63 @@ func (o *Orchestrator) worker(driveID string, q chan jobItem) {
 		case <-o.stopped:
 			return
 		case item := <-q:
+			if !o.waitForSpoolCapacity(driveID, item.jobID) {
+				// Shutdown raced the wait; the job stays queued and is
+				// flipped to interrupted on next startup.
+				return
+			}
 			o.runJob(item.jobID)
+		}
+	}
+}
+
+// backpressurePollInterval is how often the per-drive worker re-checks
+// spool usage when over-cap. 5s is short enough that drive responsiveness
+// stays low-latency after a transcode finishes; long enough that an
+// extended over-cap window doesn't burn CPU on filesystem walks.
+const backpressurePollInterval = 5 * time.Second
+
+// waitForSpoolCapacity blocks the per-drive worker until the spool is
+// under cap, the shutdown signal fires, or backpressure is disabled
+// (no Spool / no CapBytesFunc / cap<=0). Returns false if shutdown
+// races the wait.
+func (o *Orchestrator) waitForSpoolCapacity(driveID, jobID string) bool {
+	if o.cfg.Spool == nil || o.cfg.CapBytesFunc == nil {
+		return true
+	}
+	announced := false
+	for {
+		cap := o.cfg.CapBytesFunc()
+		if cap <= 0 {
+			return true
+		}
+		usage, err := o.cfg.Spool.UsageBytes(context.Background())
+		if err != nil {
+			slog.Warn("orchestrator: spool usage check", "err", err)
+			return true
+		}
+		if usage < cap {
+			if announced {
+				slog.Info("orchestrator: spool under cap, resuming rip", "drv", driveID, "job", jobID, "usage", usage, "cap", cap)
+				o.cfg.Broadcaster.Publish(state.Event{
+					Name:    "spool.changed",
+					Payload: map[string]any{"usage_bytes": usage, "cap_bytes": cap, "blocked": false},
+				})
+			}
+			return true
+		}
+		if !announced {
+			slog.Warn("orchestrator: spool over cap, pausing rip", "drv", driveID, "job", jobID, "usage", usage, "cap", cap)
+			o.cfg.Broadcaster.Publish(state.Event{
+				Name:    "spool.changed",
+				Payload: map[string]any{"usage_bytes": usage, "cap_bytes": cap, "blocked": true},
+			})
+			announced = true
+		}
+		select {
+		case <-time.After(backpressurePollInterval):
+		case <-o.stopped:
+			return false
 		}
 	}
 }

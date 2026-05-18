@@ -397,6 +397,15 @@ func main() {
 		slog.Error("spool.New", "err", err)
 		os.Exit(1)
 	}
+	// GC at startup: a daemon crash mid-pipeline leaves spool dirs
+	// behind. MarkInterruptedJobs (already called by NewOrchestrator)
+	// keeps the dirs for jobs the user might retry; GC just removes the
+	// orphans (no row references them).
+	if n, gcErr := spoolStore.GC(context.Background(), store); gcErr != nil {
+		slog.Warn("spool GC at startup", "err", gcErr)
+	} else if n > 0 {
+		slog.Info("spool GC at startup", "removed", n)
+	}
 	encConc := readIntSetting(store, "compute.concurrent_encodes", 1)
 	compute := jobs.NewCompute(jobs.ComputeConfig{
 		Store:       store,
@@ -414,6 +423,11 @@ func main() {
 		Pipelines:   pipeReg,
 		Compute:     compute,
 		Spool:       spoolStore,
+		// Re-read spool.cap_bytes on each backpressure check so a
+		// setting update from the UI takes effect without a restart.
+		CapBytesFunc: func() int64 {
+			return int64(readIntSetting(store, "spool.cap_bytes", 100*1024*1024*1024))
+		},
 	})
 	defer orch.Close()
 
@@ -422,6 +436,8 @@ func main() {
 		Store:         store,
 		Broadcaster:   bc,
 		Orchestrator:  orch,
+		Compute:       compute,
+		Spool:         spoolStore,
 		Pipelines:     pipeReg,
 		Classifier:    classifier,
 		TMDB:          tmdbClient,

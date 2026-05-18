@@ -92,6 +92,9 @@ func NewRouter(h *Handlers, static http.Handler) http.Handler {
 
 			authed.Get("/system/host", h.GetSystemHost)
 			authed.Get("/system/integrations", h.GetSystemIntegrations)
+			authed.Get("/system/spool", h.GetSystemSpool)
+
+			authed.Post("/jobs/{id}/retry-transcode", h.RetryTranscode)
 		})
 
 		// Long-timeout authenticated subset. Identify (force=true) and

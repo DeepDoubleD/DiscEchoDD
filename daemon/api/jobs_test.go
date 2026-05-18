@@ -257,3 +257,99 @@ func TestDeleteJob_NotFound(t *testing.T) {
 		t.Errorf("status %d", w.Code)
 	}
 }
+
+// TestRetryTranscode_FailurePaths covers every validation branch on
+// the retry endpoint without needing a wired Compute pool. The happy
+// path is exercised by the Unraid production smoke (local container
+// has no optical drive).
+func TestRetryTranscode_FailurePaths(t *testing.T) {
+	h := apitestServer(t)
+	r := chi.NewRouter()
+	r.Post("/api/jobs/{id}/retry-transcode", h.RetryTranscode)
+
+	drv := seedDrive(t, h)
+	prof := seedProfile(t, h)
+	disc := seedDisc(t, h, drv.ID)
+	ctx := context.Background()
+
+	// 404 — unknown ID.
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/jobs/nope/retry-transcode", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("404 want, got %d body=%s", w.Code, w.Body.String())
+		}
+	}
+
+	// 422 — rip-kind job, not a transcode.
+	ripJob := &state.Job{
+		DiscID: disc.ID, DriveID: drv.ID, ProfileID: prof.ID,
+		Kind: state.JobKindRip, State: state.JobStateFailed,
+	}
+	if err := h.Store.CreateJob(ctx, ripJob); err != nil {
+		t.Fatal(err)
+	}
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/jobs/"+ripJob.ID+"/retry-transcode", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Errorf("422 want, got %d body=%s", w.Code, w.Body.String())
+		}
+	}
+
+	// 409 — transcode-kind in a non-retryable state (done).
+	doneTrans := &state.Job{
+		DiscID: disc.ID, ProfileID: prof.ID,
+		Kind: state.JobKindTranscode, ParentJobID: ripJob.ID,
+		SpoolPath: "/tmp/whatever", State: state.JobStateDone,
+	}
+	if err := h.Store.CreateJob(ctx, doneTrans); err != nil {
+		t.Fatal(err)
+	}
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/jobs/"+doneTrans.ID+"/retry-transcode", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusConflict {
+			t.Errorf("409 want, got %d body=%s", w.Code, w.Body.String())
+		}
+	}
+
+	// 422 — failed transcode with empty spool_path.
+	noSpool := &state.Job{
+		DiscID: disc.ID, ProfileID: prof.ID,
+		Kind: state.JobKindTranscode, ParentJobID: ripJob.ID,
+		SpoolPath: "", State: state.JobStateFailed,
+	}
+	if err := h.Store.CreateJob(ctx, noSpool); err != nil {
+		t.Fatal(err)
+	}
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/jobs/"+noSpool.ID+"/retry-transcode", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Errorf("422 want (no spool), got %d body=%s", w.Code, w.Body.String())
+		}
+	}
+
+	// 410 — failed transcode whose spool dir no longer exists.
+	goneSpool := &state.Job{
+		DiscID: disc.ID, ProfileID: prof.ID,
+		Kind: state.JobKindTranscode, ParentJobID: ripJob.ID,
+		SpoolPath: "/nonexistent/spool/path/" + ripJob.ID, State: state.JobStateFailed,
+	}
+	if err := h.Store.CreateJob(ctx, goneSpool); err != nil {
+		t.Fatal(err)
+	}
+	{
+		req := httptest.NewRequest(http.MethodPost, "/api/jobs/"+goneSpool.ID+"/retry-transcode", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusGone {
+			t.Errorf("410 want (spool gone), got %d body=%s", w.Code, w.Body.String())
+		}
+	}
+}

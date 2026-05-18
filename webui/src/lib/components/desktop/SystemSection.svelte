@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import {
     drives,
     bootCodeCounts,
@@ -107,6 +107,20 @@
   let host: HostInfo | null = null;
   let integrations: IntegrationsInfo | null = null;
 
+  // Encoding section state. The cap is stored as bytes server-side but
+  // displayed in GiB for usability. concurrentEncodes maps directly to
+  // the int setting compute.concurrent_encodes — changing it takes
+  // effect on the next daemon restart (worker-pool size is fixed at
+  // boot; live resize is a future enhancement).
+  type SpoolInfo = { usage_bytes: number; cap_bytes: number; blocked: boolean };
+  let spool: SpoolInfo | null = null;
+  let concurrentEncodes = 1;
+  let spoolCapGiB = 100;
+  let encodingDirty = false;
+  let savingEncoding = false;
+  let encodingError: string | null = null;
+  let spoolPoll: ReturnType<typeof setInterval> | null = null;
+
   let roots: LibraryRoots = { movies: '', tv: '', music: '', games: '', data: '' };
   let dirty: Partial<LibraryRoots> = {};
   let savingRoots = false;
@@ -115,14 +129,25 @@
   $: hasDirty = Object.keys(dirty).length > 0;
 
   onMount(async () => {
-    const [v, h, i] = await Promise.allSettled([
+    const [v, h, i, s, settings] = await Promise.allSettled([
       apiGet<VersionInfo>('/api/version'),
       apiGet<HostInfo>('/api/system/host'),
       apiGet<IntegrationsInfo>('/api/system/integrations'),
+      apiGet<SpoolInfo>('/api/system/spool'),
+      apiGet<Record<string, string>>('/api/settings'),
     ]);
     version = v.status === 'fulfilled' ? v.value : null;
     host = h.status === 'fulfilled' ? h.value : null;
     integrations = i.status === 'fulfilled' ? i.value : null;
+    spool = s.status === 'fulfilled' ? s.value : null;
+    if (settings.status === 'fulfilled') {
+      const c = parseInt(settings.value['compute.concurrent_encodes'] ?? '1', 10);
+      if (Number.isInteger(c) && c > 0) concurrentEncodes = c;
+      const capBytes = parseInt(settings.value['spool.cap_bytes'] ?? '', 10);
+      if (Number.isFinite(capBytes) && capBytes > 0) {
+        spoolCapGiB = Math.max(1, Math.round(capBytes / (1024 * 1024 * 1024)));
+      }
+    }
     if (integrations?.library_roots) {
       for (const m of ROOT_ORDER) {
         roots[m] = integrations.library_roots[m] ?? '';
@@ -136,7 +161,53 @@
       fetchIntegration('tmdb'),
       fetchIntegration('makemkv'),
     ]);
+    // Poll spool usage every 10s so the user sees compress jobs
+    // drain in real time. 5s server-side cache keeps this cheap.
+    spoolPoll = setInterval(async () => {
+      try {
+        spool = await apiGet<SpoolInfo>('/api/system/spool');
+      } catch {
+        // Best-effort; transient errors leave the last-known value.
+      }
+    }, 10_000);
   });
+
+  onDestroy(() => {
+    if (spoolPoll) clearInterval(spoolPoll);
+  });
+
+  function onEncodingChange(): void {
+    encodingDirty = true;
+    encodingError = null;
+  }
+
+  async function saveEncoding(): Promise<void> {
+    if (!Number.isInteger(concurrentEncodes) || concurrentEncodes < 1 || concurrentEncodes > 8) {
+      encodingError = 'Concurrent encodes must be a whole number 1-8.';
+      return;
+    }
+    if (!Number.isInteger(spoolCapGiB) || spoolCapGiB < 1 || spoolCapGiB > 10_000) {
+      encodingError = 'Spool cap must be a whole number 1-10000 GiB.';
+      return;
+    }
+    savingEncoding = true;
+    encodingError = null;
+    try {
+      await apiPut('/api/settings', {
+        'compute.concurrent_encodes': String(concurrentEncodes),
+        'spool.cap_bytes': String(spoolCapGiB * 1024 * 1024 * 1024),
+      });
+      encodingDirty = false;
+      pushToast(
+        'success',
+        'Encoding settings saved. Concurrency change takes effect on next daemon restart.',
+      );
+    } catch (e) {
+      encodingError = (e as Error).message;
+    } finally {
+      savingEncoding = false;
+    }
+  }
 
   function onRootChange(media: MediaRoot, e: CustomEvent<string>): void {
     dirty = { ...dirty, [media]: e.detail };
@@ -399,6 +470,84 @@
             Save changes
           </button>
         </div>
+      </div>
+    {/if}
+  </FormSection>
+
+  <FormSection
+    title="Encoding"
+    sub="Compute queue concurrency and spool soft cap. Spool stores ripped output between the drive-bound rip and the compute-bound transcode."
+  >
+    <FormRow label="Concurrent encodes">
+      <div class="flex items-center gap-3">
+        <input
+          type="number"
+          min="1"
+          max="8"
+          step="1"
+          bind:value={concurrentEncodes}
+          on:input={onEncodingChange}
+          class="w-24 rounded-md border border-border bg-surface-1 px-2 py-1.5 text-[13px]"
+        />
+        <span class="text-[11px] text-text-3">
+          Transcodes that may run in parallel. Takes effect on next daemon restart.
+        </span>
+      </div>
+    </FormRow>
+
+    <FormRow label="Spool cap (GiB)">
+      <div class="flex items-center gap-3">
+        <input
+          type="number"
+          min="1"
+          max="10000"
+          step="1"
+          bind:value={spoolCapGiB}
+          on:input={onEncodingChange}
+          class="w-24 rounded-md border border-border bg-surface-1 px-2 py-1.5 text-[13px]"
+        />
+        <span class="text-[11px] text-text-3">
+          New rips pause when the spool dir reaches this size.
+        </span>
+      </div>
+    </FormRow>
+
+    <FormRow label="Spool usage">
+      {#if spool}
+        <div class="flex items-center gap-3 text-[12px] text-text-2">
+          <span class="font-mono">
+            {formatBytes(spool.usage_bytes)} / {formatBytes(spool.cap_bytes)}
+          </span>
+          {#if spool.blocked}
+            <span
+              class="rounded-md border border-error/30 bg-error/10 px-2 py-0.5 text-[11px] text-error"
+            >
+              CAP REACHED — pausing new rips
+            </span>
+          {/if}
+        </div>
+      {:else}
+        <div class="text-[12px] text-text-3">—</div>
+      {/if}
+    </FormRow>
+
+    {#if encodingDirty}
+      <div class="flex items-center justify-between gap-3 px-4 py-3">
+        <div class="text-[11px] text-text-3">
+          {#if encodingError}
+            <span class="text-error">{encodingError}</span>
+          {:else}
+            Unsaved changes.
+          {/if}
+        </div>
+        <button
+          type="button"
+          on:click={saveEncoding}
+          disabled={savingEncoding}
+          class="rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-black disabled:opacity-50"
+        >
+          Save changes
+        </button>
       </div>
     {/if}
   </FormSection>

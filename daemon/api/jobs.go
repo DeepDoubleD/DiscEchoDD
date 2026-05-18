@@ -2,7 +2,9 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -80,6 +82,62 @@ func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// RetryTranscode re-enqueues a kind=transcode job that's in a failed
+// or interrupted state, reusing the existing spool dir so the user
+// doesn't have to re-rip the disc. Validates the job kind, terminal
+// state, and that the spool dir still exists on disk before resetting
+// row state and pushing back onto the compute queue.
+//
+// Errors:
+//
+//	404 job not found
+//	409 job is not in a retryable state (queued/running/done/cancelled)
+//	410 spool dir is gone — only path forward is to re-rip the disc
+//	422 job is not a transcode job, or has no spool_path
+//	503 compute pool not configured
+func (h *Handlers) RetryTranscode(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	job, err := h.Store.GetJob(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if job.Kind != state.JobKindTranscode {
+		writeError(w, http.StatusUnprocessableEntity, "job is not a transcode job")
+		return
+	}
+	if job.State != state.JobStateFailed && job.State != state.JobStateInterrupted {
+		writeError(w, http.StatusConflict,
+			fmt.Sprintf("job is in state %q, expected failed or interrupted", job.State))
+		return
+	}
+	if job.SpoolPath == "" {
+		writeError(w, http.StatusUnprocessableEntity, "job has no spool path")
+		return
+	}
+	if _, err := os.Stat(job.SpoolPath); err != nil {
+		writeError(w, http.StatusGone, "spool dir is gone — re-rip the disc instead")
+		return
+	}
+	if h.Compute == nil {
+		writeError(w, http.StatusServiceUnavailable, "compute pool not configured")
+		return
+	}
+	if err := h.Store.ResetTranscodeJob(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.Compute.Enqueue(id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // ListJobLogs returns persisted log lines for a job, oldest-first,
