@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -271,5 +272,43 @@ func TestTMDB_MovieDetails_NoAPIKey(t *testing.T) {
 	}
 	if d.Plot != "" || d.PosterURL != "" {
 		t.Errorf("want empty DiscMetadata: %+v", d)
+	}
+}
+
+func TestTMDBClient_Reconfigure_SwapsAPIKey(t *testing.T) {
+	var mu sync.Mutex
+	var capturedKeys []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		capturedKeys = append(capturedKeys, r.URL.Query().Get("api_key"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[],"total_results":0}`))
+	}))
+	defer server.Close()
+
+	c := identify.NewTMDBClient(identify.TMDBConfig{
+		APIKey:     "first-key",
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	if _, err := c.SearchMovie(context.Background(), "X"); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	c.Reconfigure(identify.TMDBConfig{
+		APIKey:     "second-key",
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	if _, err := c.SearchMovie(context.Background(), "X"); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(capturedKeys) != 2 {
+		t.Fatalf("want 2 requests, got %d (%v)", len(capturedKeys), capturedKeys)
+	}
+	if capturedKeys[0] != "first-key" || capturedKeys[1] != "second-key" {
+		t.Errorf("captured keys: %v want [first-key second-key]", capturedKeys)
 	}
 }

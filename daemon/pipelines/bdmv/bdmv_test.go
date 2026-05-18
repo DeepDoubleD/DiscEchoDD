@@ -49,6 +49,7 @@ func (f *fakeTMDB) MovieDetails(_ context.Context, _ int) (identify.DiscMetadata
 func (f *fakeTMDB) TVDetails(_ context.Context, _ int) (identify.DiscMetadata, error) {
 	return identify.DiscMetadata{}, nil
 }
+func (f *fakeTMDB) Reconfigure(_ identify.TMDBConfig) {}
 
 // fakeMakeMKV satisfies both bdmv.MakeMKVScanner and bdmv.MakeMKVRipper.
 type fakeMakeMKV struct {

@@ -105,10 +105,8 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 
 	s.Token = getenv("DISCECHO_TOKEN")
 
-	if s.MakeMKVBetaKey != "" {
-		if err := writeMakeMKVBetaKey(s.MakeMKVDataDir, s.MakeMKVBetaKey); err != nil {
-			return nil, fmt.Errorf("makemkv beta key: %w", err)
-		}
+	if err := WriteMakeMKVBetaKey(s.MakeMKVDataDir, s.MakeMKVBetaKey); err != nil {
+		return nil, fmt.Errorf("makemkv beta key: %w", err)
 	}
 
 	ctx := context.Background()
@@ -425,7 +423,19 @@ func seedNotifications(ctx context.Context, store *state.Store, urls string) err
 	return nil
 }
 
-func writeMakeMKVBetaKey(dataDir, key string) error {
+// WriteMakeMKVBetaKey writes <dataDir>/settings.conf with
+// app_Key = "<key>" and mirrors it into <dataDir>/.MakeMKV/settings.conf
+// (the path makemkvcon actually loads on every invocation). Safe to
+// call repeatedly — overwrites in place. Empty key is a no-op (returns
+// nil without touching the filesystem) so callers can plug in an
+// unset credential without a guard.
+func WriteMakeMKVBetaKey(dataDir, key string) error {
+	if key == "" {
+		return nil
+	}
+	if dataDir == "" {
+		return fmt.Errorf("makemkv data dir not set")
+	}
 	content := fmt.Sprintf("app_Key = %q\n", key)
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dataDir, err)

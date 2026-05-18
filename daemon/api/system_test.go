@@ -114,34 +114,30 @@ func TestGetSystemIntegrations_ItemsList(t *testing.T) {
 	}
 	var info api.IntegrationsInfo
 	_ = json.Unmarshal(w.Body.Bytes(), &info)
-	if len(info.Items) != 5 {
-		t.Fatalf("Items len = %d, want 5", len(info.Items))
+	if len(info.Items) != 4 {
+		t.Fatalf("Items len = %d, want 4", len(info.Items))
 	}
-	want := []string{"TMDB", "MusicBrainz", "Game discs", "Apprise", "GPU transcoding"}
+	want := []string{"MusicBrainz", "Game discs", "Apprise", "GPU transcoding"}
 	for i, name := range want {
 		if info.Items[i].Name != name {
 			t.Errorf("Items[%d].Name = %q, want %q", i, info.Items[i].Name, name)
 		}
 	}
-	// TMDB connected when key set.
-	if info.Items[0].Status != "connected" {
-		t.Errorf("TMDB status = %q, want connected", info.Items[0].Status)
-	}
 	// MusicBrainz always connected.
-	if info.Items[1].Status != "connected" {
-		t.Errorf("MusicBrainz status = %q, want connected", info.Items[1].Status)
+	if info.Items[0].Status != "connected" {
+		t.Errorf("MusicBrainz status = %q, want connected", info.Items[0].Status)
 	}
 	// Bogus redumper bin → error surfaced in Game discs tile.
-	if !strings.HasPrefix(info.Items[2].Status, "error:") {
-		t.Errorf("Game discs status = %q, want error: prefix", info.Items[2].Status)
+	if !strings.HasPrefix(info.Items[1].Status, "error:") {
+		t.Errorf("Game discs status = %q, want error: prefix", info.Items[1].Status)
 	}
 	// Apprise: no URLs configured (empty notifications list).
-	if info.Items[3].Status != "no URLs configured" {
-		t.Errorf("Apprise status = %q, want no URLs configured", info.Items[3].Status)
+	if info.Items[2].Status != "no URLs configured" {
+		t.Errorf("Apprise status = %q, want no URLs configured", info.Items[2].Status)
 	}
 }
 
-func TestGetSystemIntegrations_TMDBNotConfigured_ItemsRow(t *testing.T) {
+func TestGetSystemIntegrations_MusicBrainzConnected(t *testing.T) {
 	h := apitestServer(t)
 	h.Settings = &settings.Settings{
 		MusicBrainzBaseURL:   "https://musicbrainz.org",
@@ -156,11 +152,12 @@ func TestGetSystemIntegrations_TMDBNotConfigured_ItemsRow(t *testing.T) {
 	}
 	var info api.IntegrationsInfo
 	_ = json.Unmarshal(w.Body.Bytes(), &info)
-	if info.Items[0].Status != "not configured" {
-		t.Errorf("TMDB Items[0] status = %q, want not configured", info.Items[0].Status)
+	// MusicBrainz is now Items[0] (TMDB moved to /api/integrations).
+	if info.Items[0].Name != "MusicBrainz" {
+		t.Errorf("Items[0].Name = %q, want MusicBrainz", info.Items[0].Name)
 	}
-	if info.Items[0].Editable != "DISCECHO_TMDB_KEY" {
-		t.Errorf("TMDB Items[0].Editable = %q", info.Items[0].Editable)
+	if info.Items[0].Status != "connected" {
+		t.Errorf("MusicBrainz status = %q, want connected", info.Items[0].Status)
 	}
 }
 
@@ -307,19 +304,16 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 		t.Fatal("no 'Game discs' tile in integration items")
 	}
 
-	// BootCodeIndex not wired → should have a "partial" or similar status.
-	// The IGDB sub-item must always be present.
-	foundIGDB := false
+	// IGDB sub-item removed — IGDB is now owned by /api/integrations.
 	for _, sub := range game.SubItems {
 		if sub.Label == "IGDB" {
-			foundIGDB = true
-			if sub.Status != "missing" {
-				t.Errorf("IGDB sub-item status = %q, want missing (no credentials set)", sub.Status)
-			}
+			t.Errorf("unexpected IGDB sub-item in Game discs tile; it moved to /api/integrations")
 		}
 	}
-	if !foundIGDB {
-		t.Errorf("no IGDB sub-item; got %+v", game.SubItems)
+
+	// Hint must direct users to the new endpoint.
+	if !strings.Contains(game.Hint, "IGDB") {
+		t.Errorf("Game discs hint = %q, want it to mention IGDB", game.Hint)
 	}
 }
 

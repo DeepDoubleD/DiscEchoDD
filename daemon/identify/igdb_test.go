@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -116,6 +117,53 @@ func TestIGDBClient_SearchGames_CandidateMapping(t *testing.T) {
 	}
 }
 
+func TestIGDBClient_Reconfigure_ConcurrentWithSearch(t *testing.T) {
+	// httptest server: responds slowly so the race window is wide enough
+	// that the race detector will catch any unsynchronised access.
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		time.Sleep(50 * time.Millisecond)
+		switch r.URL.Path {
+		case "/oauth2/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"tok","expires_in":3600}`))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		}
+	}))
+	defer server.Close()
+
+	c := identify.NewIGDBClient(identify.IGDBConfig{
+		ClientID: "a", ClientSecret: "b",
+		BaseURL: server.URL, TokenURL: server.URL + "/oauth2/token",
+		HTTPClient: server.Client(),
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = c.SearchGames(context.Background(), "Q", state.DiscTypePSX)
+	}()
+	go func() {
+		defer wg.Done()
+		// Race Reconfigure against the in-flight search.
+		time.Sleep(10 * time.Millisecond)
+		c.Reconfigure(identify.IGDBConfig{
+			ClientID: "c", ClientSecret: "d",
+			BaseURL: server.URL, TokenURL: server.URL + "/oauth2/token",
+			HTTPClient: server.Client(),
+		})
+	}()
+	wg.Wait()
+	// No assertion on requests — the point is `go test -race` not crashing.
+}
+
 func mustReadAll(t *testing.T, r interface{ Read(p []byte) (int, error) }) string {
 	t.Helper()
 	var sb strings.Builder
@@ -130,4 +178,67 @@ func mustReadAll(t *testing.T, r interface{ Read(p []byte) (int, error) }) strin
 		}
 	}
 	return sb.String()
+}
+
+func TestIGDBClient_Reconfigure_SwapsCredentialsAndInvalidatesToken(t *testing.T) {
+	// Capture every outbound request so we can assert on the credentials.
+	var mu sync.Mutex
+	var capturedClientIDs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		// Token endpoint reads client_id from the form body.
+		_ = r.ParseForm()
+		if id := r.FormValue("client_id"); id != "" {
+			capturedClientIDs = append(capturedClientIDs, id)
+		}
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/oauth2/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"tok","expires_in":3600}`))
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		}
+	}))
+	defer server.Close()
+
+	c := identify.NewIGDBClient(identify.IGDBConfig{
+		ClientID:     "first-id",
+		ClientSecret: "first-secret",
+		BaseURL:      server.URL,
+		TokenURL:     server.URL + "/oauth2/token",
+		HTTPClient:   server.Client(),
+	})
+
+	// Cause one token fetch with the first credentials.
+	if _, err := c.SearchGames(context.Background(), "Q", state.DiscTypePSX); err != nil {
+		t.Fatalf("first search: %v", err)
+	}
+
+	c.Reconfigure(identify.IGDBConfig{
+		ClientID:     "second-id",
+		ClientSecret: "second-secret",
+		BaseURL:      server.URL,
+		TokenURL:     server.URL + "/oauth2/token",
+		HTTPClient:   server.Client(),
+	})
+
+	// Second call must re-authenticate against the token URL with the
+	// new client_id (the cached token from the first call is gone).
+	if _, err := c.SearchGames(context.Background(), "Q", state.DiscTypePSX); err != nil {
+		t.Fatalf("second search: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(capturedClientIDs) < 2 {
+		t.Fatalf("want at least 2 token requests, got %d (%v)", len(capturedClientIDs), capturedClientIDs)
+	}
+	if capturedClientIDs[0] != "first-id" {
+		t.Errorf("first token request: client_id=%q want first-id", capturedClientIDs[0])
+	}
+	if capturedClientIDs[len(capturedClientIDs)-1] != "second-id" {
+		t.Errorf("post-Reconfigure token request: client_id=%q want second-id", capturedClientIDs[len(capturedClientIDs)-1])
+	}
 }

@@ -559,6 +559,7 @@ func (f *fakeTMDBForAPI) MovieDetails(_ context.Context, _ int) (identify.DiscMe
 func (f *fakeTMDBForAPI) TVDetails(_ context.Context, _ int) (identify.DiscMetadata, error) {
 	return f.tvDetails, nil
 }
+func (f *fakeTMDBForAPI) Reconfigure(_ identify.TMDBConfig) {}
 
 type fakeMBForAPI struct {
 	cands       []state.Candidate
@@ -671,7 +672,8 @@ func (s *stubIGDB) SearchGames(_ context.Context, _ string, _ state.DiscType) ([
 func (s *stubIGDB) GameDetails(_ context.Context, _ int) (*identify.IGDBGameDetails, error) {
 	return s.details, s.detailsErr
 }
-func (s *stubIGDB) Configured() bool { return true }
+func (s *stubIGDB) Configured() bool                  { return true }
+func (s *stubIGDB) Reconfigure(_ identify.IGDBConfig) {}
 
 // stubDiscHandlerForType is a no-op pipeline handler that reports a given disc type.
 type stubDiscHandlerForType struct {

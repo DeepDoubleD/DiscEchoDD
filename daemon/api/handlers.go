@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
+	"github.com/jumpingmushroom/DiscEcho/daemon/integrations"
 	"github.com/jumpingmushroom/DiscEcho/daemon/jobs"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/settings"
@@ -57,4 +58,44 @@ type Handlers struct {
 	// guard and enqueue a duplicate job. The daemon is single-process,
 	// so an in-process mutex fully closes the race.
 	startMu sync.Mutex
+
+	// Integrations is the live credential registry. Wired by main.go after
+	// Resolve populates initial values from env + DB.
+	Integrations IntegrationsRegistry
+
+	// IGDBTestEndpoints holds override URLs so handler tests can route
+	// Twitch OAuth + IGDB upstream calls to httptest servers. Zero values
+	// fall back to the production endpoints.
+	IGDBTestEndpoints IGDBTestEndpoints
+
+	// TMDBTestEndpoint overrides the TMDB base URL in handler tests.
+	// Zero value falls back to https://api.themoviedb.org/3.
+	TMDBTestEndpoint string
+
+	// IntegrationEnvLoader is wired by main.go and provides env-derived
+	// credentials for an integration name. Used by DeleteIntegration to
+	// re-resolve after clearing the DB rows.
+	IntegrationEnvLoader IntegrationEnvLoader
 }
+
+// IntegrationsRegistry is the subset of *integrations.Registry the API
+// layer needs. Defined as an interface so handler tests can supply a fake
+// without instantiating real Reconfigure callbacks.
+type IntegrationsRegistry interface {
+	Get(name string) (map[string]string, integrations.Source, bool)
+	Put(name string, creds map[string]string, source integrations.Source, reconfigure integrations.Reconfigure) error
+	Names() []string
+}
+
+// IGDBTestEndpoints holds override URLs so handler tests can route the
+// upstream call to httptest. Zero values fall back to the production
+// Twitch + IGDB endpoints.
+type IGDBTestEndpoints struct {
+	TokenURL string
+	GamesURL string
+}
+
+// IntegrationEnvLoader is wired by main.go and provides env-derived
+// credentials for an integration name. Used by DeleteIntegration to
+// re-resolve after clearing the DB rows.
+type IntegrationEnvLoader func(name string) (map[string]string, integrations.Source)

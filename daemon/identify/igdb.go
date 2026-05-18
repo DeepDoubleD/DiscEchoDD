@@ -31,6 +31,12 @@ type IGDBClient interface {
 	SearchGames(ctx context.Context, query string, discType state.DiscType) ([]state.Candidate, error)
 	GameDetails(ctx context.Context, igdbID int) (*IGDBGameDetails, error)
 	Configured() bool
+	// Reconfigure atomically swaps the active config + invalidates the
+	// cached OAuth token. The next call refreshes against the new
+	// credentials. BaseURL/TokenURL/HTTPClient/MinInterval defaults
+	// from NewIGDBClient are re-applied for any fields left zero on
+	// the supplied config.
+	Reconfigure(cfg IGDBConfig)
 }
 
 // IGDBGameDetails is the per-pick metadata used to populate
@@ -70,18 +76,65 @@ func NewIGDBClient(c IGDBConfig) IGDBClient {
 	return &igdbClient{cfg: c}
 }
 
+// igdbClient implements IGDBClient.
+//
+// Mutex discipline:
+//   - cfgMu (RWMutex) protects cfg; always locked before tokenMu when both
+//     are needed to maintain a consistent acquisition order.
+//   - mu (Mutex) is the rate-limit gate; independent of cfgMu so a slow
+//     HTTP round-trip cannot block config reads.
+//   - tokenMu (Mutex) protects token + tokenExpiry; locked only for the
+//     token-refresh path. Request paths snapshot cfg before acquiring
+//     tokenMu so the two are never held simultaneously.
 type igdbClient struct {
-	cfg     IGDBConfig
-	mu      sync.Mutex
+	cfgMu sync.RWMutex // protects cfg (read on every request via snap())
+	cfg   IGDBConfig
+
+	mu      sync.Mutex // rate-limit gate
 	lastReq time.Time
 
-	tokenMu     sync.Mutex
+	tokenMu     sync.Mutex // protects token + tokenExpiry (token-refresh path)
 	token       string
 	tokenExpiry time.Time
 }
 
+// snap returns a value copy of cfg under RLock. Every request path calls
+// this once at entry and uses the snapshot throughout, so a concurrent
+// Reconfigure never races with a mid-flight HTTP call.
+func (c *igdbClient) snap() IGDBConfig {
+	c.cfgMu.RLock()
+	defer c.cfgMu.RUnlock()
+	return c.cfg
+}
+
 func (c *igdbClient) Configured() bool {
-	return c.cfg.ClientID != "" && c.cfg.ClientSecret != ""
+	cfg := c.snap()
+	return cfg.ClientID != "" && cfg.ClientSecret != ""
+}
+
+// Reconfigure swaps the active credentials + flushes the cached bearer
+// token. Safe to call while other goroutines are mid-request: cfgMu
+// serialises config writes; tokenMu serialises token invalidation.
+// Lock order: cfgMu first, tokenMu second (never reversed).
+func (c *igdbClient) Reconfigure(cfg IGDBConfig) {
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "https://api.igdb.com/v4"
+	}
+	if cfg.TokenURL == "" {
+		cfg.TokenURL = "https://id.twitch.tv/oauth2/token"
+	}
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = &http.Client{Timeout: 20 * time.Second}
+	}
+
+	c.cfgMu.Lock()
+	c.cfg = cfg
+	c.cfgMu.Unlock()
+
+	c.tokenMu.Lock()
+	c.token = ""
+	c.tokenExpiry = time.Time{}
+	c.tokenMu.Unlock()
 }
 
 func (c *igdbClient) SearchGames(ctx context.Context, query string, discType state.DiscType) ([]state.Candidate, error) {
@@ -101,15 +154,16 @@ func (c *igdbClient) SearchGames(ctx context.Context, query string, discType sta
 		query, platformID,
 	)
 
-	if err := c.waitForRateLimit(ctx); err != nil {
+	cfg := c.snap()
+	if err := c.waitForRateLimit(ctx, cfg.MinInterval); err != nil {
 		return nil, err
 	}
-	tok, err := c.getToken(ctx)
+	tok, err := c.getToken(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	resp, err := c.doAPI(ctx, "/games", body, tok)
+	resp, err := c.doAPI(ctx, cfg, "/games", body, tok)
 	if err != nil {
 		return nil, err
 	}
@@ -157,14 +211,16 @@ func (c *igdbClient) GameDetails(ctx context.Context, igdbID int) (*IGDBGameDeta
 		`fields name,first_release_date,cover.url,summary,platforms.name; where id = %d;`,
 		igdbID,
 	)
-	if err := c.waitForRateLimit(ctx); err != nil {
+
+	cfg := c.snap()
+	if err := c.waitForRateLimit(ctx, cfg.MinInterval); err != nil {
 		return nil, err
 	}
-	tok, err := c.getToken(ctx)
+	tok, err := c.getToken(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.doAPI(ctx, "/games", body, tok)
+	resp, err := c.doAPI(ctx, cfg, "/games", body, tok)
 	if err != nil {
 		return nil, err
 	}
@@ -212,42 +268,44 @@ func (c *igdbClient) GameDetails(ctx context.Context, igdbID int) (*IGDBGameDeta
 	}, nil
 }
 
-// doAPI sends a POST to {BaseURL}{path} with the Apicalypse body. The
+// doAPI sends a POST to {cfg.BaseURL}{path} with the Apicalypse body. The
 // IGDB v4 API uses text/plain for query bodies, not application/json.
-func (c *igdbClient) doAPI(ctx context.Context, path, body, tok string) (*http.Response, error) {
+// Callers pass a snapped IGDBConfig so this function never reads c.cfg directly.
+func (c *igdbClient) doAPI(ctx context.Context, cfg IGDBConfig, path, body, tok string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		strings.TrimRight(c.cfg.BaseURL, "/")+path,
+		strings.TrimRight(cfg.BaseURL, "/")+path,
 		strings.NewReader(body),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("igdb: build request: %w", err)
 	}
-	req.Header.Set("Client-ID", c.cfg.ClientID)
+	req.Header.Set("Client-ID", cfg.ClientID)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "text/plain")
-	return c.cfg.HTTPClient.Do(req)
+	return cfg.HTTPClient.Do(req)
 }
 
 // getToken returns a valid access token, refreshing if expired or within
 // the 5-minute refresh-before-expiry window. Concurrent callers share
-// the token via the mutex.
-func (c *igdbClient) getToken(ctx context.Context) (string, error) {
+// the token via tokenMu. Callers pass a snapped IGDBConfig so this
+// function never reads c.cfg directly.
+func (c *igdbClient) getToken(ctx context.Context, cfg IGDBConfig) (string, error) {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()
 	if c.token != "" && time.Until(c.tokenExpiry) > 5*time.Minute {
 		return c.token, nil
 	}
 	form := url.Values{}
-	form.Set("client_id", c.cfg.ClientID)
-	form.Set("client_secret", c.cfg.ClientSecret)
+	form.Set("client_id", cfg.ClientID)
+	form.Set("client_secret", cfg.ClientSecret)
 	form.Set("grant_type", "client_credentials")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.cfg.TokenURL+"?"+form.Encode(), nil)
+		cfg.TokenURL+"?"+form.Encode(), nil)
 	if err != nil {
 		return "", fmt.Errorf("igdb: build token request: %w", err)
 	}
-	resp, err := c.cfg.HTTPClient.Do(req)
+	resp, err := cfg.HTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -271,12 +329,14 @@ func (c *igdbClient) getToken(ctx context.Context) (string, error) {
 	return c.token, nil
 }
 
-func (c *igdbClient) waitForRateLimit(ctx context.Context) error {
-	if c.cfg.MinInterval <= 0 {
+// waitForRateLimit accepts minInterval as a parameter (from a snapped cfg)
+// so it never reads c.cfg directly.
+func (c *igdbClient) waitForRateLimit(ctx context.Context, minInterval time.Duration) error {
+	if minInterval <= 0 {
 		return nil
 	}
 	c.mu.Lock()
-	wait := time.Until(c.lastReq.Add(c.cfg.MinInterval))
+	wait := time.Until(c.lastReq.Add(minInterval))
 	c.lastReq = time.Now()
 	c.mu.Unlock()
 	if wait <= 0 {

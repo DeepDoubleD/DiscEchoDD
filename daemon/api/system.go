@@ -160,22 +160,10 @@ func (h *Handlers) GetSystemIntegrations(w http.ResponseWriter, r *http.Request)
 }
 
 // buildIntegrationItems composes the connections list shown on the
-// Settings → System tab. Order: TMDB, MusicBrainz, Game discs,
-// Apprise, GPU transcoding.
+// Settings → System tab. Order: MusicBrainz, Game discs, Apprise,
+// GPU transcoding. TMDB and IGDB are owned by /api/integrations.
 func (h *Handlers) buildIntegrationItems(ctx context.Context, info IntegrationsInfo) []IntegrationStatus {
 	items := []IntegrationStatus{
-		{
-			Name:     "TMDB",
-			Hint:     "movie & TV metadata",
-			Editable: "DISCECHO_TMDB_KEY",
-			Status: func() string {
-				if info.TMDB.Configured {
-					return "connected"
-				}
-				return "not configured"
-			}(),
-			Detail: info.TMDB.Language,
-		},
 		{
 			Name:   "MusicBrainz",
 			Hint:   "audio CD metadata + AccurateRip",
@@ -184,7 +172,7 @@ func (h *Handlers) buildIntegrationItems(ctx context.Context, info IntegrationsI
 		},
 		{
 			Name:     "Game discs",
-			Hint:     "auto-id by boot code + post-rip MD5 verify",
+			Hint:     "auto-id by boot code; manual search via IGDB (configure under API keys & connections)",
 			Status:   gameDiscsStatus(h),
 			SubItems: gameDiscsSubItems(h),
 		},
@@ -272,19 +260,6 @@ func gameDiscsSubItems(h *Handlers) []SubItem {
 			Label:  "Boot-code maps",
 			Status: combinedStatus(counts),
 			Detail: formatInventory(counts),
-		})
-	}
-	if h.IGDB != nil && h.IGDB.Configured() {
-		out = append(out, SubItem{
-			Label:  "IGDB",
-			Status: "ok",
-			Detail: "client-credentials token cached",
-		})
-	} else {
-		out = append(out, SubItem{
-			Label:  "IGDB",
-			Status: "missing",
-			Detail: "set DISCECHO_IGDB_CLIENT_ID + _SECRET to enable manual game search",
 		})
 	}
 	return out

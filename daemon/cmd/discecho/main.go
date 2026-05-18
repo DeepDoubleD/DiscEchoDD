@@ -19,6 +19,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/drive"
 	"github.com/jumpingmushroom/DiscEcho/daemon/embed"
 	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
+	"github.com/jumpingmushroom/DiscEcho/daemon/integrations"
 	"github.com/jumpingmushroom/DiscEcho/daemon/jobs"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/audiocd"
@@ -253,6 +254,63 @@ func main() {
 		MinInterval:  250 * time.Millisecond,
 	})
 
+	// Integrations registry: resolves DB > env for each credential surface
+	// and provides the runtime swap seam. First Put runs Reconfigure with
+	// the resolved creds so the clients are initialized through the same
+	// code path as a runtime edit.
+	integReg := integrations.NewRegistry()
+
+	envForIntegration := func(name string) (map[string]string, integrations.Source) {
+		switch name {
+		case "igdb":
+			envCreds := map[string]string{
+				"client_id":     cfg.IGDBClientID,
+				"client_secret": cfg.IGDBClientSecret,
+			}
+			if envCreds["client_id"] == "" && envCreds["client_secret"] == "" {
+				return map[string]string{}, integrations.SourceUnset
+			}
+			return envCreds, integrations.SourceEnv
+		case "tmdb":
+			envCreds := map[string]string{
+				"key":  cfg.TMDBKey,
+				"lang": cfg.TMDBLang,
+			}
+			if envCreds["key"] == "" {
+				return map[string]string{}, integrations.SourceUnset
+			}
+			return envCreds, integrations.SourceEnv
+		case "makemkv":
+			envCreds := map[string]string{"beta_key": cfg.MakeMKVBetaKey}
+			if envCreds["beta_key"] == "" {
+				return map[string]string{}, integrations.SourceUnset
+			}
+			return envCreds, integrations.SourceEnv
+		}
+		return map[string]string{}, integrations.SourceUnset
+	}
+
+	bootCtx := context.Background()
+	type integSpec struct {
+		name        string
+		reconfigure integrations.Reconfigure
+	}
+	for _, spec := range []integSpec{
+		{"igdb", integrations.IGDBAdapter(igdbClient)},
+		{"tmdb", integrations.TMDBAdapter(tmdbClient)},
+		{"makemkv", integrations.MakeMKVAdapter(cfg.MakeMKVDataDir)},
+	} {
+		envCreds, _ := envForIntegration(spec.name)
+		creds, source, err := integrations.Resolve(bootCtx, store, spec.name, envCreds)
+		if err != nil {
+			slog.Error("integrations resolve", "name", spec.name, "err", err)
+			continue
+		}
+		if err := integReg.Put(spec.name, creds, source, spec.reconfigure); err != nil {
+			slog.Error("integrations init reconfigure", "name", spec.name, "err", err)
+		}
+	}
+
 	// Dreamcast IP.BIN reader: opens the block device and seeks to LBA 45000
 	// to extract the product number (Sega GD-ROM HD area).
 	dcIPBin := identify.NewDCIPBinReader()
@@ -347,9 +405,11 @@ func main() {
 		BootCodeIndex: bootCodeIndex,
 		Token:         cfg.Token,
 		// ActiveSampler is started after the orchestrator's ctx is built (below).
-		Apprise:        appriseTool,
-		Settings:       cfg,
-		NVENCAvailable: nvencAvailable,
+		Apprise:              appriseTool,
+		Settings:             cfg,
+		NVENCAvailable:       nvencAvailable,
+		Integrations:         integReg,
+		IntegrationEnvLoader: envForIntegration,
 		Ejector: func(ctx context.Context, devPath string) error {
 			return ejectTool.Run(ctx, []string{devPath}, nil, "", tools.NopSink{})
 		},

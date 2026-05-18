@@ -40,6 +40,9 @@ type TMDBClient interface {
 	// /api/discs/{id}/start so the pane has rich data on first paint.
 	MovieDetails(ctx context.Context, tmdbID int) (DiscMetadata, error)
 	TVDetails(ctx context.Context, tmdbID int) (DiscMetadata, error)
+	// Reconfigure atomically swaps the active config (APIKey + Language).
+	// BaseURL / HTTPClient defaults are re-applied for zero fields.
+	Reconfigure(cfg TMDBConfig)
 }
 
 // DiscMetadata is the extended display payload the pane needs.
@@ -77,24 +80,55 @@ func NewTMDBClient(c TMDBConfig) TMDBClient {
 	return &tmdbClient{cfg: c}
 }
 
-type tmdbClient struct{ cfg TMDBConfig }
+type tmdbClient struct {
+	mu  sync.RWMutex
+	cfg TMDBConfig
+}
+
+// Reconfigure atomically swaps the active credentials. Safe to call
+// while other goroutines are mid-request — snapshot() copies the
+// config before the HTTP round-trip so the swap window is tiny.
+func (c *tmdbClient) Reconfigure(cfg TMDBConfig) {
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = "https://api.themoviedb.org/3"
+	}
+	if cfg.Language == "" {
+		cfg.Language = "en-US"
+	}
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = &http.Client{Timeout: 30 * time.Second}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cfg = cfg
+}
+
+// snapshot returns a copy of the current config without holding the
+// lock across an HTTP round-trip. Every request path calls this once
+// at entry and uses the local copy.
+func (c *tmdbClient) snapshot() TMDBConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg
+}
 
 // MovieRuntime fetches `/movie/{id}` to read the canonical runtime
 // in minutes, returns it in seconds. Search endpoints don't include
 // runtime, so this is called on a per-pick basis when the user
 // starts a rip.
 func (c *tmdbClient) MovieRuntime(ctx context.Context, tmdbID int) (int, error) {
-	if c.cfg.APIKey == "" || tmdbID <= 0 {
+	snap := c.snapshot()
+	if snap.APIKey == "" || tmdbID <= 0 {
 		return 0, nil
 	}
 	endpoint := fmt.Sprintf("/movie/%d", tmdbID)
-	u, err := url.Parse(strings.TrimRight(c.cfg.BaseURL, "/") + endpoint)
+	u, err := url.Parse(strings.TrimRight(snap.BaseURL, "/") + endpoint)
 	if err != nil {
 		return 0, fmt.Errorf("build url: %w", err)
 	}
 	q := u.Query()
-	q.Set("api_key", c.cfg.APIKey)
-	q.Set("language", c.cfg.Language)
+	q.Set("api_key", snap.APIKey)
+	q.Set("language", snap.Language)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -102,7 +136,7 @@ func (c *tmdbClient) MovieRuntime(ctx context.Context, tmdbID int) (int, error) 
 		return 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := c.cfg.HTTPClient.Do(req)
+	resp, err := snap.HTTPClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -163,16 +197,17 @@ type tmdbDetailsResponse struct {
 }
 
 func (c *tmdbClient) details(ctx context.Context, endpoint, directorJob string) (DiscMetadata, error) {
-	if c.cfg.APIKey == "" {
+	snap := c.snapshot()
+	if snap.APIKey == "" {
 		return DiscMetadata{}, nil
 	}
-	u, err := url.Parse(strings.TrimRight(c.cfg.BaseURL, "/") + endpoint)
+	u, err := url.Parse(strings.TrimRight(snap.BaseURL, "/") + endpoint)
 	if err != nil {
 		return DiscMetadata{}, fmt.Errorf("build url: %w", err)
 	}
 	q := u.Query()
-	q.Set("api_key", c.cfg.APIKey)
-	q.Set("language", c.cfg.Language)
+	q.Set("api_key", snap.APIKey)
+	q.Set("language", snap.Language)
 	q.Set("append_to_response", "credits")
 	u.RawQuery = q.Encode()
 
@@ -182,7 +217,7 @@ func (c *tmdbClient) details(ctx context.Context, endpoint, directorJob string) 
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.cfg.HTTPClient.Do(req)
+	resp, err := snap.HTTPClient.Do(req)
 	if err != nil {
 		return DiscMetadata{}, err
 	}
@@ -256,7 +291,7 @@ func (c *tmdbClient) SearchTV(ctx context.Context, query string) ([]state.Candid
 // would erase the popularity signal needed for the cross-endpoint
 // merge.
 func (c *tmdbClient) SearchBoth(ctx context.Context, query string) ([]state.Candidate, error) {
-	if c.cfg.APIKey == "" {
+	if c.snapshot().APIKey == "" {
 		return nil, nil
 	}
 	var (
@@ -387,17 +422,18 @@ func (c *tmdbClient) search(
 	endpoint, mediaType, query string,
 	parser func(json.RawMessage) (state.Candidate, error),
 ) ([]state.Candidate, error) {
-	if c.cfg.APIKey == "" {
+	snap := c.snapshot()
+	if snap.APIKey == "" {
 		return nil, nil
 	}
-	u, err := url.Parse(strings.TrimRight(c.cfg.BaseURL, "/") + endpoint)
+	u, err := url.Parse(strings.TrimRight(snap.BaseURL, "/") + endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("build url: %w", err)
 	}
 	q := u.Query()
-	q.Set("api_key", c.cfg.APIKey)
+	q.Set("api_key", snap.APIKey)
 	q.Set("query", query)
-	q.Set("language", c.cfg.Language)
+	q.Set("language", snap.Language)
 	u.RawQuery = q.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -406,7 +442,7 @@ func (c *tmdbClient) search(
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.cfg.HTTPClient.Do(req)
+	resp, err := snap.HTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

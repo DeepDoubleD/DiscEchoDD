@@ -90,6 +90,7 @@ func (f *fakeTMDB) MovieDetails(_ context.Context, _ int) (identify.DiscMetadata
 func (f *fakeTMDB) TVDetails(_ context.Context, _ int) (identify.DiscMetadata, error) {
 	return identify.DiscMetadata{}, nil
 }
+func (f *fakeTMDB) Reconfigure(_ identify.TMDBConfig) {}
 
 // fakeHandBrake satisfies tools.Tool for the transcode step AND
 // dvdvideo.HandBrakeScanner for the post-rip title enumeration.

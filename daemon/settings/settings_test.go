@@ -852,6 +852,49 @@ func TestSeedRetentionDefault_CreatesAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestWriteMakeMKVBetaKey_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	if err := settings.WriteMakeMKVBetaKey(dir, "T-FAKEKEY"); err != nil {
+		t.Fatal(err)
+	}
+	if err := settings.WriteMakeMKVBetaKey(dir, "T-FAKEKEY"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Primary path — what the daemon owns.
+	primary, err := os.ReadFile(filepath.Join(dir, "settings.conf"))
+	if err != nil {
+		t.Fatalf("read primary settings.conf: %v", err)
+	}
+	if !strings.Contains(string(primary), "T-FAKEKEY") {
+		t.Errorf("primary settings.conf missing key: %q", string(primary))
+	}
+
+	// Mirror path — what makemkvcon actually loads on every invocation.
+	// If this write regresses, BDMV/UHD rips silently fall back to an
+	// unregistered MakeMKV and fail at the rip step.
+	mirror, err := os.ReadFile(filepath.Join(filepath.Dir(dir), ".MakeMKV", "settings.conf"))
+	if err != nil {
+		t.Fatalf("read .MakeMKV/settings.conf mirror: %v", err)
+	}
+	if !strings.Contains(string(mirror), "T-FAKEKEY") {
+		t.Errorf("mirror settings.conf missing key: %q", string(mirror))
+	}
+}
+
+func TestWriteMakeMKVBetaKey_EmptyKey_NoOp(t *testing.T) {
+	dir := t.TempDir()
+	if err := settings.WriteMakeMKVBetaKey(dir, ""); err != nil {
+		t.Errorf("empty key should be no-op, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "settings.conf")); !os.IsNotExist(err) {
+		t.Errorf("expected no primary settings.conf for empty key, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), ".MakeMKV", "settings.conf")); !os.IsNotExist(err) {
+		t.Errorf("expected no mirror settings.conf for empty key, stat err=%v", err)
+	}
+}
+
 func TestLoad_IGDB(t *testing.T) {
 	store := openStore(t)
 	dataDir := t.TempDir()
