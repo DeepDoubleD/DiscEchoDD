@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-05-18
+
 ### Added
 - Two new seeded profiles, `DVD-Movie + Extras` (HandBrake) and `BD-1080p + Extras` (MakeMKV+HandBrake), that auto-include bonus-material titles alongside the main feature in a single rip. The main feature lands at the profile's existing top-level path (e.g., `Arrival (2016)/Arrival (2016).mkv`); every other title in the `[min_extra_seconds, main_duration × extras_max_ratio]` duration band lands under `<title>/extras/extra-NN.mkv` — the catch-all Plex/Jellyfin auto-classify as bonus content. Pick either profile from the awaiting-decision card (or set it as your default for the disc type in the profile editor) when you want the full disc instead of just the main feature.
 - New `include_extras` (bool), `min_extra_seconds` (int, default 60), `extras_max_ratio` (int percent, default 90) profile options on the HandBrake, MakeMKV, and MakeMKV+HandBrake engine schemas. When `include_extras=true` and the title picker didn't override, the rip handler folds bonus-material titles into the encode set automatically. Defaults drop navigation loops (<60s) and full-length alternate cuts (>main × 90%) to avoid duplicate-of-the-feature outputs.
