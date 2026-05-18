@@ -17,6 +17,8 @@ import type {
   StepID,
   JobDetailResponse,
   JobLogsResponse,
+  IntegrationDetail,
+  IntegrationName,
 } from './wire';
 
 export interface LogLine {
@@ -67,6 +69,22 @@ export const selectedProfileID = writable<string | null>(null);
 // A value of 0 (or missing key) means auto-id is unavailable for that system.
 export const bootCodeCounts = writable<Record<string, number>>({});
 
+// integrations is keyed by integration name. Lazily populated on first
+// fetch via fetchIntegration(); the SSE 'integrations.changed' event
+// triggers a re-fetch for the named integration so other browser tabs
+// see edits immediately.
+export const integrations = writable<Record<IntegrationName, IntegrationDetail | undefined>>({
+  igdb: undefined,
+  tmdb: undefined,
+  makemkv: undefined,
+});
+
+export async function fetchIntegration(name: IntegrationName): Promise<IntegrationDetail> {
+  const detail = await apiGet<IntegrationDetail>(`/api/integrations/${name}`);
+  integrations.update((m) => ({ ...m, [name]: detail }));
+  return detail;
+}
+
 // LOG_RING_SIZE caps the per-job in-memory log buffer. Raised from 50
 // so a chatty HandBrake transcode doesn't push earlier rip-phase lines
 // out of the ring before the user can switch to the Rip filter chip
@@ -88,6 +106,7 @@ const SSE_EVENT_NAMES = [
   'profile.changed',
   'notification.changed',
   'settings.changed',
+  'integrations.changed',
 ];
 
 // ----- Bootstrap ------------------------------------------------------------
@@ -296,6 +315,15 @@ export function handleSSEEvent(name: string, payload: unknown): void {
       // map so subscribers see the new values. Fire-and-forget — store
       // updates flow through reactive bindings.
       void refreshSettings();
+      break;
+    }
+
+    case 'integrations.changed': {
+      const { name } = p as { name: IntegrationName };
+      // Fire-and-forget re-fetch; the writable update inside
+      // fetchIntegration is what other consumers (e.g. SystemSection)
+      // subscribe to.
+      void fetchIntegration(name);
       break;
     }
   }

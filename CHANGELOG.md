@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Settings → System → "API keys & connections" gains an inline editor for the IGDB OAuth credentials, TMDB v3 API key, and MakeMKV beta key. Edits take effect immediately — no container restart. Each row carries a `Configured (UI)` / `Configured (env)` / `Unset` source pill so you can always tell which surface owns the credential. UI-set values override env; clearing falls back to env. IGDB and TMDB rows expose a Test button that round-trips against the real upstream (Twitch OAuth + IGDB /games for IGDB; GET /configuration for TMDB) before saving; MakeMKV has no upstream test and renders a "Validated on next rip" caption instead.
+
+### Changed
+- `/api/system/integrations` no longer carries TMDB or IGDB rows — those credentials are now first-class under `/api/integrations`. The Game discs row description is updated to point at the new editor.
+- Secrets at rest: IGDB / TMDB / MakeMKV credentials stored in the UI are plaintext in `discecho.sqlite`. Same posture as the existing `.env` and `${DISCECHO_DATA}/MakeMKV/settings.conf` storage. Encryption-at-rest is not planned for now.
+
 ## [0.20.1] - 2026-05-17
 
 ### Fixed

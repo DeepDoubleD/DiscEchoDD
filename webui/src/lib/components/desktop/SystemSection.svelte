@@ -1,6 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { drives, bootCodeCounts } from '$lib/store';
+  import {
+    drives,
+    bootCodeCounts,
+    integrations as integrationsStore,
+    fetchIntegration,
+  } from '$lib/store';
   import { apiGet, apiPut, apiPatch } from '$lib/api';
   import { pushToast } from '$lib/toasts';
   import type { Drive } from '$lib/wire';
@@ -8,6 +13,7 @@
   import FormRow from './FormRow.svelte';
   import PathField from './PathField.svelte';
   import ApiRow from './ApiRow.svelte';
+  import IntegrationEditor, { type FieldSpec } from './IntegrationEditor.svelte';
 
   type VersionInfo = { version?: string; commit?: string; build_date?: string };
 
@@ -54,6 +60,40 @@
   type MediaRoot = 'movies' | 'tv' | 'music' | 'games' | 'data';
   type LibraryRoots = Record<MediaRoot, string>;
 
+  const INTEGRATION_FIELDS: Record<'igdb' | 'tmdb' | 'makemkv', FieldSpec[]> = {
+    igdb: [
+      { name: 'client_id', label: 'Client ID', secret: false },
+      { name: 'client_secret', label: 'Client secret', secret: true },
+    ],
+    tmdb: [
+      { name: 'key', label: 'API key (v3)', secret: true },
+      { name: 'lang', label: 'Language (e.g. en-US)', secret: false },
+    ],
+    makemkv: [{ name: 'beta_key', label: 'Beta key', secret: true }],
+  };
+
+  const INTEGRATION_ENV_HINTS: Record<'igdb' | 'tmdb' | 'makemkv', string> = {
+    igdb: 'DISCECHO_IGDB_CLIENT_ID / DISCECHO_IGDB_CLIENT_SECRET',
+    tmdb: 'DISCECHO_TMDB_KEY',
+    makemkv: 'DISCECHO_MAKEMKV_BETA_KEY',
+  };
+
+  const INTEGRATION_TESTABLE: Record<'igdb' | 'tmdb' | 'makemkv', boolean> = {
+    igdb: true,
+    tmdb: true,
+    makemkv: false,
+  };
+
+  function asIntegrationName(n: string): 'igdb' | 'tmdb' | 'makemkv' {
+    return n as 'igdb' | 'tmdb' | 'makemkv';
+  }
+
+  // Used in template to unwrap the non-null IntegrationDetail once we've
+  // confirmed it is defined in the {#if} guard above.
+  function getIntegration(n: string): import('$lib/wire').IntegrationDetail {
+    return $integrationsStore[asIntegrationName(n)] as import('$lib/wire').IntegrationDetail;
+  }
+
   const ROOT_LABELS: Record<MediaRoot, string> = {
     movies: 'Movies',
     tv: 'TV',
@@ -91,6 +131,11 @@
     if (integrations?.boot_code_counts) {
       bootCodeCounts.set(integrations.boot_code_counts);
     }
+    await Promise.allSettled([
+      fetchIntegration('igdb'),
+      fetchIntegration('tmdb'),
+      fetchIntegration('makemkv'),
+    ]);
   });
 
   function onRootChange(media: MediaRoot, e: CustomEvent<string>): void {
@@ -359,6 +404,17 @@
   </FormSection>
 
   <FormSection title="API keys & connections">
+    {#each ['igdb', 'tmdb', 'makemkv'] as name (name)}
+      {#if $integrationsStore[asIntegrationName(name)]}
+        <IntegrationEditor
+          detail={getIntegration(name)}
+          fields={INTEGRATION_FIELDS[asIntegrationName(name)]}
+          envHint={INTEGRATION_ENV_HINTS[asIntegrationName(name)]}
+          testable={INTEGRATION_TESTABLE[asIntegrationName(name)]}
+        />
+      {/if}
+    {/each}
+
     {#if integrations?.items && integrations.items.length > 0}
       {#each integrations.items as item (item.name)}
         <ApiRow
@@ -370,10 +426,6 @@
           on:edit={() => onIntegrationEdit(item)}
         />
       {/each}
-    {:else if integrations}
-      <div class="px-4 py-3 text-[12px] text-text-3">No integrations configured.</div>
-    {:else}
-      <div class="px-4 py-3 text-[12px] text-text-3">Loading…</div>
     {/if}
   </FormSection>
 

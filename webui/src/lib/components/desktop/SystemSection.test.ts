@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, fireEvent, waitFor } from '@testing-library/svelte';
 import { get } from 'svelte/store';
 import SystemSection from './SystemSection.svelte';
-import { settings, drives } from '$lib/store';
+import { settings, drives, integrations as integrationsStore } from '$lib/store';
 import { toasts } from '$lib/toasts';
 
 const versionResp = { version: '1.0.0', commit: 'abc', build_date: '2026-05-08' };
@@ -14,8 +14,8 @@ const hostResp = {
   uptime_seconds: 7200,
   disks: [{ path: '/library/movies', total_bytes: 1000, used_bytes: 250, available_bytes: 750 }],
 };
+// After Task 8, TMDB and IGDB are no longer in /api/system/integrations.
 const integrationsResp = {
-  tmdb: { configured: true, language: 'en-US' },
   musicbrainz: { base_url: 'https://musicbrainz.org', user_agent: 'DiscEcho/test' },
   apprise: { bin: 'apprise', version: '1.7.0' },
   library_roots: {
@@ -26,13 +26,6 @@ const integrationsResp = {
     data: '/library/data',
   },
   items: [
-    {
-      name: 'TMDB',
-      hint: 'movie & TV metadata',
-      status: 'connected',
-      detail: 'en-US',
-      editable: 'DISCECHO_TMDB_KEY',
-    },
     {
       name: 'MusicBrainz',
       hint: 'audio CD metadata + AccurateRip',
@@ -46,6 +39,28 @@ const integrationsResp = {
     },
     { name: 'Apprise', hint: 'notification dispatch', status: 'no URLs configured' },
   ],
+};
+
+const igdbResp = {
+  name: 'igdb',
+  source: 'env',
+  configured: true,
+  fields_present: ['client_id', 'client_secret'],
+  values: { client_id: 'env-id', client_secret: 'env-secret' },
+};
+const tmdbResp = {
+  name: 'tmdb',
+  source: 'unset',
+  configured: false,
+  fields_present: [],
+  values: {},
+};
+const makemkvResp = {
+  name: 'makemkv',
+  source: 'unset',
+  configured: false,
+  fields_present: [],
+  values: {},
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -69,6 +84,12 @@ function mockEndpoints(overrides: Record<string, unknown> = {}) {
         return Promise.resolve(jsonResponse(overrides.host ?? hostResp));
       if (method === 'GET' && url === '/api/system/integrations')
         return Promise.resolve(jsonResponse(overrides.integrations ?? integrationsResp));
+      if (method === 'GET' && url === '/api/integrations/igdb')
+        return Promise.resolve(jsonResponse(overrides.igdb ?? igdbResp));
+      if (method === 'GET' && url === '/api/integrations/tmdb')
+        return Promise.resolve(jsonResponse(overrides.tmdb ?? tmdbResp));
+      if (method === 'GET' && url === '/api/integrations/makemkv')
+        return Promise.resolve(jsonResponse(overrides.makemkv ?? makemkvResp));
       if (method === 'PUT' && url === '/api/settings') {
         apiPutMock(url, init?.body ? JSON.parse(init.body as string) : null);
         return Promise.resolve(jsonResponse({ ok: true }));
@@ -95,6 +116,7 @@ describe('SystemSection', () => {
     mockEndpoints();
     toasts.set([]);
     settings.set({});
+    integrationsStore.set({ igdb: undefined, tmdb: undefined, makemkv: undefined });
     drives.set([
       {
         id: 'd1',
@@ -121,16 +143,14 @@ describe('SystemSection', () => {
     expect(container.textContent).toContain('Host');
   });
 
-  it('renders one ApiRow per integration item', async () => {
+  it('renders ApiRow for remaining integrations (MusicBrainz, Game discs, Apprise)', async () => {
     const { container } = render(SystemSection);
-    await waitFor(() => expect(container.textContent).toContain('TMDB'));
-    expect(container.textContent).toContain('movie & TV metadata');
-    expect(container.textContent).toContain('audio CD metadata');
+    await waitFor(() => expect(container.textContent).toContain('audio CD metadata'));
     expect(container.textContent).toContain('Game discs');
     expect(container.textContent).toContain('Apprise');
-    // Connected pill rendered for the three connected rows.
+    // Connected pill rendered for the connected rows.
     const connectedBadges = container.querySelectorAll('span.text-accent');
-    expect(connectedBadges.length).toBeGreaterThanOrEqual(3);
+    expect(connectedBadges.length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders one PathField row per typed library root', async () => {
@@ -186,34 +206,25 @@ describe('SystemSection', () => {
     expect(container.textContent).toContain('idle');
   });
 
-  it('shows TMDB connected badge with language detail', async () => {
+  it('shows MusicBrainz connected badge', async () => {
     const { container } = render(SystemSection);
     await waitFor(() => expect(container.textContent).toContain('connected'));
-    expect(container.textContent).toContain('en-US');
+    expect(container.textContent).toContain('audio CD metadata');
   });
 
-  it('shows TMDB not-configured row when key is missing', async () => {
-    mockEndpoints({
-      integrations: {
-        tmdb: { configured: false, language: 'en-US' },
-        musicbrainz: integrationsResp.musicbrainz,
-        apprise: integrationsResp.apprise,
-        library_roots: integrationsResp.library_roots,
-        items: [
-          {
-            name: 'TMDB',
-            hint: 'movie & TV metadata',
-            status: 'not configured',
-            editable: 'DISCECHO_TMDB_KEY',
-          },
-          { name: 'MusicBrainz', status: 'connected' },
-          { name: 'Game discs', status: 'connected' },
-          { name: 'Apprise', status: 'no URLs configured' },
-        ],
-      },
-    });
+  it('shows TMDB as Unset when not configured via /api/integrations/tmdb', async () => {
+    // tmdbResp is already source:'unset', so default mockEndpoints covers this.
     const { container } = render(SystemSection);
-    await waitFor(() => expect(container.textContent).toMatch(/not configured/i));
+    await waitFor(() => expect(container.textContent).toMatch(/tmdb/i));
+    expect(container.textContent).toMatch(/unset/i);
+  });
+
+  it('renders the IGDB / TMDB / MakeMKV editor rows', async () => {
+    const { container } = render(SystemSection);
+    await waitFor(() => expect(container.textContent).toMatch(/igdb/i));
+    expect(container.textContent).toContain('Configured (env)');
+    expect(container.textContent).toMatch(/tmdb/i);
+    expect(container.textContent).toMatch(/makemkv/i);
   });
 
   it('renders disk usage bar for each disk in host info', async () => {

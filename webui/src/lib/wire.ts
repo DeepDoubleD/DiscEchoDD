@@ -229,6 +229,26 @@ export interface Stats {
   failures_7d: Failures7dStat;
 }
 
+export type IntegrationName = 'igdb' | 'tmdb' | 'makemkv';
+export type IntegrationSource = 'ui' | 'env' | 'unset';
+
+export interface IntegrationStatus {
+  name: IntegrationName;
+  source: IntegrationSource;
+  configured: boolean;
+  fields_present: string[];
+}
+
+export interface IntegrationDetail extends IntegrationStatus {
+  values: Record<string, string>;
+}
+
+export interface IntegrationTestResult {
+  ok: boolean;
+  error?: string;
+  http_status?: number;
+}
+
 // SSE event types
 export type SSEEvent =
   | { event: 'drive.changed'; data: { drive: Drive } }
@@ -249,4 +269,5 @@ export type SSEEvent =
     }
   | { event: 'job.done'; data: { job_id: string } }
   | { event: 'job.failed'; data: { job_id: string; error?: string; state?: 'cancelled' } }
-  | { event: 'state.snapshot'; data: SnapshotPayload };
+  | { event: 'state.snapshot'; data: SnapshotPayload }
+  | { event: 'integrations.changed'; data: { name: IntegrationName; source: IntegrationSource } };
