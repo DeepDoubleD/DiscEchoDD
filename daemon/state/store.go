@@ -831,13 +831,26 @@ func (s *Store) CreateJob(ctx context.Context, j *Job) error {
 	if j.State == "" {
 		j.State = JobStateQueued
 	}
+	if j.Kind == "" {
+		j.Kind = JobKindRip
+	}
+	if j.Kind != JobKindRip && j.Kind != JobKindTranscode {
+		return fmt.Errorf("CreateJob: invalid kind %q", j.Kind)
+	}
 
+	// All jobs materialize the canonical 8-step row list today; entries
+	// pre-populated in j.Steps act as a skipSet for which step rows land
+	// as 'skipped' vs 'pending'. The split-pipeline work (PR-2+) will
+	// extend this so kind='transcode' jobs materialize only the
+	// CanonicalTranscodeSteps subset; for now PR-1 is pure scaffolding
+	// and the old contract is preserved.
 	skipSet := map[StepID]bool{}
 	for _, st := range j.Steps {
 		if st.State == JobStepStateSkipped {
 			skipSet[st.Step] = true
 		}
 	}
+	stepIDs := CanonicalSteps()
 
 	tx, err := s.db.Conn().BeginTx(ctx, nil)
 	if err != nil {
@@ -846,11 +859,13 @@ func (s *Store) CreateJob(ctx context.Context, j *Job) error {
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO jobs (id, disc_id, drive_id, profile_id, state, active_step,
+		INSERT INTO jobs (id, disc_id, drive_id, profile_id, kind, parent_job_id,
+		                  spool_path, state, active_step,
 		                  progress, speed, eta_seconds, elapsed_seconds, output_bytes,
 		                  started_at, finished_at, error_message, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		j.ID, j.DiscID, nullString(j.DriveID), j.ProfileID,
+		string(j.Kind), nullString(j.ParentJobID), j.SpoolPath,
 		string(j.State), string(j.ActiveStep),
 		j.Progress, j.Speed, j.ETASeconds, j.ElapsedSeconds, j.OutputBytes,
 		timestampPtr(j.StartedAt), timestampPtr(j.FinishedAt),
@@ -868,8 +883,8 @@ func (s *Store) CreateJob(ctx context.Context, j *Job) error {
 	}
 	defer func() { _ = stmt.Close() }()
 
-	steps := make([]JobStep, 0, len(CanonicalSteps()))
-	for _, sid := range CanonicalSteps() {
+	steps := make([]JobStep, 0, len(stepIDs))
+	for _, sid := range stepIDs {
 		stState := JobStepStatePending
 		if skipSet[sid] {
 			stState = JobStepStateSkipped
@@ -889,7 +904,8 @@ func (s *Store) GetJob(ctx context.Context, id string) (*Job, error) {
 	row := s.db.Conn().QueryRowContext(ctx, `
 		SELECT id, disc_id, COALESCE(drive_id, ''), profile_id, state, active_step,
 		       progress, speed, eta_seconds, elapsed_seconds, output_bytes,
-		       started_at, finished_at, error_message, created_at, active_substep
+		       started_at, finished_at, error_message, created_at, active_substep,
+		       kind, COALESCE(parent_job_id, ''), spool_path
 		FROM jobs WHERE id = ?`, id)
 	j, err := scanJob(row)
 	if err != nil {
@@ -923,7 +939,8 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 
 	q := `SELECT id, disc_id, COALESCE(drive_id, ''), profile_id, state, active_step,
 	             progress, speed, eta_seconds, elapsed_seconds, output_bytes,
-	             started_at, finished_at, error_message, created_at, active_substep
+	             started_at, finished_at, error_message, created_at, active_substep,
+	             kind, COALESCE(parent_job_id, ''), spool_path
 	      FROM jobs`
 	var args []any
 	var conds []string
@@ -968,7 +985,8 @@ func (s *Store) ListActiveAndRecentJobs(ctx context.Context, recentLimit int) ([
 	activeRows, err := s.db.Conn().QueryContext(ctx, `
 		SELECT id, disc_id, COALESCE(drive_id, ''), profile_id, state, active_step,
 		       progress, speed, eta_seconds, elapsed_seconds, output_bytes,
-		       started_at, finished_at, error_message, created_at, active_substep
+		       started_at, finished_at, error_message, created_at, active_substep,
+		       kind, COALESCE(parent_job_id, ''), spool_path
 		FROM jobs
 		WHERE state NOT IN ('done','failed','cancelled')
 		ORDER BY created_at DESC`)
@@ -992,7 +1010,8 @@ func (s *Store) ListActiveAndRecentJobs(ctx context.Context, recentLimit int) ([
 		recentRows, err := s.db.Conn().QueryContext(ctx, `
 			SELECT id, disc_id, COALESCE(drive_id, ''), profile_id, state, active_step,
 			       progress, speed, eta_seconds, elapsed_seconds, output_bytes,
-			       started_at, finished_at, error_message, created_at, active_substep
+			       started_at, finished_at, error_message, created_at, active_substep,
+			       kind, COALESCE(parent_job_id, ''), spool_path
 			FROM jobs
 			WHERE state IN ('done','failed','cancelled','interrupted')
 			ORDER BY COALESCE(NULLIF(finished_at,''), created_at) DESC
@@ -1260,11 +1279,12 @@ func (s *Store) MarkInterruptedJobs(ctx context.Context) (int, error) {
 
 func scanJob(r rowScanner) (*Job, error) {
 	var j Job
-	var st, activeStep, startedStr, finishedStr, createdStr string
+	var st, activeStep, startedStr, finishedStr, createdStr, kindStr string
 	if err := r.Scan(
 		&j.ID, &j.DiscID, &j.DriveID, &j.ProfileID, &st, &activeStep,
 		&j.Progress, &j.Speed, &j.ETASeconds, &j.ElapsedSeconds, &j.OutputBytes,
 		&startedStr, &finishedStr, &j.ErrorMessage, &createdStr, &j.ActiveSubStep,
+		&kindStr, &j.ParentJobID, &j.SpoolPath,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -1273,6 +1293,7 @@ func scanJob(r rowScanner) (*Job, error) {
 	}
 	j.State = JobState(st)
 	j.ActiveStep = StepID(activeStep)
+	j.Kind = JobKind(kindStr)
 	var err error
 	if j.StartedAt, err = parseTimePtr(startedStr); err != nil {
 		return nil, fmt.Errorf("parse started_at: %w", err)
@@ -1780,6 +1801,7 @@ func (s *Store) ListHistory(ctx context.Context, f HistoryFilter) ([]HistoryRow,
 		  j.id, j.disc_id, COALESCE(j.drive_id, ''), j.profile_id, j.state, j.active_step,
 		  j.progress, j.speed, j.eta_seconds, j.elapsed_seconds, j.output_bytes,
 		  j.started_at, j.finished_at, j.error_message, j.created_at, j.active_substep,
+		  j.kind, COALESCE(j.parent_job_id, ''), j.spool_path,
 		  d.id, COALESCE(d.drive_id, ''), d.type, d.title, d.year, d.runtime_seconds,
 		  d.size_bytes_raw, d.toc_hash, d.metadata_provider, d.metadata_id,
 		  d.candidates_json, d.metadata_json, d.created_at
@@ -1815,12 +1837,14 @@ func (s *Store) ListHistory(ctx context.Context, f HistoryFilter) ([]HistoryRow,
 			j                                              Job
 			d                                              Disc
 			jState, jActive, jStarted, jFinished, jCreated string
+			jKind                                          string
 			dType, dCands, dMeta, dCreated                 string
 		)
 		if err := rows.Scan(
 			&j.ID, &j.DiscID, &j.DriveID, &j.ProfileID, &jState, &jActive,
 			&j.Progress, &j.Speed, &j.ETASeconds, &j.ElapsedSeconds, &j.OutputBytes,
 			&jStarted, &jFinished, &j.ErrorMessage, &jCreated, &j.ActiveSubStep,
+			&jKind, &j.ParentJobID, &j.SpoolPath,
 			&d.ID, &d.DriveID, &dType, &d.Title, &d.Year, &d.RuntimeSeconds,
 			&d.SizeBytesRaw, &d.TOCHash, &d.MetadataProvider, &d.MetadataID,
 			&dCands, &dMeta, &dCreated,
@@ -1829,6 +1853,7 @@ func (s *Store) ListHistory(ctx context.Context, f HistoryFilter) ([]HistoryRow,
 		}
 		j.State = JobState(jState)
 		j.ActiveStep = StepID(jActive)
+		j.Kind = JobKind(jKind)
 		var err error
 		if j.StartedAt, err = parseTimePtr(jStarted); err != nil {
 			return nil, fmt.Errorf("parse j.started_at: %w", err)

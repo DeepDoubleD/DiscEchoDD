@@ -70,14 +70,41 @@ const (
 	StepEject     StepID = "eject"
 )
 
-// CanonicalSteps returns the eight-step order. Used by job_steps row
-// insertion and UI rendering.
+// CanonicalSteps returns the eight-step order. Used by audio-CD and
+// DATA pipelines that ship as a single monolithic job; the split
+// rip/transcode pipelines materialise their job_steps from
+// CanonicalRipSteps + CanonicalTranscodeSteps instead.
 func CanonicalSteps() []StepID {
 	return []StepID{
 		StepDetect, StepIdentify, StepRip, StepTranscode,
 		StepCompress, StepMove, StepNotify, StepEject,
 	}
 }
+
+// CanonicalRipSteps is the drive-bound half of the split pipeline:
+// detect → identify → rip → eject. The drive is freed at the end of
+// eject so the next disc can be loaded while the compute queue still
+// owns the transcode/compress/move/notify tail.
+func CanonicalRipSteps() []StepID {
+	return []StepID{StepDetect, StepIdentify, StepRip, StepEject}
+}
+
+// CanonicalTranscodeSteps is the compute-bound tail: transcode →
+// compress → move → notify. Materialised onto kind='transcode' jobs
+// after the parent rip job succeeds.
+func CanonicalTranscodeSteps() []StepID {
+	return []StepID{StepTranscode, StepCompress, StepMove, StepNotify}
+}
+
+// JobKind discriminates rip-half from transcode-half jobs. Monolithic
+// (audio CD / DATA) pipelines keep kind='rip' and run the whole
+// canonical 8-step list inside a single job.
+type JobKind string
+
+const (
+	JobKindRip       JobKind = "rip"
+	JobKindTranscode JobKind = "transcode"
+)
 
 // JobStepState transitions:
 //
@@ -211,6 +238,9 @@ type Job struct {
 	DiscID         string     `json:"disc_id"`
 	DriveID        string     `json:"drive_id,omitempty"`
 	ProfileID      string     `json:"profile_id"`
+	Kind           JobKind    `json:"kind"`
+	ParentJobID    string     `json:"parent_job_id,omitempty"` // set on transcode rows; FKs to the parent rip job
+	SpoolPath      string     `json:"spool_path,omitempty"`    // set on rip rows during execution, copied onto transcode rows for handoff
 	State          JobState   `json:"state"`
 	ActiveStep     StepID     `json:"active_step,omitempty"`
 	ActiveSubStep  string     `json:"active_substep,omitempty"`

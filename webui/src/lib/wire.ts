@@ -142,11 +142,19 @@ export interface JobStep {
   notes?: Record<string, unknown>;
 }
 
+export type JobKind = 'rip' | 'transcode';
+
 export interface Job {
   id: string;
   disc_id: string;
   drive_id?: string;
   profile_id: string;
+  // kind is always present on rows from the daemon (NOT NULL DEFAULT 'rip'
+  // at the SQL layer); optional in TS so the many hand-rolled test
+  // fixtures don't all need to spell it out. Treat absent as 'rip'.
+  kind?: JobKind;
+  parent_job_id?: string;
+  spool_path?: string;
   state: JobState;
   active_step?: StepID;
   active_substep?: string;
