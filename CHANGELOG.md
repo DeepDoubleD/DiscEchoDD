@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-05-18
+
 ### Added
 - Settings → System → "API keys & connections" gains an inline editor for the IGDB OAuth credentials, TMDB v3 API key, and MakeMKV beta key. Edits take effect immediately — no container restart. Each row carries a `Configured (UI)` / `Configured (env)` / `Unset` source pill so you can always tell which surface owns the credential. UI-set values override env; clearing falls back to env. IGDB and TMDB rows expose a Test button that round-trips against the real upstream (Twitch OAuth + IGDB /games for IGDB; GET /configuration for TMDB) before saving; MakeMKV has no upstream test and renders a "Validated on next rip" caption instead.
 - Settings → System gains an "Encoding" section: a Concurrent encodes input (1, default; takes effect on next daemon restart), a Spool cap input in GiB (100, default; takes effect immediately), and a live "Spool usage: X / Y" readout that polls `/api/system/spool` every 10s. The readout flips to a `CAP REACHED — pausing new rips` warning when usage hits the cap, surfacing the backpressure state described below.
