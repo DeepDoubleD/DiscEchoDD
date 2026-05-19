@@ -92,32 +92,63 @@ describe('AwaitingDecisionCard', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('Use top match · Start rip button posts to /start', async () => {
-    const { getByText } = render(AwaitingDecisionCard, { disc: lowConfDisc });
-    await fireEvent.click(getByText('Use top match · Start rip'));
+  it('Start rip button posts to /start with the top match by default', async () => {
+    const { getByTestId } = render(AwaitingDecisionCard, { disc: lowConfDisc });
+    const btn = getByTestId('start-rip');
+    expect(btn.textContent).toContain('Jackass: The Movie');
+    await fireEvent.click(btn);
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/discs/disc-low/start',
       expect.objectContaining({ method: 'POST' }),
     );
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
+    expect(body.candidate_index).toBe(0);
   });
 
-  it('a second rapid click on Use top match does not fire a second /start', async () => {
-    const { getByText } = render(AwaitingDecisionCard, { disc: lowConfDisc });
-    const btn = getByText('Use top match · Start rip');
+  it('row click selects the candidate without posting; Start rip then uses that index', async () => {
+    const { getByTestId } = render(AwaitingDecisionCard, { disc: lowConfDisc });
+    // Click the non-top row — must NOT fire a /start request.
+    await fireEvent.click(getByTestId('candidate-row-1'));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // Start button label tracks the selection.
+    const btn = getByTestId('start-rip');
+    expect(btn.textContent).toContain('Jackass Number Two');
+    // Clicking Start now POSTs with candidate_index=1.
+    await fireEvent.click(btn);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
+    expect(body.candidate_index).toBe(1);
+  });
+
+  it('a second rapid click on Start rip does not fire a second /start', async () => {
+    const { getByTestId } = render(AwaitingDecisionCard, { disc: lowConfDisc });
+    const btn = getByTestId('start-rip');
     await fireEvent.click(btn);
     await fireEvent.click(btn);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('auto-confirm and a manual click cannot both fire /start', async () => {
-    const { getByText } = render(AwaitingDecisionCard, { disc: highConfDisc });
+    const { getByTestId } = render(AwaitingDecisionCard, { disc: highConfDisc });
     await tick();
     // Halfway through the 8-second auto-confirm countdown the user
-    // clicks Use top match. Both code paths must coalesce to one POST.
+    // clicks Start rip. Both code paths must coalesce to one POST.
     await vi.advanceTimersByTimeAsync(4000);
-    await fireEvent.click(getByText('Use top match · Start rip'));
+    await fireEvent.click(getByTestId('start-rip'));
     await vi.advanceTimersByTimeAsync(8000);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('row click cancels the auto-rip countdown', async () => {
+    const { getByTestId, queryByText } = render(AwaitingDecisionCard, { disc: highConfDisc });
+    await tick();
+    expect(queryByText(/Auto-rip in/)).not.toBeNull();
+    await fireEvent.click(getByTestId('candidate-row-0'));
+    await tick();
+    expect(queryByText(/Auto-rip in/)).toBeNull();
+    // Timer is no longer running, so advancing past 8s must not POST.
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('renders inline (not wrapped in a bottom sheet dialog)', () => {
@@ -186,9 +217,9 @@ describe('AwaitingDecisionCard', () => {
       expect(getByText('Search TMDB')).toBeInTheDocument();
     });
 
-    it('hides the Use top match button when there are no candidates to pick', () => {
-      const { queryByText } = render(AwaitingDecisionCard, { disc: audioNoMatch });
-      expect(queryByText(/Use top match/)).toBeNull();
+    it('hides the Start rip button when there are no candidates to pick', () => {
+      const { queryByTestId } = render(AwaitingDecisionCard, { disc: audioNoMatch });
+      expect(queryByTestId('start-rip')).toBeNull();
     });
   });
 });

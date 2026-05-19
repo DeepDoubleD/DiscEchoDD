@@ -27,10 +27,15 @@
   // It disables both buttons + the timer's startDisc call so two
   // jobs can never enqueue for the same disc from this card.
   let starting = false;
+  // Index of the currently radio-selected candidate. Defaults to the
+  // top match. Row clicks update this without firing a rip; the Start
+  // button reads from here.
+  let selectedIndex = 0;
 
   $: liveDisc = $discs[disc.id] ?? disc;
   $: candidates = liveDisc.candidates ?? [];
   $: topConfidence = candidates[0]?.confidence ?? 0;
+  $: selectedCandidate = candidates[selectedIndex] ?? candidates[0];
   $: isGameDisc = ['PSX', 'PS2', 'SAT', 'DC', 'XBOX'].includes(liveDisc.type);
   // BDMV/UHD/DVD are the only disc types whose handlers implement
   // TitleScanner. Hide the Pick titles… affordance for everything else
@@ -68,6 +73,21 @@
     const v = (e.target as HTMLSelectElement).value;
     chosenProfileID = v;
     profileTouched = true;
+    // Any user interaction with the picker cancels the auto-rip
+    // countdown — the user is making choices, don't race them.
+    cancelled = true;
+    clearInterval(timer);
+  }
+
+  function select(idx: number): void {
+    if (starting) return;
+    if (idx < 0 || idx >= candidates.length) return;
+    selectedIndex = idx;
+    // Row click is the other half of "the user is interacting" —
+    // cancel the auto-rip countdown so the timer doesn't pre-empt
+    // their Start button click.
+    cancelled = true;
+    clearInterval(timer);
   }
   // The manual-search backend dispatches on disc.type — MB for audio
   // CDs, IGDB for game discs, TMDB for video — so the placeholder +
@@ -184,10 +204,10 @@
       profileId = profileTouched && chosenProfileID ? chosenProfileID : dataProfileID();
       candidateIndex = undefined;
     } else {
-      const c = candidates[0];
+      const c = candidates[selectedIndex] ?? candidates[0];
       if (!c) return;
       profileId = profileTouched && chosenProfileID ? chosenProfileID : profileForCandidate(c);
-      candidateIndex = 0;
+      candidateIndex = candidates[selectedIndex] ? selectedIndex : 0;
     }
     if (!profileId) return;
     starting = true;
@@ -312,10 +332,12 @@
         {candidates.length} match{candidates.length === 1 ? '' : 'es'}
       </div>
       {#if !searching}
-        {#if autoConfirmAllowed}
+        {#if autoConfirmAllowed && !cancelled}
           <div class="mt-1 font-mono text-[11px] text-text-3">
             {`Auto-rip in ${countdownSec}s`}
           </div>
+        {:else if autoConfirmAllowed && cancelled && candidates.length > 0}
+          <div class="mt-1 text-[11px] text-text-3">Pick a title to rip</div>
         {:else if $operationMode === 'manual' && candidates.length > 0}
           <div class="mt-1 text-[11px] text-text-3">Manual mode · pick a title to rip</div>
         {:else if candidates.length > 0}
@@ -378,17 +400,19 @@
         <button
           class="flex w-full min-h-[44px] items-center gap-3 rounded-xl border p-3 text-left"
           style="
-            border-color: {i === 0 ? 'rgba(0,214,143,0.35)' : 'var(--border)'};
-            background: {i === 0 ? 'rgba(0,214,143,0.04)' : 'transparent'};
+            border-color: {i === selectedIndex ? 'rgba(0,214,143,0.35)' : 'var(--border)'};
+            background: {i === selectedIndex ? 'rgba(0,214,143,0.04)' : 'transparent'};
           "
-          on:click={() => pick(i)}
+          on:click={() => select(i)}
           disabled={starting}
+          aria-pressed={i === selectedIndex}
+          data-testid={`candidate-row-${i}`}
         >
           <span
             class="relative flex h-5 w-5 items-center justify-center rounded-full border"
-            style="border-color: {i === 0 ? 'var(--accent)' : '#3f3f46'}"
+            style="border-color: {i === selectedIndex ? 'var(--accent)' : '#3f3f46'}"
           >
-            {#if i === 0}<span class="h-2.5 w-2.5 rounded-full bg-accent"></span>{/if}
+            {#if i === selectedIndex}<span class="h-2.5 w-2.5 rounded-full bg-accent"></span>{/if}
           </span>
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
@@ -458,10 +482,11 @@
         {#if candidates.length > 0}
           <button
             class="min-h-[44px] flex-1 rounded-xl bg-accent text-[14px] font-semibold text-black disabled:opacity-50"
-            on:click={() => pick(0)}
+            on:click={() => pick(selectedIndex)}
             disabled={starting || scanning}
+            data-testid="start-rip"
           >
-            Use top match · Start rip
+            Start rip{selectedCandidate ? ` · ${selectedCandidate.title}` : ''}
           </button>
         {/if}
         {#if titleScanSupported && scanProfileID}
