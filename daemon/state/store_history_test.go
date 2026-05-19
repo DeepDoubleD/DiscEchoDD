@@ -243,3 +243,37 @@ func TestStore_ClearHistory(t *testing.T) {
 		t.Errorf("second ClearHistory: want 0, got %d", n2)
 	}
 }
+
+// ClearHistory must leave the drive's currently-inserted disc alive
+// even when its only jobs are finished — otherwise the awaiting-
+// decision card on the dashboard points at a row that no longer
+// exists and the next /start 404s.
+func TestStore_ClearHistory_KeepsCurrentlyInsertedDisc(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	prof := newProfile(t, s, "DVD-Movie", state.DiscTypeDVD)
+
+	disc := &state.Disc{DriveID: drv.ID, Type: state.DiscTypeDVD, Title: "still inserted"}
+	if err := s.CreateDisc(ctx, disc); err != nil {
+		t.Fatalf("create disc: %v", err)
+	}
+	job := &state.Job{DiscID: disc.ID, DriveID: drv.ID, ProfileID: prof.ID}
+	if err := s.CreateJob(ctx, job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := s.UpdateJobState(ctx, job.ID, state.JobStateFailed, "boom"); err != nil {
+		t.Fatalf("set failed: %v", err)
+	}
+
+	if _, err := s.ClearHistory(ctx); err != nil {
+		t.Fatalf("ClearHistory: %v", err)
+	}
+
+	if _, err := s.GetDisc(ctx, disc.ID); err != nil {
+		t.Errorf("currently-inserted disc should be preserved, got: %v", err)
+	}
+	if _, err := s.GetJob(ctx, job.ID); err == nil {
+		t.Errorf("finished job should be cleared")
+	}
+}

@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Deleting the last history row for a disc that's still in the drive no longer nukes the disc out from under the awaiting-decision card. Previously, removing the final terminal job for a disc cascade-deleted the disc row even when it was still physically inserted, which silently 404'd the next `/api/discs/<id>/start` call — clicking Start rip looked like "nothing happened" while the identify and history both vanished. Single-job DELETE and Clear History now preserve any disc that's still the drive's most-recent (the proxy for "currently inserted").
+
 ## [0.26.0] - 2026-05-19
 
 ### Added

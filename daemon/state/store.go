@@ -2520,12 +2520,26 @@ func (s *Store) DeleteJobAndOrphans(ctx context.Context, jobID string) error {
 		return fmt.Errorf("delete job: %w", err)
 	}
 
-	// Drop the disc only if no other job references it. Active rips on
-	// the same disc keep the row alive.
+	// Drop the disc only if no other job references it AND it isn't the
+	// drive's most-recent disc (the proxy for "still physically
+	// inserted"). Without the newest-disc guard, deleting the last
+	// history entry for a disc that's currently in the drive nukes the
+	// row out from under the awaiting-decision card — the next
+	// /start or /identify against that disc id returns 404. Disc rows
+	// with a NULL/empty drive_id (orphaned by drive removal) still get
+	// pruned the usual way.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM discs
 		WHERE id = ?
-		  AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.disc_id = discs.id)`, discID); err != nil {
+		  AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.disc_id = discs.id)
+		  AND (
+		    discs.drive_id IS NULL OR discs.drive_id = ''
+		    OR EXISTS (
+		      SELECT 1 FROM discs d2
+		      WHERE d2.drive_id = discs.drive_id
+		        AND d2.created_at > discs.created_at
+		    )
+		  )`, discID); err != nil {
 		return fmt.Errorf("delete orphan disc: %w", err)
 	}
 
@@ -2559,12 +2573,25 @@ func (s *Store) ClearHistory(ctx context.Context) (int, error) {
 	// no active rip. The jobs.disc_id ON DELETE CASCADE removes those
 	// discs' jobs, job_steps and log_lines. The first EXISTS clause
 	// keeps discs that never had a job (one still awaiting a decision).
+	// The drive_id / newest-disc clause keeps the drive's currently-
+	// inserted disc alive even when its only jobs are finished — the
+	// alternative is the awaiting-decision card on the dashboard
+	// pointing at a row that no longer exists, and the next /start
+	// returning 404.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM discs
 		WHERE EXISTS (SELECT 1 FROM jobs j WHERE j.disc_id = discs.id)
 		  AND NOT EXISTS (
 		    SELECT 1 FROM jobs j WHERE j.disc_id = discs.id
-		      AND j.state IN ('queued','identifying','running','paused'))`); err != nil {
+		      AND j.state IN ('queued','identifying','running','paused'))
+		  AND (
+		    discs.drive_id IS NULL OR discs.drive_id = ''
+		    OR EXISTS (
+		      SELECT 1 FROM discs d2
+		      WHERE d2.drive_id = discs.drive_id
+		        AND d2.created_at > discs.created_at
+		    )
+		  )`); err != nil {
 		return 0, fmt.Errorf("delete history discs: %w", err)
 	}
 

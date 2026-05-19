@@ -190,11 +190,21 @@ func TestDeleteJob_TerminalSucceedsAndPrunesOrphanDisc(t *testing.T) {
 	drv := seedDrive(t, h)
 	prof := seedProfile(t, h)
 	disc := seedDisc(t, h, drv.ID)
+	ctx := context.Background()
+	// Seed a second, newer disc on the same drive so the disc under
+	// test is no longer the drive's most-recent — i.e. it counts as
+	// "ejected" and the orphan-delete is allowed to fire.
+	newer := &state.Disc{
+		DriveID: drv.ID, Type: state.DiscTypeAudioCD, Title: "newer",
+		CreatedAt: disc.CreatedAt.Add(time.Second),
+	}
+	if err := h.Store.CreateDisc(ctx, newer); err != nil {
+		t.Fatal(err)
+	}
 	j := &state.Job{
 		DiscID: disc.ID, DriveID: drv.ID, ProfileID: prof.ID,
 		State: state.JobStateDone,
 	}
-	ctx := context.Background()
 	if err := h.Store.CreateJob(ctx, j); err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +227,44 @@ func TestDeleteJob_TerminalSucceedsAndPrunesOrphanDisc(t *testing.T) {
 	}
 	if _, err := h.Store.GetDisc(ctx, disc.ID); err == nil {
 		t.Errorf("orphan disc still exists after delete")
+	}
+}
+
+// Deleting the last job for a disc that's still the drive's most-recent
+// (proxy for "physically still inserted") must keep the disc row so the
+// dashboard's awaiting-decision card and a follow-up /start don't 404.
+func TestDeleteJob_KeepsDiscWhenStillInDrive(t *testing.T) {
+	h := apitestServer(t)
+	drv := seedDrive(t, h)
+	prof := seedProfile(t, h)
+	disc := seedDisc(t, h, drv.ID)
+	j := &state.Job{
+		DiscID: disc.ID, DriveID: drv.ID, ProfileID: prof.ID,
+		State: state.JobStateFailed,
+	}
+	ctx := context.Background()
+	if err := h.Store.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Store.UpdateJobState(ctx, j.ID, state.JobStateFailed, "boom"); err != nil {
+		t.Fatal(err)
+	}
+
+	r := chi.NewRouter()
+	r.Delete("/api/jobs/{id}", h.DeleteJob)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/jobs/"+j.ID, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+
+	if _, err := h.Store.GetJob(ctx, j.ID); err == nil {
+		t.Errorf("job still exists after delete")
+	}
+	if _, err := h.Store.GetDisc(ctx, disc.ID); err != nil {
+		t.Errorf("disc should be preserved (still in drive), got err: %v", err)
 	}
 }
 
