@@ -24,8 +24,8 @@ func TestOpen_AppliesMigrationsOnFreshDB(t *testing.T) {
 	if err := row.Scan(&v); err != nil {
 		t.Fatalf("scan version: %v", err)
 	}
-	if v != 17 {
-		t.Errorf("schema_migrations max version: want 17, got %d", v)
+	if v != 18 {
+		t.Errorf("schema_migrations max version: want 18, got %d", v)
 	}
 
 	for _, tbl := range []string{
@@ -63,8 +63,8 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	if err := row.Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 17 {
-		t.Errorf("schema_migrations rows after second open: want 17, got %d", n)
+	if n != 18 {
+		t.Errorf("schema_migrations rows after second open: want 18, got %d", n)
 	}
 }
 
@@ -310,6 +310,66 @@ func TestMigration009_CollapsesDuplicateDiscsAndReparentsJobs(t *testing.T) {
 		VALUES ('d-dupe', 'drv-x', 'AUDIO_CD', 'fbHash', '[]', '{}', '2026-05-17T17:00:00Z')`)
 	if err == nil {
 		t.Error("insert with duplicate (drive_id, toc_hash) should fail after migration")
+	}
+}
+
+// TestMigration018_SeedsDVDMakeMKVProfiles confirms that on a DB that
+// already carries the legacy HandBrake-engine DVD profiles (which
+// migration 018 keys off via WHERE EXISTS), replaying 018's body
+// inserts the three new MakeMKV-engine seeds. Mirrors the structure of
+// the other migration-replay tests: we don't re-Open, we hand-INSERT
+// the predicate rows after the migration runner has caught up, then
+// execute 018's SQL directly.
+func TestMigration018_SeedsDVDMakeMKVProfiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.sqlite")
+
+	db, err := state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := context.Background()
+
+	// Migration 018's WHERE EXISTS predicates gate on the legacy DVD
+	// rows; without them the inserts no-op (intended — keeps the
+	// migration from polluting test DBs that bypassed the seeder).
+	if _, err := db.Conn().ExecContext(ctx, `
+		INSERT INTO profiles (id, disc_type, name, engine, format, preset,
+		                      container, video_codec, quality_preset,
+		                      drive_policy, options_json,
+		                      output_path_template, enabled, step_count,
+		                      created_at, updated_at)
+		VALUES
+		  ('dvd-mov-pre',    'DVD', 'DVD-Movie',          'HandBrake', 'MKV', 'x', 'MKV', 'x264', 'x', 'any', '{}', '{{.Title}}.mkv', 1, 7, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+		  ('dvd-series-pre', 'DVD', 'DVD-Series',         'HandBrake', 'MKV', 'x', 'MKV', 'x264', 'x', 'any', '{}', '{{.Show}}.mkv',  1, 7, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := migrationBody("018_dvd_makemkv_seeds.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Conn().ExecContext(ctx, body); err != nil {
+		t.Fatalf("re-exec migration 018: %v", err)
+	}
+
+	wantSeeds := map[string]string{
+		"DVD-Movie (MakeMKV)":          "MakeMKV",
+		"DVD-Movie + Extras (MakeMKV)": "MakeMKV+HandBrake",
+		"DVD-Series (MakeMKV)":         "MakeMKV+HandBrake",
+	}
+	for name, wantEngine := range wantSeeds {
+		row := db.Conn().QueryRowContext(ctx,
+			`SELECT engine FROM profiles WHERE disc_type='DVD' AND name=?`, name)
+		var got string
+		if err := row.Scan(&got); err != nil {
+			t.Errorf("seed %q not inserted: %v", name, err)
+			continue
+		}
+		if got != wantEngine {
+			t.Errorf("seed %q engine: want %s, got %s", name, wantEngine, got)
+		}
 	}
 }
 

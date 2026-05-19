@@ -410,6 +410,14 @@ func TestDriveErrorTip(t *testing.T) {
 		{"cd-info: exit status 1", "couldn't read this disc"},
 		{"isoinfo: timed out", ""},
 		{"", ""},
+		// MakeMKV beta-key errors — match the canonical strings the
+		// makemkvcon binary prints when the rolling key is missing /
+		// expired / unregistered.
+		{"makemkv rip title 1: Evaluation period has expired", "MakeMKV's beta key"},
+		{"makemkv scan: Trial period expired", "MakeMKV's beta key"},
+		{"makemkv: The MakeMKV application is not registered", "MakeMKV's beta key"},
+		// "expired" alone without makemkv context shouldn't trip the tip.
+		{"redumper: subscription expired", ""},
 	}
 	for _, tt := range tests {
 		got := state.DriveErrorTip(tt.in)

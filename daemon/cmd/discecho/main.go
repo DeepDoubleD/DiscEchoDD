@@ -173,10 +173,12 @@ func main() {
 		slog.Info("NVENC not detected; profiles requesting nvenc_* will fall back to software")
 	}
 
-	// MakeMKV is shared by BDMV and UHD (DVD uses dvdbackup since
-	// v0.2.2 — see CHANGELOG; MakeMKV's rolling beta key plus the
-	// upstream-expiration behaviour made it a poor fit for DVDs,
-	// which libdvdcss handles fine).
+	// MakeMKV is shared by BDMV, UHD, and (since v0.26) DVD-Video profiles
+	// whose engine is "MakeMKV" or "MakeMKV+HandBrake". DVD-Video profiles
+	// on the legacy "HandBrake" engine still rip via dvdbackup +
+	// libdvdcss — kept as the seeded default since libdvdcss handles
+	// the vast majority of catalogue discs without depending on the
+	// rolling MakeMKV beta key.
 	makeMKV := tools.NewMakeMKV(cfg.MakeMKVBin, cfg.MakeMKVDataDir)
 	dvdBackup := tools.NewDVDBackup("")
 
@@ -190,6 +192,8 @@ func main() {
 		TMDB:             tmdbClient,
 		DVDBackup:        dvdBackup,
 		HandBrakeScanner: handBrake,
+		MakeMKVScanner:   makeMKV,
+		MakeMKVRipper:    makeMKV,
 		Tools:            toolReg,
 		LibraryRoot:      cfg.LibraryMovies,
 		WorkRoot:         filepath.Join(cfg.DataPath, "work"),

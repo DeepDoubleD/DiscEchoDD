@@ -35,6 +35,19 @@ type HandBrakeScanner interface {
 	Scan(ctx context.Context, source string) ([]tools.HandBrakeTitle, error)
 }
 
+// MakeMKVScanner is the slice of tools.MakeMKV used at scan-time. Used
+// by profiles whose engine is "MakeMKV" or "MakeMKV+HandBrake" — the
+// HandBrake-engine path continues to scan via dvdbackup'd VIDEO_TS.
+type MakeMKVScanner interface {
+	Scan(ctx context.Context, devPath string) ([]tools.MakeMKVTitle, error)
+}
+
+// MakeMKVRipper is the slice of tools.MakeMKV used at rip-time. Same
+// engine constraint as MakeMKVScanner above.
+type MakeMKVRipper interface {
+	Rip(ctx context.Context, devPath string, titleID int, outDir string, sink tools.Sink) error
+}
+
 // Deps bundles the handler's dependencies for mock injection.
 // MetadataStore is the thin slice of *state.Store the pipeline needs
 // to update disc.metadata_json mid-run (e.g. to persist the scan title
@@ -49,6 +62,8 @@ type Deps struct {
 	TMDB             identify.TMDBClient
 	DVDBackup        DVDMirror
 	HandBrakeScanner HandBrakeScanner
+	MakeMKVScanner   MakeMKVScanner
+	MakeMKVRipper    MakeMKVRipper
 	Tools            *tools.Registry
 	LibraryRoot      string
 	WorkRoot         string
@@ -188,10 +203,19 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 	return h.RunTranscode(ctx, result, disc, prof, sink)
 }
 
-// RunRip executes the drive-bound half: detect, identify, dvdbackup
-// mirror of VIDEO_TS into spoolDir/rip/<VOLUME_LABEL>/, eject. The
-// transcode step (HandBrake) reads from the spooled local mirror, so
-// the drive is free for the next disc as soon as eject completes.
+// RunRip executes the drive-bound half: detect, identify, rip, eject.
+// The rip step's tool chain depends on the profile's engine:
+//
+//   - "HandBrake" (or unset, the legacy default) — dvdbackup mirrors
+//     VIDEO_TS into spoolDir/rip/<VOLUME_LABEL>/. The transcode step
+//     later runs HandBrake against the local mirror, so the drive is
+//     free for the next disc as soon as eject completes.
+//   - "MakeMKV" / "MakeMKV+HandBrake" — MakeMKV scans the disc for
+//     titles, picks the relevant ones (movie/series + extras), rips
+//     each title to a .mkv in spoolDir/rip/. Skips the dvdbackup
+//     mirror entirely; gains MakeMKV's decryption coverage for newer
+//     CSS variants and (for the passthrough engine) lets the move
+//     step ship MPEG-2-in-MKV straight to the library.
 func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, spoolDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
 	sink.OnStepStart(state.StepDetect)
 	sink.OnStepDone(state.StepDetect, nil)
@@ -203,6 +227,52 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
+
+	ripDir := filepath.Join(spoolDir, "rip")
+	if err := os.MkdirAll(ripDir, 0o755); err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, fmt.Errorf("create rip dir: %w", err)
+	}
+
+	var (
+		result pipelines.RipResult
+		err    error
+	)
+	if engineUsesMakeMKV(prof) {
+		result, err = h.runRipMakeMKV(ctx, drv, disc, prof, spoolDir, ripDir, sink)
+	} else {
+		result, err = h.runRipDVDBackup(ctx, drv, spoolDir, ripDir, sink)
+	}
+	if err != nil {
+		return pipelines.RipResult{}, err
+	}
+
+	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
+		Tools:       h.deps.Tools,
+		ShouldEject: h.deps.ShouldEject,
+	}, drv)
+
+	return result, nil
+}
+
+// engineUsesMakeMKV reports whether the profile's engine string asks
+// for MakeMKV-driven ripping. Empty engine falls back to dvdbackup
+// (legacy default).
+func engineUsesMakeMKV(prof *state.Profile) bool {
+	if prof == nil {
+		return false
+	}
+	switch prof.Engine {
+	case "MakeMKV", "MakeMKV+HandBrake":
+		return true
+	}
+	return false
+}
+
+// runRipDVDBackup is the legacy rip path: dvdbackup mirrors VIDEO_TS
+// into spoolDir/rip/<VOLUME_LABEL>/. Drive-bound; emits step events
+// to sink.
+func (h *Handler) runRipDVDBackup(ctx context.Context, drv *state.Drive, spoolDir, ripDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
 	if h.deps.DVDBackup == nil {
 		err := errors.New("dvdvideo: DVDBackup not configured")
 		sink.OnStepFailed(state.StepRip, err)
@@ -212,12 +282,6 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 		err := errors.New("dvdvideo: HandBrakeScanner not configured")
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, err
-	}
-
-	ripDir := filepath.Join(spoolDir, "rip")
-	if err := os.MkdirAll(ripDir, 0o755); err != nil {
-		sink.OnStepFailed(state.StepRip, err)
-		return pipelines.RipResult{}, fmt.Errorf("create rip dir: %w", err)
 	}
 	sink.OnLog(state.LogLevelInfo, "dvdbackup: mirroring %s → spool", drv.DevPath)
 	mirrorStart := time.Now()
@@ -230,23 +294,164 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 		pipelines.HumanDuration(time.Since(mirrorStart)))
 	sink.OnStepDone(state.StepRip, map[string]any{"source": source})
 
-	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
-		Tools:       h.deps.Tools,
-		ShouldEject: h.deps.ShouldEject,
-	}, drv)
-
 	return pipelines.RipResult{
 		SpoolPath: spoolDir,
-		Notes:     map[string]any{"source": source},
+		Notes:     map[string]any{"source": source, "shape": "video_ts"},
 	}, nil
 }
 
-// RunTranscode executes the compute-bound half: HandBrake scan + per-
-// title encode → spool/title*.{mkv,mp4}, atomic move to library, notify.
-// Resolves the dvdbackup source dir by walking spool/rip/ so a
-// daemon-crash + restart can still find the right input (Notes is
-// in-memory only).
+// runRipMakeMKV is the MakeMKV rip path: scan titles, pick the
+// relevant ones, rip each to a .mkv under spoolDir/rip/. Used when the
+// profile's engine is "MakeMKV" or "MakeMKV+HandBrake". Mirrors the
+// shape of bdmv.RunRip.
+func (h *Handler) runRipMakeMKV(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, spoolDir, ripDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
+	if h.deps.MakeMKVScanner == nil || h.deps.MakeMKVRipper == nil {
+		err := errors.New("dvdvideo: MakeMKV not configured")
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, err
+	}
+	sink.OnLog(state.LogLevelInfo, "MakeMKV: scanning %s", drv.DevPath)
+	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath)
+	if err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, fmt.Errorf("makemkv scan: %w", err)
+	}
+
+	picked, mainID, err := selectDVDMakeMKVTitles(titles, prof, disc)
+	if err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, err
+	}
+	switch {
+	case mainID > 0:
+		sink.OnLog(state.LogLevelInfo, "MakeMKV: scan complete, ripping main feature + %d bonus title(s)", len(picked)-1)
+	case len(picked) > 1:
+		sink.OnLog(state.LogLevelInfo, "MakeMKV: scan complete, ripping %d titles", len(picked))
+	default:
+		sink.OnLog(state.LogLevelInfo, "MakeMKV: scan complete, picked title %d (%s)",
+			picked[0].ID, pipelines.HumanDuration(time.Duration(picked[0].DurationSec)*time.Second))
+	}
+
+	ripStart := time.Now()
+	for _, t := range picked {
+		sink.OnLog(state.LogLevelInfo, "MakeMKV: ripping title %d (%s)",
+			t.ID, pipelines.HumanDuration(time.Duration(t.DurationSec)*time.Second))
+		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, pipelines.NewStepSink(sink, state.StepRip)); err != nil {
+			sink.OnStepFailed(state.StepRip, err)
+			return pipelines.RipResult{}, fmt.Errorf("makemkv rip title %d: %w", t.ID, err)
+		}
+	}
+	rippedFiles, err := listMKVIn(ripDir)
+	if err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, fmt.Errorf("makemkv rip: list outputs: %w", err)
+	}
+	if len(rippedFiles) == 0 {
+		err := fmt.Errorf("makemkv rip: no .mkv outputs in %s", ripDir)
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, err
+	}
+	var totalBytes int64
+	for _, f := range rippedFiles {
+		if fi, statErr := os.Stat(f); statErr == nil {
+			totalBytes += fi.Size()
+		}
+	}
+	sink.OnLog(state.LogLevelInfo, "MakeMKV: rip complete, %d file(s) %s in %s",
+		len(rippedFiles), pipelines.HumanBytes(totalBytes),
+		pipelines.HumanDuration(time.Since(ripStart)))
+	sink.OnStepDone(state.StepRip, map[string]any{
+		"title_id":  picked[0].ID,
+		"rip_files": rippedFiles,
+		"shape":     "mkv_files",
+	})
+
+	return pipelines.RipResult{
+		SpoolPath: spoolDir,
+		Notes: map[string]any{
+			"title_id":  picked[0].ID,
+			"rip_files": rippedFiles,
+			"shape":     "mkv_files",
+		},
+	}, nil
+}
+
+// selectDVDMakeMKVTitles picks which MakeMKV-scanned titles to rip
+// based on the profile shape. Resolution order:
+//
+//  1. User picker (disc.metadata_json.selected_title_ids) wins.
+//  2. Movie profile → pipelines.SelectMovieTitles (longest + optional
+//     extras).
+//  3. Series profile → every title >= options.min_title_seconds.
+//
+// mainID is non-zero only when extras mode kicked in alongside a
+// longest-title auto-pick; downstream code uses it to route extras
+// into bucket folders.
+func selectDVDMakeMKVTitles(titles []tools.MakeMKVTitle, prof *state.Profile, disc *state.Disc) ([]tools.MakeMKVTitle, int, error) {
+	if ids := pipelines.SelectedTitleIDsFromDisc(disc); len(ids) > 0 {
+		return pipelines.SelectMovieTitles(titles, prof, disc)
+	}
+	if IsMovieProfile(prof) {
+		return pipelines.SelectMovieTitles(titles, prof, disc)
+	}
+	minSec := pipelines.IntOption(prof, "min_title_seconds", 300)
+	out := make([]tools.MakeMKVTitle, 0, len(titles))
+	for _, t := range titles {
+		if t.DurationSec >= minSec {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return nil, 0, fmt.Errorf("no MakeMKV title with duration >= %ds", minSec)
+	}
+	return out, 0, nil
+}
+
+// listMKVIn lists every .mkv file at the top level of dir, in stable
+// lexical order. Mirrors bdmv's helper; kept package-private here to
+// avoid leaking a generic file-listing primitive into the shared
+// pipelines package.
+func listMKVIn(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".mkv" {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// RunTranscode executes the compute-bound half. Branches on the
+// profile's engine:
+//
+//   - "HandBrake" — HandBrake scan + per-title encode of the
+//     dvdbackup'd VIDEO_TS mirror → spool/title*.{mkv,mp4}, atomic
+//     move, notify.
+//   - "MakeMKV+HandBrake" — HandBrake-encode each .mkv rip output to a
+//     transcode/ subdir, atomic move, notify.
+//   - "MakeMKV" — no transcode (step is emitted as skipped to keep the
+//     stepper UIs honest), atomic-move .mkv rip outputs to library,
+//     notify.
+//
+// For the HandBrake path, the source dir is resolved by walking
+// spool/rip/ when Notes is empty so a daemon-crash + restart can
+// still find the right input (Notes is in-memory only).
 func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
+	if engineUsesMakeMKV(prof) {
+		return h.runTranscodeMakeMKV(ctx, result, disc, prof, sink)
+	}
+	return h.runTranscodeHandBrake(ctx, result, disc, prof, sink)
+}
+
+// runTranscodeHandBrake is the legacy transcode path: HandBrake scans
+// the dvdbackup'd VIDEO_TS source, encodes each picked title to the
+// profile's container/codec, atomic-moves outputs to the library.
+func (h *Handler) runTranscodeHandBrake(ctx context.Context, result pipelines.RipResult, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
 	source := stringFromNotes(result.Notes, "source")
 	if source == "" {
 		// Fallback after a daemon-crash restart: walk the rip dir for
@@ -456,6 +661,132 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 		LibraryRoot:    h.deps.LibraryRoot,
 	}, disc)
 	return nil
+}
+
+// runTranscodeMakeMKV handles the post-MakeMKV-rip transcode and move
+// steps for the "MakeMKV" (passthrough, no re-encode) and
+// "MakeMKV+HandBrake" (re-encode) engines. Both expect the rip step to
+// have left one .mkv per ripped title under spoolDir/rip/.
+func (h *Handler) runTranscodeMakeMKV(ctx context.Context, result pipelines.RipResult, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
+	rippedFiles, err := listMKVIn(filepath.Join(result.SpoolPath, "rip"))
+	if err != nil {
+		sink.OnStepStart(state.StepTranscode)
+		sink.OnStepFailed(state.StepTranscode, err)
+		return err
+	}
+	if len(rippedFiles) == 0 {
+		err := fmt.Errorf("no .mkv rip output under %s/rip", result.SpoolPath)
+		sink.OnStepStart(state.StepTranscode)
+		sink.OnStepFailed(state.StepTranscode, err)
+		return err
+	}
+
+	var moveSources []string
+	switch prof.Engine {
+	case "MakeMKV":
+		// Passthrough — emit a "skipped" transcode step for the stepper
+		// UI and move the rip outputs directly. Mirrors the way audio
+		// CDs report the transcode + compress steps as skipped.
+		sink.OnStepStart(state.StepTranscode)
+		sink.OnStepDone(state.StepTranscode, map[string]any{"skipped": true})
+		moveSources = rippedFiles
+	case "MakeMKV+HandBrake":
+		transcoded, err := h.transcodeMakeMKVRips(ctx, rippedFiles, result.SpoolPath, prof, sink)
+		if err != nil {
+			return err
+		}
+		moveSources = transcoded
+	default:
+		// engineUsesMakeMKV gated us into this function, so an unknown
+		// MakeMKV-family engine is a bug, not an input error.
+		err := fmt.Errorf("dvdvideo: unexpected engine %q in MakeMKV transcode path", prof.Engine)
+		sink.OnStepStart(state.StepTranscode)
+		sink.OnStepFailed(state.StepTranscode, err)
+		return err
+	}
+
+	sink.OnStepStart(state.StepMove)
+	moved, err := pipelines.MoveMovieOutputs(h.deps.LibraryRoot, moveSources, disc, prof)
+	if err != nil {
+		sink.OnStepFailed(state.StepMove, err)
+		return fmt.Errorf("move: %w", err)
+	}
+	for _, p := range moved {
+		sink.OnLog(state.LogLevelInfo, "move: → %s", p)
+	}
+	if len(moved) == 1 {
+		sink.OnStepDone(state.StepMove, map[string]any{"path": moved[0]})
+	} else {
+		sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
+	}
+
+	pipelines.RunNotifyStep(ctx, sink, pipelines.NotifyDeps{
+		Tools:          h.deps.Tools,
+		URLsForTrigger: h.deps.URLsForTrigger,
+		LibraryRoot:    h.deps.LibraryRoot,
+	}, disc)
+	return nil
+}
+
+// transcodeMakeMKVRips HandBrake-encodes each MakeMKV rip into a
+// `out_NN.mkv` file under spoolDir. Used by the MakeMKV+HandBrake
+// engine. Returns the encoded paths in the same order as rippedFiles
+// so the move step can pair them with the original title selection.
+func (h *Handler) transcodeMakeMKVRips(ctx context.Context, rippedFiles []string, spoolDir string, prof *state.Profile, sink pipelines.EventSink) ([]string, error) {
+	if h.deps.Tools == nil {
+		err := errors.New("dvdvideo: tools registry not configured")
+		sink.OnStepStart(state.StepTranscode)
+		sink.OnStepFailed(state.StepTranscode, err)
+		return nil, err
+	}
+	hb, ok := h.deps.Tools.Get("handbrake")
+	if !ok {
+		err := errors.New("dvdvideo: handbrake tool not registered")
+		sink.OnStepStart(state.StepTranscode)
+		sink.OnStepFailed(state.StepTranscode, err)
+		return nil, err
+	}
+	encoder, fellBack := pipelines.SelectHandBrakeEncoder(prof, h.deps.NVENCAvailable)
+	qualityRF := pipelines.IntOption(prof, "quality_rf", 20)
+	encoderPreset := pipelines.StringOption(prof, "encoder_preset", "slow")
+
+	sink.OnStepStart(state.StepTranscode)
+	if fellBack {
+		sink.OnLog(state.LogLevelWarn,
+			"NVENC requested but unavailable on host; falling back to %s software encoder", encoder)
+	}
+
+	transcoded := make([]string, 0, len(rippedFiles))
+	for i, rippedFile := range rippedFiles {
+		out := filepath.Join(spoolDir, fmt.Sprintf("out_%02d.mkv", i+1))
+		args := []string{
+			"--input", rippedFile,
+			"--output", out,
+			"--format", "av_mkv",
+			"--encoder", encoder,
+			"--encoder-preset", encoderPreset,
+			"--quality", strconv.Itoa(qualityRF),
+			"--all-audio",
+			"--markers",
+			"--all-subtitles",
+		}
+		sink.OnLog(state.LogLevelInfo, "HandBrake: encoding %s", filepath.Base(rippedFile))
+		encStart := time.Now()
+		if err := hb.Run(ctx, args, nil, spoolDir, pipelines.NewStepSink(sink, state.StepTranscode)); err != nil {
+			sink.OnStepFailed(state.StepTranscode, err)
+			return nil, fmt.Errorf("handbrake encode %s: %w", filepath.Base(rippedFile), err)
+		}
+		var encSize int64
+		if fi, statErr := os.Stat(out); statErr == nil {
+			encSize = fi.Size()
+		}
+		sink.OnLog(state.LogLevelInfo, "HandBrake: %s done, %s in %s",
+			filepath.Base(rippedFile), pipelines.HumanBytes(encSize),
+			pipelines.HumanDuration(time.Since(encStart)))
+		transcoded = append(transcoded, out)
+	}
+	sink.OnStepDone(state.StepTranscode, nil)
+	return transcoded, nil
 }
 
 // stringFromNotes extracts a string-valued key from a RipResult.Notes

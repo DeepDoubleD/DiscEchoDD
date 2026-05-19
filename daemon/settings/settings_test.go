@@ -333,15 +333,29 @@ func TestLoad_DVDProfilesSeeded(t *testing.T) {
 	}
 
 	dvds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
-	if len(dvds) != 3 {
-		t.Fatalf("want 3 DVD profiles, got %d", len(dvds))
+	if len(dvds) != 6 {
+		t.Fatalf("want 6 DVD profiles, got %d", len(dvds))
 	}
 	byName := map[string]*state.Profile{}
 	for i := range dvds {
 		byName[dvds[i].Name] = &dvds[i]
 	}
-	if byName["DVD-Movie"] == nil || byName["DVD-Movie + Extras"] == nil || byName["DVD-Series"] == nil {
-		t.Fatalf("missing seed names: %v", byName)
+	for _, name := range []string{
+		"DVD-Movie", "DVD-Movie + Extras", "DVD-Series",
+		"DVD-Movie (MakeMKV)", "DVD-Movie + Extras (MakeMKV)", "DVD-Series (MakeMKV)",
+	} {
+		if byName[name] == nil {
+			t.Fatalf("missing seed %q; got %v", name, byName)
+		}
+	}
+	if eng := byName["DVD-Movie (MakeMKV)"].Engine; eng != "MakeMKV" {
+		t.Errorf("DVD-Movie (MakeMKV) engine: want MakeMKV, got %q", eng)
+	}
+	if eng := byName["DVD-Series (MakeMKV)"].Engine; eng != "MakeMKV+HandBrake" {
+		t.Errorf("DVD-Series (MakeMKV) engine: want MakeMKV+HandBrake, got %q", eng)
+	}
+	if sc := byName["DVD-Movie (MakeMKV)"].StepCount; sc != 6 {
+		t.Errorf("DVD-Movie (MakeMKV) StepCount: want 6 (no transcode), got %d", sc)
 	}
 	mvExtras := byName["DVD-Movie + Extras"]
 	if v, _ := mvExtras.Options["include_extras"].(bool); !v {
@@ -388,7 +402,7 @@ func TestLoad_DVDProfilesSeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	dvds2, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
-	if len(dvds2) != 3 {
+	if len(dvds2) != 6 {
 		t.Errorf("after re-Load: %d", len(dvds2))
 	}
 }
@@ -514,8 +528,8 @@ func TestSeedVideoProfiles_Idempotent(t *testing.T) {
 		t.Errorf("BDMV after 2 loads = %d, want 2", len(bds))
 	}
 	dvds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
-	if len(dvds) != 3 {
-		t.Errorf("DVD after 2 loads = %d, want 3", len(dvds))
+	if len(dvds) != 6 {
+		t.Errorf("DVD after 2 loads = %d, want 6", len(dvds))
 	}
 	uhds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeUHD)
 	if len(uhds) != 1 {

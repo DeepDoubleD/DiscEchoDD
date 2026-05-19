@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
@@ -182,7 +181,7 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 // RunRip is the drive-bound half. Steps: detect, identify, MakeMKV
 // rip into spoolDir/rip/, eject. When disc.metadata_json carries
 // selected_title_ids (user came through the picker), rips exactly
-// those titles; otherwise falls back to pickLongestTitle (legacy
+// those titles; otherwise falls back to pipelines.PickLongestTitle (legacy
 // single-title behaviour). Drive freed on return.
 func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, spoolDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
 	sink.OnStepStart(state.StepDetect)
@@ -211,7 +210,7 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	// Pick titles to rip: user selection wins when present, otherwise
 	// fall back to the legacy longest-title heuristic so movie-profile
 	// auto-flow keeps working.
-	picked, mainID, err := selectTitles(titles, prof, disc)
+	picked, mainID, err := pipelines.SelectMovieTitles(titles, prof, disc)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, err
@@ -284,69 +283,6 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 			"rip_files":    rippedFiles,
 		},
 	}, nil
-}
-
-// selectTitles returns the user-picked titles when
-// disc.metadata_json.selected_title_ids is set, otherwise falls back
-// to the longest title meeting the profile's min_title_seconds floor.
-// When the profile opts into include_extras AND we're on the auto-
-// pick path, every other title in the [min_extra_seconds,
-// main × extras_max_ratio] duration band joins the slice after the
-// main title and mainID is set to the longest-title id so
-// downstream code (moveMultiTitle) can route the extras into an
-// `extras/` subfolder. Picker-driven flows return mainID=0 — the
-// user is telling us exactly what to rip.
-func selectTitles(titles []tools.MakeMKVTitle, prof *state.Profile, disc *state.Disc) ([]tools.MakeMKVTitle, int, error) {
-	if ids := pipelines.SelectedTitleIDsFromDisc(disc); len(ids) > 0 {
-		picked := make([]tools.MakeMKVTitle, 0, len(ids))
-		byID := make(map[int]tools.MakeMKVTitle, len(titles))
-		for _, t := range titles {
-			byID[t.ID] = t
-		}
-		for _, id := range ids {
-			if t, ok := byID[id]; ok {
-				picked = append(picked, t)
-			}
-		}
-		if len(picked) == 0 {
-			return nil, 0, fmt.Errorf("none of selected title IDs %v found in MakeMKV scan", ids)
-		}
-		return picked, 0, nil
-	}
-	main, err := pickLongestTitle(titles, prof)
-	if err != nil {
-		return nil, 0, err
-	}
-	out := []tools.MakeMKVTitle{main}
-	mainID := 0
-	if pipelines.IncludeExtrasFromProfile(prof) {
-		extras := selectExtras(titles, main,
-			pipelines.MinExtraSecondsFromProfile(prof),
-			pipelines.ExtrasMaxRatioFromProfile(prof))
-		if len(extras) > 0 {
-			out = append(out, extras...)
-			mainID = main.ID
-		}
-	}
-	return out, mainID, nil
-}
-
-// selectExtras picks every title in the duration band
-// [minSec, main.DurationSec × maxRatio] that isn't the main itself.
-// Returns matches in scan order so output ordering is deterministic.
-func selectExtras(titles []tools.MakeMKVTitle, main tools.MakeMKVTitle, minSec int, maxRatio float64) []tools.MakeMKVTitle {
-	maxSec := int(float64(main.DurationSec) * maxRatio)
-	out := make([]tools.MakeMKVTitle, 0)
-	for _, t := range titles {
-		if t.ID == main.ID {
-			continue
-		}
-		if t.DurationSec < minSec || t.DurationSec > maxSec {
-			continue
-		}
-		out = append(out, t)
-	}
-	return out
 }
 
 // listMKVIn lists every .mkv file at the top level of dir. Returns a
@@ -453,7 +389,7 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 
 	// move — atomic rename to library, one file per encoded title.
 	sink.OnStepStart(state.StepMove)
-	moved, err := h.moveMultiTitle(transcodedFiles, disc, prof)
+	moved, err := pipelines.MoveMovieOutputs(h.deps.LibraryRoot, transcodedFiles, disc, prof)
 	if err != nil {
 		sink.OnStepFailed(state.StepMove, err)
 		return fmt.Errorf("move: %w", err)
@@ -475,137 +411,8 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 	return nil
 }
 
-// moveMultiTitle atomic-moves each transcoded file into the library.
-// Three rendering modes:
-//
-//   - Picker drove the rip → render every file via the profile's
-//     template, using selected_title_episodes for TV per-episode
-//     naming when present.
-//   - Profile opted into include_extras AND >1 files were ripped →
-//     identify the main feature as the largest file by size and
-//     route every other file into `<mainDir>/extras/extra-NN.mkv`.
-//   - Auto-pick single file → existing single-template render.
-//
-// Colliding rendered paths (movie template with multi-title
-// picker pick) still get a `-titleNN` suffix to disambiguate.
-func (h *Handler) moveMultiTitle(srcs []string, disc *state.Disc, prof *state.Profile) ([]string, error) {
-	titleIDs := pipelines.SelectedTitleIDsFromDisc(disc)
-	epMap := pipelines.SelectedEpisodeMapFromDisc(disc)
-	season := pipelines.SelectedSeasonFromDisc(disc)
-
-	// Extras mode kicks in when the profile asked for it, the picker
-	// didn't override, and we actually got multiple files to place.
-	extrasMode := len(titleIDs) == 0 && len(srcs) > 1 &&
-		pipelines.IncludeExtrasFromProfile(prof)
-	mainIdx := -1
-	var mainDir string
-	var srcSizes []int64
-	var mainSize int64
-	if extrasMode {
-		srcSizes = sizeOfFiles(srcs)
-		mainIdx = indexOfLargest(srcSizes)
-		if mainIdx >= 0 && mainIdx < len(srcSizes) {
-			mainSize = srcSizes[mainIdx]
-		}
-		mainFields := pipelines.OutputFields{
-			Title: disc.Title,
-			Year:  disc.Year,
-			Show:  disc.Title,
-		}
-		mainRel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, mainFields)
-		if err != nil {
-			return nil, fmt.Errorf("render main template: %w", err)
-		}
-		mainDir = filepath.Dir(mainRel)
-	}
-
-	rendered := make([]string, len(srcs))
-	extraCounters := map[string]int{}
-	for i := range srcs {
-		if extrasMode && i != mainIdx {
-			bucket := pipelines.ClassifyExtraBySizeRatio(srcSizes[i], mainSize)
-			extraCounters[bucket.Folder]++
-			rendered[i] = filepath.Join(mainDir, bucket.Folder,
-				fmt.Sprintf("%s %02d.mkv", bucket.Label, extraCounters[bucket.Folder]))
-			continue
-		}
-		fields := pipelines.OutputFields{
-			Title:         disc.Title,
-			Year:          disc.Year,
-			Show:          disc.Title,
-			Season:        season,
-			EpisodeNumber: i + 1, // fallback: 1-based title index
-		}
-		// Look up the matching picker entry by title id when available.
-		// MakeMKV may write rip files in a different order than the
-		// user picked, so we use the i-th titleID as the lookup key.
-		if i < len(titleIDs) {
-			if ea, ok := epMap[titleIDs[i]]; ok {
-				if ea.Episode > 0 {
-					fields.EpisodeNumber = ea.Episode
-				}
-				fields.EpisodeTitle = ea.EpisodeTitle
-			}
-		}
-		rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, fields)
-		if err != nil {
-			return nil, fmt.Errorf("render template: %w", err)
-		}
-		rendered[i] = rel
-	}
-	counts := map[string]int{}
-	for _, r := range rendered {
-		counts[r]++
-	}
-	for i, r := range rendered {
-		if counts[r] > 1 {
-			ext := filepath.Ext(r)
-			rendered[i] = strings.TrimSuffix(r, ext) + fmt.Sprintf("-title%02d", i+1) + ext
-		}
-	}
-	moved := make([]string, 0, len(srcs))
-	for i, src := range srcs {
-		dst := filepath.Join(h.deps.LibraryRoot, rendered[i])
-		if err := pipelines.AtomicMove(src, dst); err != nil {
-			return moved, err
-		}
-		moved = append(moved, dst)
-	}
-	return moved, nil
-}
-
 func (h *Handler) createWorkDir(discID string) (string, error) {
 	return pipelines.CreateWorkDir(h.deps.WorkRoot, "bdmv", discID)
-}
-
-// sizeOfFiles stats every path and returns the resulting sizes in
-// the same order. Entries we couldn't stat (e.g. test stubs that
-// don't write real content) come back as 0 — callers treat that as
-// "unknown size" rather than failing the move.
-func sizeOfFiles(paths []string) []int64 {
-	out := make([]int64, len(paths))
-	for i, p := range paths {
-		if fi, err := os.Stat(p); err == nil {
-			out[i] = fi.Size()
-		}
-	}
-	return out
-}
-
-// indexOfLargest returns the index of the largest entry in sizes, or
-// 0 when every entry is zero (i.e. stubbed-out test content). Used by
-// extras-mode moveMultiTitle to identify the main feature among
-// multiple ripped titles.
-func indexOfLargest(sizes []int64) int {
-	best := 0
-	var bestSize int64
-	for i, s := range sizes {
-		if s > bestSize {
-			bestSize = s
-			best = i
-		}
-	}
-	return best
 }
 
 // ScanTitles implements pipelines.TitleScanner: enumerate titles on
@@ -638,33 +445,4 @@ func (h *Handler) ScanTitles(ctx context.Context, drv *state.Drive, _ *state.Dis
 		})
 	}
 	return out, nil
-}
-
-// pickLongestTitle selects the longest title that meets
-// options.min_title_seconds. Returns an error if no title qualifies.
-func pickLongestTitle(titles []tools.MakeMKVTitle, prof *state.Profile) (tools.MakeMKVTitle, error) {
-	min := 0
-	if prof != nil && prof.Options != nil {
-		switch n := prof.Options["min_title_seconds"].(type) {
-		case int:
-			min = n
-		case float64:
-			min = int(n)
-		}
-	}
-	var best tools.MakeMKVTitle
-	found := false
-	for _, t := range titles {
-		if t.DurationSec < min {
-			continue
-		}
-		if !found || t.DurationSec > best.DurationSec {
-			best = t
-			found = true
-		}
-	}
-	if !found {
-		return tools.MakeMKVTitle{}, fmt.Errorf("no title with duration >= %ds", min)
-	}
-	return best, nil
 }

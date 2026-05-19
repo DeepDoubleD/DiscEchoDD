@@ -983,5 +983,255 @@ func TestDVD_Run_MovieExtras_RipsMainPlusExtras(t *testing.T) {
 	}
 }
 
+// fakeMakeMKV satisfies both dvdvideo.MakeMKVScanner and
+// dvdvideo.MakeMKVRipper. Each Rip call writes a stub .mkv file into
+// outDir named title<id>.mkv so the move step finds something to
+// relocate; the byte size matches sizeByID[id] when set (defaults to
+// 4 KB) so size-based extras detection has signal in tests that
+// exercise the extras path.
+type fakeMakeMKV struct {
+	scanTitles []tools.MakeMKVTitle
+	scanErr    error
+	ripErr     error
+	sizeByID   map[int]int
+	scanCalls  int
+	ripCalls   []fakeMakeMKVRipCall
+}
+
+type fakeMakeMKVRipCall struct {
+	devPath string
+	titleID int
+	outDir  string
+}
+
+func (f *fakeMakeMKV) Scan(_ context.Context, _ string) ([]tools.MakeMKVTitle, error) {
+	f.scanCalls++
+	return f.scanTitles, f.scanErr
+}
+
+func (f *fakeMakeMKV) Rip(_ context.Context, devPath string, titleID int, outDir string, _ tools.Sink) error {
+	f.ripCalls = append(f.ripCalls, fakeMakeMKVRipCall{devPath: devPath, titleID: titleID, outDir: outDir})
+	if f.ripErr != nil {
+		return f.ripErr
+	}
+	size := 4 * 1024
+	if f.sizeByID != nil {
+		if s, ok := f.sizeByID[titleID]; ok {
+			size = s
+		}
+	}
+	body := make([]byte, size)
+	for i := range body {
+		body[i] = byte(titleID & 0xff)
+	}
+	return os.WriteFile(filepath.Join(outDir, fmt.Sprintf("title%02d.mkv", titleID)), body, 0o644)
+}
+
+func TestDVD_Run_MakeMKVPassthrough(t *testing.T) {
+	libRoot := t.TempDir()
+
+	mk := &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+		{ID: 0, DurationSec: 7200}, // feature
+		{ID: 1, DurationSec: 90},   // too short to be picked, no extras opt-in
+	}}
+	apprise := tools.NewMockTool("apprise", []tools.MockEvent{})
+	eject := tools.NewMockTool("eject", []tools.MockEvent{})
+	reg := tools.NewRegistry()
+	reg.Register(apprise)
+	reg.Register(eject)
+
+	h := dvdvideo.New(dvdvideo.Deps{
+		Tools:          reg,
+		LibraryRoot:    libRoot,
+		WorkRoot:       t.TempDir(),
+		LibraryProbe:   func(string) error { return nil },
+		MakeMKVScanner: mk,
+		MakeMKVRipper:  mk,
+	})
+
+	drv := &state.Drive{ID: "drv-1", DevPath: "/dev/sr0"}
+	disc := &state.Disc{
+		ID: "disc-mk-1", Type: state.DiscTypeDVD, DriveID: "drv-1",
+		Title: "Arrival", Year: 2016,
+	}
+	prof := &state.Profile{
+		DiscType:           state.DiscTypeDVD,
+		Engine:             "MakeMKV",
+		Format:             "MKV",
+		Container:          "MKV",
+		VideoCodec:         "copy",
+		Options:            map[string]any{"dvd_selection_mode": "main_feature"},
+		OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+	}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if mk.scanCalls != 1 {
+		t.Errorf("MakeMKV.Scan calls: want 1, got %d", mk.scanCalls)
+	}
+	if len(mk.ripCalls) != 1 {
+		t.Errorf("MakeMKV.Rip calls: want 1, got %d", len(mk.ripCalls))
+	} else if mk.ripCalls[0].titleID != 0 {
+		t.Errorf("rip title id: want 0 (longest), got %d", mk.ripCalls[0].titleID)
+	}
+	// Passthrough engine emits the transcode step as skipped — no
+	// HandBrake invocation should reach the registry.
+	wantSkipped := false
+	for _, ev := range sink.Events {
+		if ev.Kind == testutil.EventDone && ev.Step == state.StepTranscode {
+			if v, _ := ev.Notes["skipped"].(bool); v {
+				wantSkipped = true
+			}
+		}
+	}
+	if !wantSkipped {
+		t.Errorf("transcode step should report skipped=true; events=%+v", sink.Events)
+	}
+	want := filepath.Join(libRoot, "Arrival (2016)", "Arrival (2016).mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("expected %s after passthrough rip: %v", want, err)
+	}
+}
+
+func TestDVD_Run_MakeMKVPlusHandBrake_Movie(t *testing.T) {
+	libRoot := t.TempDir()
+
+	mk := &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+		{ID: 0, DurationSec: 7000},
+	}}
+	hb := &fakeHandBrake{}
+	apprise := tools.NewMockTool("apprise", []tools.MockEvent{})
+	eject := tools.NewMockTool("eject", []tools.MockEvent{})
+	reg := tools.NewRegistry()
+	reg.Register(hb)
+	reg.Register(apprise)
+	reg.Register(eject)
+
+	h := dvdvideo.New(dvdvideo.Deps{
+		Tools:                    reg,
+		LibraryRoot:              libRoot,
+		WorkRoot:                 t.TempDir(),
+		LibraryProbe:             func(string) error { return nil },
+		MakeMKVScanner:           mk,
+		MakeMKVRipper:            mk,
+		MinEncodedBytesPerSecond: -1,
+	})
+
+	drv := &state.Drive{ID: "drv-1", DevPath: "/dev/sr0"}
+	disc := &state.Disc{
+		ID: "disc-mk-2", Type: state.DiscTypeDVD, DriveID: "drv-1",
+		Title: "Arrival", Year: 2016,
+	}
+	prof := &state.Profile{
+		DiscType:           state.DiscTypeDVD,
+		Engine:             "MakeMKV+HandBrake",
+		Format:             "MKV",
+		Container:          "MKV",
+		VideoCodec:         "x265",
+		Options:            map[string]any{"dvd_selection_mode": "main_feature", "quality_rf": 20},
+		OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+	}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(mk.ripCalls) != 1 {
+		t.Errorf("MakeMKV.Rip calls: want 1, got %d", len(mk.ripCalls))
+	}
+	if len(hb.calls) != 1 {
+		t.Fatalf("HandBrake calls: want 1, got %d", len(hb.calls))
+	}
+	// HandBrake's --input must point at the MakeMKV rip output, not the
+	// device. The fake MakeMKV ripper writes titleNN.mkv into ripDir;
+	// HandBrake should read from there.
+	args := hb.calls[0].args
+	for i, a := range args {
+		if a == "--input" && i+1 < len(args) {
+			if !strings.HasSuffix(args[i+1], ".mkv") {
+				t.Errorf("HandBrake --input is %q; want a .mkv rip output", args[i+1])
+			}
+			if args[i+1] == drv.DevPath {
+				t.Errorf("HandBrake --input is the raw device; want the MakeMKV rip output")
+			}
+		}
+	}
+	want := filepath.Join(libRoot, "Arrival (2016)", "Arrival (2016).mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("expected %s after transcode: %v", want, err)
+	}
+}
+
+func TestDVD_Run_MakeMKVPlusHandBrake_Series(t *testing.T) {
+	libRoot := t.TempDir()
+
+	mk := &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+		{ID: 0, DurationSec: 1330},
+		{ID: 1, DurationSec: 1318},
+		{ID: 2, DurationSec: 42}, // < min_title_seconds — filtered
+		{ID: 3, DurationSec: 1384},
+	}}
+	hb := &fakeHandBrake{}
+	apprise := tools.NewMockTool("apprise", []tools.MockEvent{})
+	eject := tools.NewMockTool("eject", []tools.MockEvent{})
+	reg := tools.NewRegistry()
+	reg.Register(hb)
+	reg.Register(apprise)
+	reg.Register(eject)
+
+	h := dvdvideo.New(dvdvideo.Deps{
+		Tools:                    reg,
+		LibraryRoot:              libRoot,
+		WorkRoot:                 t.TempDir(),
+		LibraryProbe:             func(string) error { return nil },
+		MakeMKVScanner:           mk,
+		MakeMKVRipper:            mk,
+		MinEncodedBytesPerSecond: -1,
+	})
+
+	drv := &state.Drive{ID: "drv-1", DevPath: "/dev/sr0"}
+	disc := &state.Disc{
+		ID: "disc-mk-3", Type: state.DiscTypeDVD, DriveID: "drv-1",
+		Title: "Friends", Year: 1994,
+	}
+	prof := &state.Profile{
+		DiscType:  state.DiscTypeDVD,
+		Engine:    "MakeMKV+HandBrake",
+		Format:    "MKV",
+		Container: "MKV",
+		Options: map[string]any{
+			"min_title_seconds":  300,
+			"dvd_selection_mode": "per_title",
+			"season":             1,
+		},
+		OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}} - S{{printf "%02d" .Season}}E{{printf "%02d" .EpisodeNumber}}.mkv`,
+	}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Three titles meet the floor (1330, 1318, 1384 secs); the 42-sec
+	// title is filtered out.
+	if len(mk.ripCalls) != 3 {
+		t.Errorf("series MakeMKV.Rip calls: want 3, got %d", len(mk.ripCalls))
+	}
+	if len(hb.calls) != 3 {
+		t.Errorf("series HandBrake encodes: want 3, got %d", len(hb.calls))
+	}
+	for ep := 1; ep <= 3; ep++ {
+		want := filepath.Join(libRoot, "Friends", "Season 01",
+			fmt.Sprintf("Friends - S01E%02d.mkv", ep))
+		if _, err := os.Stat(want); err != nil {
+			t.Errorf("missing episode %d at %s", ep, want)
+		}
+	}
+}
+
 // Compile-time assertion that DVD satisfies SplittableHandler.
 var _ pipelines.SplittableHandler = (*dvdvideo.Handler)(nil)

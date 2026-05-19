@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- DVD-Video profiles now honour the `engine` field, unlocking MakeMKV for DVD ripping alongside the existing dvdbackup + HandBrake path. Three new seeded profiles ship for DVDs: `DVD-Movie (MakeMKV)` (MakeMKV passthrough — MPEG-2 in MKV, no re-encode, six-step pipeline), `DVD-Movie + Extras (MakeMKV)` (MakeMKV → HandBrake x265 RF20, includes bonus features), and `DVD-Series (MakeMKV)` (MakeMKV → HandBrake x265 RF20, per-title selection). Existing `DVD-Movie`, `DVD-Movie + Extras`, and `DVD-Series` profiles keep ripping via dvdbackup so installs that depend on libdvdcss aren't disrupted. Migration 018 backfills the new profiles into existing databases.
+- Drive error tip for MakeMKV beta-key expiry: when a MakeMKV-engine rip fails because makemkvcon reports the key is expired or unregistered, the dashboard now surfaces a tip pointing at `Settings → Integrations → MakeMKV` (alongside a reminder that the legacy HandBrake-engine DVD profiles still rip via dvdbackup and don't depend on the MakeMKV key).
+
 ## [0.25.0] - 2026-05-19
 
 ### Added

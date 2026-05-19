@@ -275,19 +275,22 @@ func seedLibraryRoots(ctx context.Context, store *state.Store, getenv func(strin
 }
 
 const (
-	cdFlacProfileName         = "CD-FLAC"
-	dvdMovieProfileName       = "DVD-Movie"
-	dvdMovieExtrasProfileName = "DVD-Movie + Extras"
-	dvdSeriesProfileName      = "DVD-Series"
-	bdProfileName             = "BD-1080p"
-	bdExtrasProfileName       = "BD-1080p + Extras"
-	uhdProfileName            = "UHD-Remux"
-	psxProfileName            = "PSX-CHD"
-	ps2ProfileName            = "PS2-CHD"
-	saturnProfileName         = "Saturn-CHD"
-	dcProfileName             = "DC-CHD"
-	xboxProfileName           = "XBOX-ISO"
-	dataProfileName           = "Data-ISO"
+	cdFlacProfileName                = "CD-FLAC"
+	dvdMovieProfileName              = "DVD-Movie"
+	dvdMovieExtrasProfileName        = "DVD-Movie + Extras"
+	dvdSeriesProfileName             = "DVD-Series"
+	dvdMovieMakeMKVProfileName       = "DVD-Movie (MakeMKV)"
+	dvdMovieExtrasMakeMKVProfileName = "DVD-Movie + Extras (MakeMKV)"
+	dvdSeriesMakeMKVProfileName      = "DVD-Series (MakeMKV)"
+	bdProfileName                    = "BD-1080p"
+	bdExtrasProfileName              = "BD-1080p + Extras"
+	uhdProfileName                   = "UHD-Remux"
+	psxProfileName                   = "PSX-CHD"
+	ps2ProfileName                   = "PS2-CHD"
+	saturnProfileName                = "Saturn-CHD"
+	dcProfileName                    = "DC-CHD"
+	xboxProfileName                  = "XBOX-ISO"
+	dataProfileName                  = "Data-ISO"
 )
 
 func seedDVDProfiles(ctx context.Context, store *state.Store) error {
@@ -372,6 +375,87 @@ func seedDVDProfiles(ctx context.Context, store *state.Store) error {
 				"season":             1,
 				"dvd_selection_mode": "per_title",
 				"quality_rf":         18,
+				"encoder_preset":     "slow",
+			},
+			OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}} - S{{printf "%02d" .Season}}E{{printf "%02d" .EpisodeNumber}}{{if .EpisodeTitle}} - {{.EpisodeTitle}}{{end}}.mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+		if err := store.CreateProfile(ctx, p); err != nil {
+			return err
+		}
+	}
+	if !have[dvdMovieMakeMKVProfileName] {
+		p := &state.Profile{
+			DiscType:      state.DiscTypeDVD,
+			Name:          dvdMovieMakeMKVProfileName,
+			Engine:        "MakeMKV",
+			Format:        "MKV",
+			Preset:        "passthrough",
+			Container:     "MKV",
+			VideoCodec:    "copy",
+			QualityPreset: "passthrough",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"dvd_selection_mode": "main_feature",
+			},
+			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          6,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+		if err := store.CreateProfile(ctx, p); err != nil {
+			return err
+		}
+	}
+	if !have[dvdMovieExtrasMakeMKVProfileName] {
+		p := &state.Profile{
+			DiscType:      state.DiscTypeDVD,
+			Name:          dvdMovieExtrasMakeMKVProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "x265 RF 20 · slow · + extras",
+			Container:     "MKV",
+			VideoCodec:    "x265",
+			QualityPreset: "x265 RF 20 · slow · + extras",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"dvd_selection_mode": "main_feature",
+				"quality_rf":         20,
+				"encoder_preset":     "slow",
+				"include_extras":     true,
+				"min_extra_seconds":  60,
+				"extras_max_ratio":   90,
+			},
+			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+		if err := store.CreateProfile(ctx, p); err != nil {
+			return err
+		}
+	}
+	if !have[dvdSeriesMakeMKVProfileName] {
+		p := &state.Profile{
+			DiscType:      state.DiscTypeDVD,
+			Name:          dvdSeriesMakeMKVProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "x265 RF 20 · slow · per-title",
+			Container:     "MKV",
+			VideoCodec:    "x265",
+			QualityPreset: "x265 RF 20 · slow · per-title",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"min_title_seconds":  300,
+				"season":             1,
+				"dvd_selection_mode": "per_title",
+				"quality_rf":         20,
 				"encoder_preset":     "slow",
 			},
 			OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}} - S{{printf "%02d" .Season}}E{{printf "%02d" .EpisodeNumber}}{{if .EpisodeTitle}} - {{.EpisodeTitle}}{{end}}.mkv`,
