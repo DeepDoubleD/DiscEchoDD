@@ -99,6 +99,7 @@ func TestGetState_ReturnsAllSections(t *testing.T) {
 	var body struct {
 		Drives   []state.Drive     `json:"drives"`
 		Jobs     []state.Job       `json:"jobs"`
+		Discs    []state.Disc      `json:"discs"`
 		Profiles []state.Profile   `json:"profiles"`
 		Settings map[string]string `json:"settings"`
 	}
@@ -113,5 +114,14 @@ func TestGetState_ReturnsAllSections(t *testing.T) {
 	}
 	if body.Settings["k"] != "v" {
 		t.Errorf("settings: %+v", body.Settings)
+	}
+	// Seeded disc has no jobs → buildSnapshot should stamp
+	// LifecycleState=awaiting_decision via Store.LifecycleStates.
+	if len(body.Discs) != 1 {
+		t.Fatalf("discs: %d", len(body.Discs))
+	}
+	if body.Discs[0].LifecycleState != state.DiscLifecycleAwaitingDecision {
+		t.Errorf("lifecycle_state: got %q, want %q",
+			body.Discs[0].LifecycleState, state.DiscLifecycleAwaitingDecision)
 	}
 }

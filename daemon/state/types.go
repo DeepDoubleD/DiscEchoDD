@@ -243,6 +243,10 @@ type Disc struct {
 	MetadataJSON     string      `json:"metadata_json,omitempty"` // extended per-disc-type display data
 	Candidates       []Candidate `json:"candidates"`
 	CreatedAt        time.Time   `json:"created_at"`
+	// LifecycleState is the disc-as-unit aggregate computed at
+	// snapshot-build time from the disc's job history. Not persisted
+	// to the DB; populated by buildSnapshot via Store.LifecycleStates.
+	LifecycleState DiscLifecycleState `json:"lifecycle_state,omitempty"`
 }
 
 // JobStep is a row of the `job_steps` table.

@@ -52,6 +52,19 @@ func (h *Handlers) buildSnapshot(ctx context.Context) (map[string]any, error) {
 			drives[i].CurrentDiscID = id
 		}
 	}
+	if len(discs) > 0 {
+		ids := make([]string, len(discs))
+		for i, d := range discs {
+			ids[i] = d.ID
+		}
+		states, err := h.Store.LifecycleStates(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		for i := range discs {
+			discs[i].LifecycleState = states[discs[i].ID]
+		}
+	}
 	return map[string]any{
 		"drives":   drives,
 		"jobs":     jobs,
