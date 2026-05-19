@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-05-20
+
 ### Added
 - Profile engine choices are now constrained per disc type. The editor's engine dropdown only offers engines that suit the disc type (e.g. AUDIO_CD → whipper; DVD → MakeMKV / MakeMKV+HandBrake / HandBrake; XBOX → redumper), and the daemon rejects out-of-allow-list combinations. Previously any engine could be paired with any disc type, allowing nonsensical profiles like an audio CD ripped with HandBrake.
 - Choosing a disc type for a new profile now pre-fills a valid, runnable profile — engine, container, codec, quality tier, and a sensible output-path template — instead of leaving fields blank.
