@@ -2,6 +2,8 @@
 // runs with DISCECHO_AUTH_DISABLED=true or sits behind a reverse proxy
 // that handles auth.
 
+import type { DiscHistoryResponse } from './wire';
+
 async function checkResponse(res: Response): Promise<Response> {
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -55,6 +57,17 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
 export async function apiDelete(path: string): Promise<void> {
   const res = await fetch(path, { method: 'DELETE' });
   await checkResponse(res);
+}
+
+/**
+ * fetchDiscHistory pulls the disc-keyed history page (one row per disc,
+ * with derived rip + transcode job IDs) from /api/discs/history. The
+ * older /api/history (job-keyed) endpoint still exists for the
+ * job-detail panel and ClearHistoryButton.
+ */
+export async function fetchDiscHistory(limit = 50, offset = 0): Promise<DiscHistoryResponse> {
+  const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return apiGet<DiscHistoryResponse>(`/api/discs/history?${qs.toString()}`);
 }
 
 export interface ValidationErrors {
