@@ -16,6 +16,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Dashboard: a disc whose source drive is still loaded now appears as a chip on that drive card when its encode is still running, instead of vanishing from the hero band the moment the rip ejects. EncodeQueueCard now only renders for orphaned encodes (source drive removed, or compute pool deeper than drive count).
 - History page now shows one row per disc instead of one per job. Each row carries a lifecycle pill (awaiting decision / ripping / encoding / done / failed / interrupted / cancelled), a derived rip+transcode summary, and a single Re-rip / Retry / Stop action — replacing the old "every job is its own row" view where a single disc that was identified, ripped, then transcoded showed up three times. Backed by the new `/api/discs/history` endpoint.
 
+### Removed
+- Webui: legacy `HistoryRow.svelte` (job-row history) replaced by `DiscHistoryRow.svelte` (disc-row).
+- Webui: unused `historyFilter` writable + `fetchHistoryPage` helper (and the `history` / `historyTotal` / `historyLoading` / `historyError` stores they exclusively populated) from `store.ts`.
+
 ### Fixed
 - The rip card now flips to the picked candidate's title, year, and cover the instant you press Start. Previously, choosing a candidate other than the auto-identified top match left the running-rip card showing the original top result's title and cover until a full page reload — the daemon was persisting the picked candidate's metadata to SQLite but never publishing an SSE event, and the front-end's `disc.changed` handler only honoured `metadata_json`. The daemon now emits `disc.changed` with the full updated identity (`title`, `year`, `metadata_provider`, `metadata_id`, `metadata_json`, `runtime_seconds`) after `StartDisc` finishes its writes, and the front-end overlays whichever keys land in the payload.
 

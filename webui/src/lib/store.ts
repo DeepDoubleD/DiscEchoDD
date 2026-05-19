@@ -8,9 +8,6 @@ import type {
   Profile,
   LogLevel,
   SnapshotPayload,
-  HistoryRow,
-  HistoryResponse,
-  DiscType,
   Candidate,
   Notification,
   Stats,
@@ -554,49 +551,6 @@ export async function ejectDrive(driveID: string): Promise<void> {
 
 // ----- History --------------------------------------------------------------
 
-export const history = writable<HistoryRow[]>([]);
-export const historyTotal = writable<number>(0);
-export const historyLoading = writable<boolean>(false);
-export const historyError = writable<string | null>(null);
-export const historyFilter = writable<DiscType | ''>('');
-
-const HISTORY_PAGE_SIZE = 50;
-
-/**
- * fetchHistoryPage replaces (offset=0) or appends (offset>0) into the
- * history store. Tracks loading/error state. Returns the count of rows
- * appended/replaced so callers can detect "no more pages".
- *
- * On HTTP error: historyError is set with a short message; previous
- * rows stay so retry doesn't blank the screen.
- */
-export async function fetchHistoryPage(filter: DiscType | '', offset: number): Promise<number> {
-  historyLoading.set(true);
-  historyError.set(null);
-  try {
-    const params = new URLSearchParams();
-    if (filter) params.set('type', filter);
-    params.set('limit', String(HISTORY_PAGE_SIZE));
-    params.set('offset', String(offset));
-
-    const payload = await apiGet<HistoryResponse>(`/api/history?${params.toString()}`);
-    const rows = payload.rows ?? [];
-
-    if (offset === 0) {
-      history.set(rows);
-    } else {
-      history.update((cur) => [...cur, ...rows]);
-    }
-    historyTotal.set(payload.total);
-    return rows.length;
-  } catch (e) {
-    historyError.set((e as Error).message);
-    return 0;
-  } finally {
-    historyLoading.set(false);
-  }
-}
-
 /**
  * clearHistory wipes all finished-rip history server-side, then nudges
  * a debounced /api/stats refresh so the dashboard counters reflect the
@@ -616,7 +570,7 @@ export async function clearHistory(): Promise<number> {
  * manualIdentify hits POST /api/discs/:id/identify with a search query
  * and updates the disc in the discs store with the refreshed candidates.
  * Throws on HTTP error so the caller (the disc-id sheet) can render the
- * failure inline; contrast fetchHistoryPage which swallows.
+ * failure inline.
  */
 export async function manualIdentify(
   discID: string,

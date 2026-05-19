@@ -24,12 +24,6 @@ import {
   deleteNotification,
   validateNotification,
   testNotification,
-  history,
-  historyTotal,
-  historyLoading,
-  historyError,
-  historyFilter,
-  fetchHistoryPage,
   clearHistory,
   manualIdentify,
   ensureLogBackfill,
@@ -349,114 +343,6 @@ describe('imperatives', () => {
       '/api/jobs/job-1/cancel',
       expect.objectContaining({ method: 'POST' }),
     );
-  });
-});
-
-const seedHistoryRow = {
-  job: {
-    id: 'job-h1',
-    disc_id: 'disc-h1',
-    profile_id: 'p1',
-    state: 'done' as const,
-    progress: 100,
-    finished_at: '2026-05-07T12:00:00Z',
-    created_at: '2026-05-07T11:55:00Z',
-  },
-  disc: {
-    id: 'disc-h1',
-    type: 'AUDIO_CD' as const,
-    title: 'Kind of Blue',
-    candidates: [],
-    created_at: '2026-05-07T11:55:00Z',
-  },
-};
-
-describe('fetchHistoryPage', () => {
-  let fetchSpy: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    history.set([]);
-    historyTotal.set(0);
-    historyLoading.set(false);
-    historyError.set(null);
-    historyFilter.set('');
-    fetchSpy = vi.fn();
-    vi.stubGlobal('fetch', fetchSpy);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('offset=0 replaces history and sets historyTotal', async () => {
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        rows: [seedHistoryRow],
-        total: 1,
-        limit: 50,
-        offset: 0,
-      }),
-    });
-
-    const got = await fetchHistoryPage('', 0);
-    expect(got).toBe(1);
-    expect(get(history)).toHaveLength(1);
-    expect(get(historyTotal)).toBe(1);
-    expect(get(historyError)).toBeNull();
-  });
-
-  it('offset>0 appends without losing earlier rows', async () => {
-    history.set([seedHistoryRow]);
-    historyTotal.set(2);
-
-    const second = { ...seedHistoryRow, job: { ...seedHistoryRow.job, id: 'job-h2' } };
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ rows: [second], total: 2, limit: 50, offset: 1 }),
-    });
-
-    await fetchHistoryPage('', 1);
-    expect(get(history)).toHaveLength(2);
-    expect(get(history)[0].job.id).toBe('job-h1');
-    expect(get(history)[1].job.id).toBe('job-h2');
-  });
-
-  it('passes filter as ?type query param', async () => {
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ rows: [], total: 0, limit: 50, offset: 0 }),
-    });
-    await fetchHistoryPage('DVD', 0);
-    expect(fetchSpy).toHaveBeenCalled();
-    const url = fetchSpy.mock.calls[0][0] as string;
-    expect(url).toContain('type=DVD');
-  });
-
-  it('error sets historyError but keeps existing rows', async () => {
-    history.set([seedHistoryRow]);
-    fetchSpy.mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-      text: async () => 'boom',
-    });
-
-    await fetchHistoryPage('', 0);
-    expect(get(historyError)).toContain('500');
-    expect(get(history)).toHaveLength(1); // kept
-  });
-
-  it('clears historyLoading after success', async () => {
-    fetchSpy.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ rows: [], total: 0, limit: 50, offset: 0 }),
-    });
-    await fetchHistoryPage('', 0);
-    expect(get(historyLoading)).toBe(false);
   });
 });
 
