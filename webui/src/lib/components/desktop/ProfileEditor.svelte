@@ -147,12 +147,44 @@
       const fe = parseValidationErrors(e);
       if (fe) {
         fieldErrors = fe;
+        // Surface any field errors that don't map to a control the form
+        // actually renders (e.g. an options.<key> the engine schema
+        // mirror is missing). Without this the save silently "does
+        // nothing" — the 422 is parsed into fieldErrors but no visible
+        // field shows it. See the MakeMKV+HandBrake schema-drift bug.
+        const unmapped = unmappedErrors(fe);
+        if (unmapped.length > 0) {
+          genericError = `Save rejected: ${unmapped.join('; ')}`;
+        }
       } else {
         genericError = (e as Error).message;
       }
     } finally {
       saving = false;
     }
+  }
+
+  // Field-error keys the form renders a control for. Anything else from
+  // a 422 has no inline home and must fall through to the generic
+  // banner so the user isn't left staring at a no-op Save button.
+  function unmappedErrors(fe: ValidationErrors): string[] {
+    const visible = new Set<string>([
+      'name',
+      'disc_type',
+      'engine',
+      'drive_policy',
+      'container',
+      'format',
+      'video_codec',
+      'quality_preset',
+      'preset',
+      'hdr_pipeline',
+      'output_path_template',
+    ]);
+    for (const k of optionKeys) visible.add(`options.${k}`);
+    return Object.entries(fe)
+      .filter(([k]) => !visible.has(k))
+      .map(([k, msg]) => `${k.replace(/^options\./, '')} — ${msg}`);
   }
 
   export async function onDelete(): Promise<void> {

@@ -167,6 +167,74 @@ func TestValidateProfile_DDRescueEngine(t *testing.T) {
 	}
 }
 
+// These mirror the option maps seeded by settings.seedDVDProfiles for
+// the MakeMKV-family DVD profiles. The seeder bypasses ValidateProfile
+// (it writes via store.CreateProfile), so the schema and the seeder
+// drifted: the seeded options were rejected on any subsequent edit
+// through the API, surfacing to users as "Save does nothing". These
+// assert the schema accepts exactly what we seed + what the pipelines
+// consume.
+func TestValidateProfile_MakeMKVPassthroughSeededOptions(t *testing.T) {
+	p := &state.Profile{
+		DiscType:           state.DiscTypeDVD,
+		Name:               "DVD-Movie (MakeMKV)",
+		Engine:             "MakeMKV",
+		Container:          "MKV",
+		VideoCodec:         "copy",
+		Options:            map[string]any{"dvd_selection_mode": "main_feature"},
+		OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+		StepCount:          6,
+	}
+	if errs := api.ValidateProfile(p); len(errs) != 0 {
+		t.Fatalf("expected valid; got %v", errs)
+	}
+}
+
+func TestValidateProfile_MakeMKVHandBrakeSeededOptions(t *testing.T) {
+	// Extras (movie) profile + a video-codec change to nvenc_h265 —
+	// exactly the edit the user couldn't save.
+	extras := &state.Profile{
+		DiscType:   state.DiscTypeDVD,
+		Name:       "DVD-Movie + Extras (MakeMKV)",
+		Engine:     "MakeMKV+HandBrake",
+		Container:  "MKV",
+		VideoCodec: "nvenc_h265",
+		Options: map[string]any{
+			"dvd_selection_mode": "main_feature",
+			"quality_rf":         20,
+			"encoder_preset":     "slow",
+			"include_extras":     true,
+			"min_extra_seconds":  60,
+			"extras_max_ratio":   90,
+		},
+		OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+		StepCount:          7,
+	}
+	if errs := api.ValidateProfile(extras); len(errs) != 0 {
+		t.Fatalf("extras profile: expected valid; got %v", errs)
+	}
+
+	series := &state.Profile{
+		DiscType:   state.DiscTypeDVD,
+		Name:       "DVD-Series (MakeMKV)",
+		Engine:     "MakeMKV+HandBrake",
+		Container:  "MKV",
+		VideoCodec: "x265",
+		Options: map[string]any{
+			"min_title_seconds":  300,
+			"season":             1,
+			"dvd_selection_mode": "per_title",
+			"quality_rf":         20,
+			"encoder_preset":     "slow",
+		},
+		OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}}.mkv`,
+		StepCount:          7,
+	}
+	if errs := api.ValidateProfile(series); len(errs) != 0 {
+		t.Fatalf("series profile: expected valid; got %v", errs)
+	}
+}
+
 func TestValidateProfile_TypedContainerWins(t *testing.T) {
 	p := validProfile()
 	p.Engine = "HandBrake"

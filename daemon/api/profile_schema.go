@@ -72,6 +72,11 @@ var engineSchemas = map[string]EngineSchema{
 			"include_extras":    {Type: OptBool}, // auto-include bonus-material titles in the rip
 			"min_extra_seconds": {Type: OptInt},  // shortest title duration considered an extra (default 60)
 			"extras_max_ratio":  {Type: OptInt},  // longest extra as % of main duration (default 90)
+			// dvd_selection_mode ("main_feature" | "per_title") is read by
+			// IsMovieProfile in the dvdvideo pipeline; the passthrough
+			// movie profile seeds it. season feeds per-title output paths.
+			"dvd_selection_mode": {Type: OptString},
+			"season":             {Type: OptInt},
 		},
 		StepCount: 6,
 	},
@@ -86,6 +91,14 @@ var engineSchemas = map[string]EngineSchema{
 			"include_extras":    {Type: OptBool},
 			"min_extra_seconds": {Type: OptInt},
 			"extras_max_ratio":  {Type: OptInt},
+			// HandBrake-step knobs: quality_rf + encoder_preset are read by
+			// transcodeMakeMKVRips; dvd_selection_mode by IsMovieProfile;
+			// season by the per-title (series) output path. The seeded
+			// extras + series profiles set all four.
+			"dvd_selection_mode": {Type: OptString},
+			"quality_rf":         {Type: OptInt},
+			"encoder_preset":     {Type: OptString},
+			"season":             {Type: OptInt},
 		},
 		StepCount: 7,
 	},

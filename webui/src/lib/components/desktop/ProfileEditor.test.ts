@@ -159,6 +159,24 @@ describe('ProfileEditor', () => {
     expect(container.textContent).toMatch(/requires container in/);
   });
 
+  it('Save with 422 on an unrendered option key surfaces a generic banner', async () => {
+    // Regression: a field error whose key has no rendered control (e.g.
+    // an options.<key> the schema mirror is missing) used to vanish —
+    // the save appeared to do nothing. It must now show in the banner.
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      text: async () => '{"options.mystery_knob":"unknown option for engine MakeMKV+HandBrake"}',
+    });
+    const { getByText, container } = render(ProfileEditor, { profile: bd, creating: false });
+
+    await fireEvent.click(getByText(/save changes/i));
+    await flush();
+
+    expect(container.textContent).toMatch(/Save rejected/);
+    expect(container.textContent).toMatch(/mystery_knob/);
+  });
+
   it('Duplicate dispatches a draft profile with empty id and "(copy)" suffix', async () => {
     const onDuplicate = vi.fn();
     const { getByText, component } = render(ProfileEditor, {
