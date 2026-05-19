@@ -4,6 +4,7 @@ import { ripSubStepLabel } from './ripSubStepLabel';
 describe('ripSubStepLabel', () => {
   it.each([
     ['DUMP', 'Read raw data'],
+    ['read_raw_data', 'Read raw data'],
     ['', 'Read raw data'],
     [undefined, 'Read raw data'],
     [null, 'Read raw data'],
@@ -12,6 +13,7 @@ describe('ripSubStepLabel', () => {
     ['REFINE', 'Recovering damaged sectors (this can take a while)'],
     ['DVDKEY', 'Extracting DVD keys'],
     ['SPLIT', 'Splitting tracks'],
+    ['scan', 'Scanning titles (this can take several minutes)'],
     ['unknown', 'unknown'],
   ] as const)('%s → %s', (input, want) => {
     expect(ripSubStepLabel(input)).toBe(want);

@@ -127,6 +127,27 @@ describe('mobile/DriveCard', () => {
     expect(getByText(/Splitting tracks/i)).toBeInTheDocument();
   });
 
+  it('shows the MakeMKV scan label when active_substep is scan', () => {
+    const job: Job = { ...baseRipJob, active_substep: 'scan' };
+    const { getByText } = render(DriveCard, {
+      drive: rippingDrive,
+      disc: seedDisc(),
+      job,
+    });
+    expect(getByText(/Scanning titles/i)).toBeInTheDocument();
+  });
+
+  it('renders Eject disabled during an active rip alongside Stop', () => {
+    const { getByTestId } = render(DriveCard, {
+      drive: rippingDrive,
+      disc: seedDisc(),
+      job: baseRipJob,
+    });
+    const eject = getByTestId('drive-eject');
+    expect(eject).toBeDisabled();
+    expect(getByTestId('drive-stop')).toBeEnabled();
+  });
+
   describe('encoding chip (T11)', () => {
     it('renders the chip when a prior disc from this drive is still encoding', () => {
       const newDisc: Disc = {

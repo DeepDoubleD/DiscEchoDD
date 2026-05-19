@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- MakeMKV scan now emits a `scan` sub-step on the rip job, surfaced on drive cards as "Rip — Scanning titles (this can take several minutes)". The `info` enumeration on slim USB DVD drives can run 5+ minutes before any rip bytes flow; the prior label said "Rip — Read raw data", which was misleading and gave the impression of a stuck rip.
+- MakeMKV `MSG:` lines from the scan phase are forwarded to the job log in real time (startup banner, `direct disc access mode` notice, errors). The log tail used to sit at a single line for the entire scan; users now see the same liveness signal the redumper path already had.
+
+### Changed
+- Mobile drive card log tail now includes the `HH:MM:SS` timestamp alongside the level marker. Previously the timestamp was dropped, leaving only `· <message>`.
+- Mobile drive card now renders an `Eject` button disabled alongside `Stop` while a rip is in progress, matching the desktop RipCard. Previously the action was hidden mid-rip.
+
 ## [0.26.5] - 2026-05-19
 
 ### Changed

@@ -26,9 +26,11 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/tools"
 )
 
-// MakeMKVScanner is the slice of tools.MakeMKV used at scan-time.
+// MakeMKVScanner is the slice of tools.MakeMKV used at scan-time. sink
+// receives MakeMKV's MSG: lines as info logs during the multi-minute
+// info enumeration; tests can pass tools.NopSink{}.
 type MakeMKVScanner interface {
-	Scan(ctx context.Context, devPath string) ([]tools.MakeMKVTitle, error)
+	Scan(ctx context.Context, devPath string, sink tools.Sink) ([]tools.MakeMKVTitle, error)
 }
 
 // MakeMKVRipper is the slice of tools.MakeMKV used at rip-time.
@@ -200,12 +202,15 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 		return pipelines.RipResult{}, err
 	}
 
+	ripStepSink := pipelines.NewStepSink(sink, state.StepRip)
+	ripStepSink.SubStep("scan")
 	sink.OnLog(state.LogLevelInfo, "MakeMKV: scanning %s", drv.DevPath)
-	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath)
+	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath, ripStepSink)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("makemkv scan: %w", err)
 	}
+	ripStepSink.SubStep("read_raw_data")
 
 	// Pick titles to rip: user selection wins when present, otherwise
 	// fall back to the legacy longest-title heuristic so movie-profile
@@ -232,7 +237,7 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	}
 	ripStart := time.Now()
 	for _, t := range picked {
-		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, pipelines.NewStepSink(sink, state.StepRip)); err != nil {
+		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, ripStepSink); err != nil {
 			sink.OnStepFailed(state.StepRip, err)
 			return pipelines.RipResult{}, fmt.Errorf("makemkv rip title %d: %w", t.ID, err)
 		}
@@ -429,7 +434,7 @@ func (h *Handler) ScanTitles(ctx context.Context, drv *state.Drive, _ *state.Dis
 		return nil, err
 	}
 	sink.OnLog(state.LogLevelInfo, "MakeMKV: scanning %s for titles", drv.DevPath)
-	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath)
+	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath, pipelines.NewStepSink(sink, state.StepIdentify))
 	if err != nil {
 		sink.OnStepFailed(state.StepIdentify, err)
 		return nil, fmt.Errorf("makemkv scan: %w", err)

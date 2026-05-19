@@ -1004,7 +1004,7 @@ type fakeMakeMKVRipCall struct {
 	outDir  string
 }
 
-func (f *fakeMakeMKV) Scan(_ context.Context, _ string) ([]tools.MakeMKVTitle, error) {
+func (f *fakeMakeMKV) Scan(_ context.Context, _ string, _ tools.Sink) ([]tools.MakeMKVTitle, error) {
 	f.scanCalls++
 	return f.scanTitles, f.scanErr
 }

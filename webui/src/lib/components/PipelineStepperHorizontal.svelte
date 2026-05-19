@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Job, StepID } from '$lib/wire';
   import Icon from '$lib/icons/Icon.svelte';
+  import { ripSubStepLabel } from '$lib/ripSubStepLabel';
 
   export let job: Job;
 
@@ -152,10 +153,11 @@
        once, with the progress bar in the parent (RipCard) — it's the
        current step's value, so duplicating it here said nothing new. -->
   {#if activeStep}
+    {@const desc = activeStep.id === 'rip' ? ripSubStepLabel(job.active_substep) : activeStep.desc}
     <div class="mt-3 flex items-center gap-2 border-t pt-3" style="border-color: var(--surface-3)">
       <span class="text-[11px] uppercase tracking-[0.12em] text-text-3">Active</span>
-      <span class="text-[12px] font-medium text-text-2">
-        {activeStep.label} — {activeStep.desc}
+      <span class="text-[12px] font-medium text-text-2" data-testid="active-step-label">
+        {activeStep.label} — {desc}
       </span>
     </div>
   {/if}

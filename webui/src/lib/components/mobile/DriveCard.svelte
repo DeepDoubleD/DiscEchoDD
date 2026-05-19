@@ -41,7 +41,11 @@
   // "already ripped, re-rip?" affordance below.
   $: lastDoneJob = lastDoneJobForDisc($jobs, disc?.id);
   $: canRerip = drive.state === 'idle' && !!disc && !!lastDoneJob && !hasActiveJob;
-  $: hasActions = canStop || canEject || canReidentify || canRerip;
+  // Mid-rip, render Eject as disabled alongside Stop so the layout
+  // matches the desktop RipCard and users see the same affordance even
+  // though they can't click it until the rip finishes.
+  $: showEject = canEject || hasActiveJob;
+  $: hasActions = canStop || showEject || canReidentify || canRerip;
 
   $: rerippedCaption = lastDoneJob
     ? `Already ripped${lastDoneJob.finished_at ? ' ' + lastDoneJob.finished_at.slice(0, 10) : ''} — re-rip?`
@@ -282,6 +286,7 @@
         >
           {#each tail as line (line.t + line.message)}
             <div class="truncate text-text-3">
+              <span class="mr-1 text-text-3" data-testid="log-tail-ts">{line.t.slice(11, 19)}</span>
               <span
                 class="mr-1 uppercase"
                 style="color: {line.level === 'warn'
@@ -376,11 +381,11 @@
           {actionBusy === 'rerip' ? 'Starting…' : 'Re-rip'}
         </button>
       {/if}
-      {#if canEject}
+      {#if showEject}
         <button
           class="min-h-[36px] flex-1 rounded-xl border border-border bg-surface-2 px-3 text-[13px] font-medium text-text-2 disabled:opacity-50"
           on:click={onEject}
-          disabled={actionBusy !== null}
+          disabled={!canEject || actionBusy !== null}
           data-testid="drive-eject"
         >
           {actionBusy === 'eject' ? 'Ejecting…' : 'Eject'}

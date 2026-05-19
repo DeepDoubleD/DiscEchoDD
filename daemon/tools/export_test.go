@@ -18,3 +18,9 @@ func RedumperNowForTest() func() time.Time { return redumperNow }
 func SetRedumperNowForTest(now func() time.Time) {
 	redumperNow = now
 }
+
+// ExportedParseMakeMKVMessage exposes parseMakeMKVMessage for the
+// external _test package.
+func ExportedParseMakeMKVMessage(payload string) string {
+	return parseMakeMKVMessage(payload)
+}

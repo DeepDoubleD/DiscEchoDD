@@ -1,11 +1,13 @@
 /**
- * Returns a human-readable label for the current redumper sub-phase.
- * Used by drive cards to show what the rip step is actually doing when
- * redumper is in a long quiet phase (REFINE, SPLIT, DVDKEY, …).
+ * Returns a human-readable label for the current rip-tool sub-phase.
+ * Used by drive cards to show what the rip step is actually doing
+ * during long quiet phases (redumper REFINE/SPLIT/DVDKEY, MakeMKV
+ * pre-rip title enumeration, …).
  */
 export function ripSubStepLabel(substep: string | undefined | null): string {
   switch (substep) {
     case 'DUMP':
+    case 'read_raw_data':
     case '':
     case undefined:
     case null:
@@ -20,6 +22,8 @@ export function ripSubStepLabel(substep: string | undefined | null): string {
       return 'Extracting DVD keys';
     case 'SPLIT':
       return 'Splitting tracks';
+    case 'scan':
+      return 'Scanning titles (this can take several minutes)';
     default:
       return substep;
   }

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -57,18 +58,61 @@ func NewMakeMKV(bin, dataDir string) *MakeMKV {
 func (m *MakeMKV) Name() string { return "makemkv" }
 
 // Scan runs `makemkvcon -r --cache=1 info dev:<devPath>` and parses
-// the output into titles.
-func (m *MakeMKV) Scan(ctx context.Context, devPath string) ([]MakeMKVTitle, error) {
+// the output into titles. While the command runs, MSG: lines are
+// forwarded to sink as info-level logs so the UI sees activity during
+// MakeMKV's multi-minute info enumeration on slim USB drives. Pass
+// NopSink when no surfacing is desired.
+func (m *MakeMKV) Scan(ctx context.Context, devPath string, sink Sink) ([]MakeMKVTitle, error) {
 	args := []string{"-r", "--cache=1", "info", "dev:" + devPath}
 	cmd := exec.CommandContext(ctx, m.bin, args...)
 	if m.dataDir != "" {
 		cmd.Env = append(cmd.Environ(), "HOME="+m.dataDir+"/..")
 	}
-	out, err := cmd.Output()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("makemkvcon start: %w", err)
+	}
+
+	var (
+		mu  sync.Mutex
+		buf bytes.Buffer
+	)
+	consume := func(r io.Reader) {
+		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 4096), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			mu.Lock()
+			buf.WriteString(line)
+			buf.WriteByte('\n')
+			mu.Unlock()
+			if sink == nil {
+				continue
+			}
+			if strings.HasPrefix(line, "MSG:") {
+				if msg := parseMakeMKVMessage(strings.TrimPrefix(line, "MSG:")); msg != "" {
+					sink.Log(state.LogLevelInfo, "%s", msg)
+				}
+			}
+		}
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); consume(stdout) }()
+	go func() { defer wg.Done(); consume(stderr) }()
+	wg.Wait()
+
+	if err := cmd.Wait(); err != nil {
 		return nil, fmt.Errorf("makemkvcon info: %w", err)
 	}
-	return ParseMakeMKVInfo(string(out))
+	return ParseMakeMKVInfo(buf.String())
 }
 
 // Rip runs `makemkvcon -r --decrypt --noscan mkv dev:<devPath> <titleID> <outDir>`
@@ -289,6 +333,26 @@ func splitMakeMKVRow(row string, n int) []string {
 		out = append(out, row)
 	}
 	return out
+}
+
+// parseMakeMKVMessage extracts the human-readable message field from a
+// MSG: payload. Format: `code,flags,paramcount,"message","format",...`.
+// Returns the 4th comma-separated field (unquoted) or empty when the
+// shape doesn't match.
+func parseMakeMKVMessage(payload string) string {
+	parts := strings.SplitN(payload, ",", 4)
+	if len(parts) < 4 {
+		return ""
+	}
+	rest := parts[3]
+	if !strings.HasPrefix(rest, `"`) {
+		return ""
+	}
+	end := strings.Index(rest[1:], `"`)
+	if end < 0 {
+		return ""
+	}
+	return rest[1 : 1+end]
 }
 
 // unquoteMakeMKVLast extracts the final quoted field from a robot-mode

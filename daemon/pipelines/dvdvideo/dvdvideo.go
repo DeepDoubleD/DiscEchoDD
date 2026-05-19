@@ -38,8 +38,10 @@ type HandBrakeScanner interface {
 // MakeMKVScanner is the slice of tools.MakeMKV used at scan-time. Used
 // by profiles whose engine is "MakeMKV" or "MakeMKV+HandBrake" — the
 // HandBrake-engine path continues to scan via dvdbackup'd VIDEO_TS.
+// sink receives MakeMKV's MSG: lines as info logs during the
+// multi-minute info enumeration; tests can pass tools.NopSink{}.
 type MakeMKVScanner interface {
-	Scan(ctx context.Context, devPath string) ([]tools.MakeMKVTitle, error)
+	Scan(ctx context.Context, devPath string, sink tools.Sink) ([]tools.MakeMKVTitle, error)
 }
 
 // MakeMKVRipper is the slice of tools.MakeMKV used at rip-time. Same
@@ -310,12 +312,18 @@ func (h *Handler) runRipMakeMKV(ctx context.Context, drv *state.Drive, disc *sta
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, err
 	}
+	ripStepSink := pipelines.NewStepSink(sink, state.StepRip)
+	// "scan" substep covers MakeMKV's info enumeration — on slim USB
+	// drives this can be 5+ minutes before any rip bytes flow. The
+	// dashboard reads active_substep and shows "Scanning titles…".
+	ripStepSink.SubStep("scan")
 	sink.OnLog(state.LogLevelInfo, "MakeMKV: scanning %s", drv.DevPath)
-	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath)
+	titles, err := h.deps.MakeMKVScanner.Scan(ctx, drv.DevPath, ripStepSink)
 	if err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("makemkv scan: %w", err)
 	}
+	ripStepSink.SubStep("read_raw_data")
 
 	picked, mainID, err := selectDVDMakeMKVTitles(titles, prof, disc)
 	if err != nil {
@@ -336,7 +344,7 @@ func (h *Handler) runRipMakeMKV(ctx context.Context, drv *state.Drive, disc *sta
 	for _, t := range picked {
 		sink.OnLog(state.LogLevelInfo, "MakeMKV: ripping title %d (%s)",
 			t.ID, pipelines.HumanDuration(time.Duration(t.DurationSec)*time.Second))
-		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, pipelines.NewStepSink(sink, state.StepRip)); err != nil {
+		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, ripStepSink); err != nil {
 			sink.OnStepFailed(state.StepRip, err)
 			return pipelines.RipResult{}, fmt.Errorf("makemkv rip title %d: %w", t.ID, err)
 		}

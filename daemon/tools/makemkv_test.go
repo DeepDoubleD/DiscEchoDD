@@ -119,6 +119,27 @@ func TestMakeMKVProgressStream_PRGV(t *testing.T) {
 	}
 }
 
+func TestParseMakeMKVMessage(t *testing.T) {
+	cases := []struct {
+		payload string
+		want    string
+	}{
+		{`1005,0,1,"MakeMKV v1.17.5 linux(x64-release) started","%1","..."`, "MakeMKV v1.17.5 linux(x64-release) started"},
+		{`3007,0,0,"Using direct disc access mode"`, "Using direct disc access mode"},
+		{`5010,4,1,"Failed to open disc","%1","reason"`, "Failed to open disc"},
+		// Malformed: no quoted message
+		{`9999,0,0`, ""},
+		// Malformed: too few fields
+		{`9999`, ""},
+	}
+	for _, tc := range cases {
+		got := tools.ExportedParseMakeMKVMessage(tc.payload)
+		if got != tc.want {
+			t.Errorf("parseMakeMKVMessage(%q) = %q, want %q", tc.payload, got, tc.want)
+		}
+	}
+}
+
 func TestMakeMKVProgressStream_LogsPRGCAsLog(t *testing.T) {
 	sink := &captureSink{}
 	in := bytes.NewBufferString(`PRGC:5018,0,"Saving to MKV file"` + "\n")
@@ -136,9 +157,14 @@ func TestNewMakeMKV_Defaults(t *testing.T) {
 	if m == nil {
 		t.Fatal("nil MakeMKV")
 	}
-	// Calling Scan against a missing device should error cleanly.
-	_, err := m.Scan(context.Background(), "/dev/null")
+	// Calling Scan with a bin that doesn't exist must error cleanly,
+	// not panic. /dev/null as a target alone is not a reliable error
+	// trigger — installed makemkvcon binaries exit 0 with a "no
+	// usable drives" message — so substitute the bin to force the
+	// failure path regardless of host install state.
+	m2 := tools.NewMakeMKV("/nonexistent-makemkvcon-binary", "")
+	_, err := m2.Scan(context.Background(), "/dev/null", &captureSink{})
 	if err == nil {
-		t.Errorf("want error from /dev/null")
+		t.Errorf("want error when bin is missing")
 	}
 }

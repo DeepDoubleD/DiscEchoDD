@@ -55,7 +55,7 @@ type fakeMakeMKV struct {
 	stubName string
 }
 
-func (f *fakeMakeMKV) Scan(_ context.Context, _ string) ([]tools.MakeMKVTitle, error) {
+func (f *fakeMakeMKV) Scan(_ context.Context, _ string, _ tools.Sink) ([]tools.MakeMKVTitle, error) {
 	return f.titles, nil
 }
 func (f *fakeMakeMKV) Rip(_ context.Context, _ string, _ int, outDir string, _ tools.Sink) error {

@@ -78,7 +78,7 @@ type fakeMakeMKV struct {
 	stubBytes map[int]int
 }
 
-func (f *fakeMakeMKV) Scan(_ context.Context, _ string) ([]tools.MakeMKVTitle, error) {
+func (f *fakeMakeMKV) Scan(_ context.Context, _ string, _ tools.Sink) ([]tools.MakeMKVTitle, error) {
 	return f.scanTitles, f.scanErr
 }
 
