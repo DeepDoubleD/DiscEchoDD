@@ -14,9 +14,14 @@
     ejectDrive,
     reidentify,
     jobs,
+    discs,
     startDisc,
   } from '$lib/store';
   import { lastDoneJobForDisc } from '$lib/components/lastDoneJobForDisc';
+  import { lastEncodingDiscForDrive, activeTranscodeJob } from '$lib/discLifecycle';
+  import EncodingChip from '$lib/components/EncodingChip.svelte';
+  import { apiPost } from '$lib/api';
+  import { goto } from '$app/navigation';
   import { formatDuration } from '$lib/time';
   import { trackSummary } from '$lib/format';
 
@@ -41,6 +46,16 @@
   $: rerippedCaption = lastDoneJob
     ? `Already ripped${lastDoneJob.finished_at ? ' ' + lastDoneJob.finished_at.slice(0, 10) : ''} — re-rip?`
     : '';
+
+  // When a previous disc from this drive is still encoding (rip-half done,
+  // disc ejected or replaced), surface it as a chip so it stays visible
+  // until the full pipeline completes. Hidden when the encoding disc IS
+  // the primary disc — its progress is already shown above. The chip is
+  // rendered as a SIBLING of the polymorphic link wrapper because it
+  // contains <button>s, which can't legally appear inside an <a>.
+  $: encodingDisc = lastEncodingDiscForDrive(drive, $discs, $jobs);
+  $: showEncodingChip = !!(encodingDisc && disc && encodingDisc.id !== disc.id);
+  $: encodingJob = encodingDisc ? activeTranscodeJob(encodingDisc, $jobs) : undefined;
 
   let actionBusy: 'cancel' | 'eject' | 'reid' | 'rerip' | null = null;
   let actionErr = '';
@@ -302,6 +317,18 @@
       </div>
     {/if}
   </svelte:element>
+  {#if showEncodingChip && encodingDisc && encodingJob}
+    <div class="px-3 pb-3">
+      <EncodingChip
+        disc={encodingDisc}
+        job={encodingJob}
+        on:cancel={(e) => {
+          void apiPost(`/api/jobs/${encodeURIComponent(e.detail)}/cancel`, {});
+        }}
+        on:navigate={(e) => goto(`/jobs/${encodeURIComponent(e.detail)}`)}
+      />
+    </div>
+  {/if}
   {#if drive.last_error}
     <div
       class="mx-3 mb-2 mt-1 rounded-lg border border-error/30 bg-error/10 p-3"

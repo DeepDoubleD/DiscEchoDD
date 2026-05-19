@@ -2,7 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { render, cleanup } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import DriveCard from './DriveCard.svelte';
-import { jobs } from '$lib/store';
+import { jobs, discs } from '$lib/store';
 import type { Drive, Disc, Job } from '$lib/wire';
 
 const idleDrive: Drive = {
@@ -48,6 +48,7 @@ const seedDisc = (overrides: Partial<Disc> = {}): Disc => ({
 describe('mobile/DriveCard', () => {
   beforeEach(() => {
     jobs.set([]);
+    discs.set({});
   });
 
   afterEach(() => {
@@ -124,5 +125,147 @@ describe('mobile/DriveCard', () => {
       job,
     });
     expect(getByText(/Splitting tracks/i)).toBeInTheDocument();
+  });
+
+  describe('encoding chip (T11)', () => {
+    it('renders the chip when a prior disc from this drive is still encoding', () => {
+      const newDisc: Disc = {
+        id: 'd-new',
+        type: 'DVD',
+        title: 'Number Two',
+        candidates: [],
+        created_at: '2026-05-19T10:30:00Z',
+        drive_id: 'drv-1',
+        lifecycle_state: 'awaiting_decision',
+      };
+      const priorDisc: Disc = {
+        id: 'd-old',
+        type: 'DVD',
+        title: 'Volume Three',
+        candidates: [],
+        created_at: '2026-05-19T10:00:00Z',
+        drive_id: 'drv-1',
+        lifecycle_state: 'encoding',
+      };
+      const transcodeJob: Job = {
+        id: 'j-tr',
+        disc_id: 'd-old',
+        drive_id: 'drv-1',
+        profile_id: 'p1',
+        state: 'running',
+        kind: 'transcode',
+        progress: 42,
+        eta_seconds: 480,
+        active_step: 'transcode',
+        output_bytes: 0,
+        created_at: '2026-05-19T10:10:00Z',
+        steps: [],
+      };
+      discs.set({ 'd-old': priorDisc, 'd-new': newDisc });
+      jobs.set([transcodeJob]);
+      const { queryByTestId } = render(DriveCard, {
+        drive: idleDrive,
+        disc: newDisc,
+      });
+      expect(queryByTestId('encoding-chip')).not.toBeNull();
+    });
+
+    it('does NOT render the chip when no prior disc is encoding', () => {
+      const newDisc: Disc = {
+        id: 'd-new',
+        type: 'DVD',
+        title: 'Number Two',
+        candidates: [],
+        created_at: '2026-05-19T10:30:00Z',
+        drive_id: 'drv-1',
+        lifecycle_state: 'awaiting_decision',
+      };
+      discs.set({ 'd-new': newDisc });
+      jobs.set([]);
+      const { queryByTestId } = render(DriveCard, {
+        drive: idleDrive,
+        disc: newDisc,
+      });
+      expect(queryByTestId('encoding-chip')).toBeNull();
+    });
+
+    it('does NOT render the chip when the encoding disc IS the primary disc', () => {
+      const sameDisc: Disc = {
+        id: 'disc-1',
+        type: 'DVD',
+        title: 'Vol 3',
+        candidates: [],
+        created_at: '2026-05-19T10:00:00Z',
+        drive_id: 'drv-1',
+        lifecycle_state: 'encoding',
+      };
+      const transcodeJob: Job = {
+        id: 'j-tr',
+        disc_id: 'disc-1',
+        drive_id: 'drv-1',
+        profile_id: 'p1',
+        state: 'running',
+        kind: 'transcode',
+        progress: 42,
+        active_step: 'transcode',
+        output_bytes: 0,
+        created_at: '2026-05-19T10:10:00Z',
+        steps: [],
+      };
+      discs.set({ 'disc-1': sameDisc });
+      jobs.set([transcodeJob]);
+      const { queryByTestId } = render(DriveCard, {
+        drive: rippingDrive,
+        disc: sameDisc,
+      });
+      expect(queryByTestId('encoding-chip')).toBeNull();
+    });
+
+    it('chip renders as sibling of the link wrapper when href is set', () => {
+      const newDisc: Disc = {
+        id: 'd-new',
+        type: 'DVD',
+        title: 'Number Two',
+        candidates: [],
+        created_at: '2026-05-19T10:30:00Z',
+        drive_id: 'drv-1',
+        lifecycle_state: 'awaiting_decision',
+      };
+      const priorDisc: Disc = {
+        id: 'd-old',
+        type: 'DVD',
+        title: 'Volume Three',
+        candidates: [],
+        created_at: '2026-05-19T10:00:00Z',
+        drive_id: 'drv-1',
+        lifecycle_state: 'encoding',
+      };
+      const transcodeJob: Job = {
+        id: 'j-tr',
+        disc_id: 'd-old',
+        drive_id: 'drv-1',
+        profile_id: 'p1',
+        state: 'running',
+        kind: 'transcode',
+        progress: 42,
+        eta_seconds: 480,
+        active_step: 'transcode',
+        output_bytes: 0,
+        created_at: '2026-05-19T10:10:00Z',
+        steps: [],
+      };
+      discs.set({ 'd-old': priorDisc, 'd-new': newDisc });
+      jobs.set([transcodeJob]);
+      const { queryByTestId } = render(DriveCard, {
+        drive: idleDrive,
+        disc: newDisc,
+        href: '/drives/drv-1',
+      });
+      const chip = queryByTestId('encoding-chip');
+      expect(chip).not.toBeNull();
+      // The chip must NOT be inside an <a> — buttons inside anchors are
+      // invalid HTML and Svelte/the browser will warn.
+      expect(chip?.closest('a')).toBeNull();
+    });
   });
 });
