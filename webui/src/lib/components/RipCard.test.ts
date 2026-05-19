@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render } from '@testing-library/svelte';
+import { render, fireEvent } from '@testing-library/svelte';
 import RipCard from './RipCard.svelte';
 import { logs } from '$lib/store';
 import type { Drive, Disc, Job, Profile } from '$lib/wire';
@@ -199,6 +199,48 @@ describe('RipCard', () => {
       // Give any unwanted onMount fetch a tick to fire.
       await new Promise((r) => setTimeout(r, 0));
       expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Stop / Eject actions', () => {
+    let fetchSpy: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      fetchSpy = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 204,
+        json: async () => ({}),
+        text: async () => '',
+      });
+      vi.stubGlobal('fetch', fetchSpy);
+      vi.stubGlobal('confirm', () => true);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('renders the Stop button and POSTs /api/jobs/:id/cancel on click', async () => {
+      const { getByTestId } = render(RipCard, { drive, disc, job, profile });
+      const stop = getByTestId('drive-stop');
+      expect(stop).toBeInTheDocument();
+      await fireEvent.click(stop);
+      // First call may be the log backfill (running job); look for the cancel POST among all calls.
+      const calledCancel = fetchSpy.mock.calls.some(
+        (args) => typeof args[0] === 'string' && args[0].includes('/api/jobs/job-1/cancel'),
+      );
+      expect(calledCancel).toBe(true);
+    });
+
+    it('disables the Stop button on a terminal job', () => {
+      const done: Job = { ...job, state: 'done', active_step: undefined };
+      const { getByTestId } = render(RipCard, { drive, disc, job: done, profile });
+      expect(getByTestId('drive-stop')).toBeDisabled();
+    });
+
+    it('renders Eject as disabled while the drive is ripping', () => {
+      const { getByTestId } = render(RipCard, { drive, disc, job, profile });
+      expect(getByTestId('drive-eject')).toBeDisabled();
     });
   });
 

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Stop and Eject buttons on the busy-drive rip card. Until now Stop was only reachable from the job detail panel — the rip card itself had no actions row, so cancelling a running rip required clicking through to `/jobs/<id>`. The card now mirrors the idle-drive hero card: Stop is enabled while the job is running or queued and prompts before cancelling; Eject sits dim during the rip and lights up the moment the drive releases.
+
+### Changed
+- Removed the empty `Files` tab from the disc detail pane. The tab was only ever populated for DVD movies with a `dvd_titles` blob, and even then it duplicated information that already lives in the title picker; for every other disc type it rendered "No file inventory available." Movies now show Overview + Cast; data and unknown discs show Overview only.
+
+### Fixed
+- The rip card now flips to the picked candidate's title, year, and cover the instant you press Start. Previously, choosing a candidate other than the auto-identified top match left the running-rip card showing the original top result's title and cover until a full page reload — the daemon was persisting the picked candidate's metadata to SQLite but never publishing an SSE event, and the front-end's `disc.changed` handler only honoured `metadata_json`. The daemon now emits `disc.changed` with the full updated identity (`title`, `year`, `metadata_provider`, `metadata_id`, `metadata_json`, `runtime_seconds`) after `StartDisc` finishes its writes, and the front-end overlays whichever keys land in the payload.
+
 ## [0.24.3] - 2026-05-19
 
 ### Fixed

@@ -166,6 +166,90 @@ func TestStartDisc_PersistsMetadataBlob_TMDB(t *testing.T) {
 	}
 }
 
+// TestStartDisc_PublishesDiscChanged is the regression for the
+// "RipCard shows the auto-identified top candidate instead of the
+// user-picked one" bug. The fix publishes a disc.changed SSE event
+// after StartDisc finishes its Update* writes so the dashboard flips
+// the rip card to the chosen title/year/cover immediately.
+func TestStartDisc_PublishesDiscChanged(t *testing.T) {
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubDiscHandler{})
+	h := apitestServerWithOrch(t, reg)
+
+	drv := seedDrive(t, h)
+	prof := seedProfile(t, h)
+	disc := seedDisc(t, h, drv.ID)
+	disc.Candidates = []state.Candidate{
+		{Source: "TMDB", Title: "Top Candidate", Year: 2010, TMDBID: 100, MediaType: "movie"},
+		{Source: "TMDB", Title: "Picked Candidate", Year: 2012, TMDBID: 200, MediaType: "movie"},
+	}
+	if err := h.Store.UpdateDiscCandidates(context.Background(), disc.ID, disc.Candidates); err != nil {
+		t.Fatal(err)
+	}
+
+	events, cancel := h.Broadcaster.Subscribe(8)
+	defer cancel()
+
+	r := chi.NewRouter()
+	r.Post("/api/discs/{id}/start", h.StartDisc)
+	body := mustJSON(t, map[string]any{"profile_id": prof.ID, "candidate_index": 1})
+	req := httptest.NewRequest(http.MethodPost, "/api/discs/"+disc.ID+"/start", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+
+	var got *state.Event
+	deadline := time.After(2 * time.Second)
+	for got == nil {
+		select {
+		case ev := <-events:
+			if ev.Name == "disc.changed" {
+				got = &ev
+			}
+		case <-deadline:
+			t.Fatalf("no disc.changed event observed")
+		}
+	}
+	payload, ok := got.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("disc.changed payload not map[string]any: %T", got.Payload)
+	}
+	if id, _ := payload["id"].(string); id != disc.ID {
+		t.Errorf("disc.changed id = %q, want %q", id, disc.ID)
+	}
+	if title, _ := payload["title"].(string); title != "Picked Candidate" {
+		t.Errorf("disc.changed title = %q, want %q", title, "Picked Candidate")
+	}
+	if year, _ := payload["year"].(int); year != 2012 {
+		t.Errorf("disc.changed year = %d, want %d", year, 2012)
+	}
+	if provider, _ := payload["metadata_provider"].(string); provider != "TMDB" {
+		t.Errorf("disc.changed metadata_provider = %q, want TMDB", provider)
+	}
+	if metaID, _ := payload["metadata_id"].(string); metaID != "200" {
+		t.Errorf("disc.changed metadata_id = %q, want %q", metaID, "200")
+	}
+	if _, ok := payload["metadata_json"]; !ok {
+		t.Errorf("disc.changed payload missing metadata_json key")
+	}
+
+	// Drain the orchestrator's stub job so cleanup doesn't race.
+	var j state.Job
+	_ = json.Unmarshal(w.Body.Bytes(), &j)
+	jobDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(jobDeadline) {
+		gj, err := h.Store.GetJob(context.Background(), j.ID)
+		if err == nil && (gj.State == state.JobStateDone || gj.State == state.JobStateFailed) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestStartDisc_RefusesDuplicateWhenActiveJobExists(t *testing.T) {
 	reg := pipelines.NewRegistry()
 	reg.Register(&stubDiscHandler{})

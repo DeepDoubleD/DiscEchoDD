@@ -131,4 +131,24 @@ describe('DiscMetadataPane', () => {
     const { getByText } = render(DiscMetadataPane, { disc: undefined });
     expect(getByText(/Click a queue row/i)).toBeInTheDocument();
   });
+
+  it('does not render a Files tab for movies', () => {
+    // The tab was dead weight (only DVD movies with dvd_titles ever populated
+    // it). Confirm it's gone for movies.
+    const movie = dvdDisc({ plot: 'x' });
+    const { queryByText } = render(DiscMetadataPane, { disc: movie });
+    expect(queryByText('Files')).toBeNull();
+  });
+
+  it('does not render a Files tab for DATA discs', () => {
+    const data: Disc = {
+      id: 'data-1',
+      type: 'DATA',
+      title: 'INSTALL_CD',
+      candidates: [],
+      created_at: '2026-05-13T12:00:00Z',
+    };
+    const { queryByText } = render(DiscMetadataPane, { disc: data });
+    expect(queryByText('Files')).toBeNull();
+  });
 });

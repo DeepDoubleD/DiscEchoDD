@@ -177,6 +177,60 @@ describe('handleSSEEvent', () => {
     expect(get(discs)['disc-1'].candidates).toHaveLength(1);
   });
 
+  it('disc.changed overlays picked-candidate fields without losing candidates', () => {
+    // StartDisc publisher: payload carries title/year/metadata_* fields
+    // that the dashboard reads on the busy-drive RipCard. Unrelated
+    // existing keys (candidates, type) must survive the overlay.
+    discs.set({
+      'disc-1': {
+        ...seedDisc,
+        title: 'Top Candidate',
+        year: 2010,
+        metadata_json: '{}',
+      },
+    });
+    handleSSEEvent('disc.changed', {
+      id: 'disc-1',
+      title: 'Picked Candidate',
+      year: 2012,
+      metadata_provider: 'TMDB',
+      metadata_id: '42',
+      metadata_json: '{"poster_url":"https://example.test/cover.jpg"}',
+      runtime_seconds: 5400,
+    });
+    const d = get(discs)['disc-1'];
+    expect(d.title).toBe('Picked Candidate');
+    expect(d.year).toBe(2012);
+    expect(d.metadata_provider).toBe('TMDB');
+    expect(d.metadata_id).toBe('42');
+    expect(d.metadata_json).toBe('{"poster_url":"https://example.test/cover.jpg"}');
+    expect(d.runtime_seconds).toBe(5400);
+    expect(d.candidates).toEqual(seedDisc.candidates);
+    expect(d.type).toBe(seedDisc.type);
+  });
+
+  it('disc.changed leaves unrelated fields alone when payload omits them', () => {
+    // Scan publisher only sends {id, metadata_json}; title/year/provider
+    // must not be undefined'd.
+    discs.set({
+      'disc-1': {
+        ...seedDisc,
+        title: 'Existing Title',
+        year: 2010,
+        metadata_provider: 'MusicBrainz',
+      },
+    });
+    handleSSEEvent('disc.changed', {
+      id: 'disc-1',
+      metadata_json: '{"scan":{"titles":[]}}',
+    });
+    const d = get(discs)['disc-1'];
+    expect(d.title).toBe('Existing Title');
+    expect(d.year).toBe(2010);
+    expect(d.metadata_provider).toBe('MusicBrainz');
+    expect(d.metadata_json).toBe('{"scan":{"titles":[]}}');
+  });
+
   it('job.created prepends and clears pendingDiscID for matching disc', () => {
     pendingDiscID.set('disc-1');
     handleSSEEvent('job.created', { job: seedJob });

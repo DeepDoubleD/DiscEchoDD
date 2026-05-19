@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
   import type { Drive, Disc, Job, Profile, StepID, AccurateRipSummary } from '$lib/wire';
-  import { logs, ensureLogBackfill } from '$lib/store';
+  import { logs, ensureLogBackfill, cancelJob, ejectDrive } from '$lib/store';
   import { formatDuration } from '$lib/time';
   import { trackSummary } from '$lib/format';
   import { formatProgress } from '$lib/formatProgress';
@@ -117,6 +117,39 @@
     return d.id.slice(0, 8);
   }
 
+  // Actions row — mirrors DriveHeroCard so the user's mental model
+  // doesn't shift when a drive flips from idle to busy.
+  $: canStop = job.state === 'running' || job.state === 'queued';
+  $: canEject = drive.state === 'idle' || drive.state === 'error';
+  let busy: 'cancel' | 'eject' | null = null;
+  let errMsg = '';
+
+  async function onStop(): Promise<void> {
+    if (!canStop) return;
+    if (!confirm('Stop the running rip? Partial output may be left behind.')) return;
+    busy = 'cancel';
+    errMsg = '';
+    try {
+      await cancelJob(job.id);
+    } catch (e) {
+      errMsg = (e as Error).message;
+    } finally {
+      busy = null;
+    }
+  }
+
+  async function onEject(): Promise<void> {
+    busy = 'eject';
+    errMsg = '';
+    try {
+      await ejectDrive(drive.id);
+    } catch (e) {
+      errMsg = (e as Error).message;
+    } finally {
+      busy = null;
+    }
+  }
+
   function levelColour(level: string): string {
     switch (level) {
       case 'warn':
@@ -217,4 +250,27 @@
       {/if}
     </div>
   </div>
+
+  <!-- Actions row -->
+  <div class="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+    <button
+      class="min-h-[36px] flex-1 rounded-xl border border-border bg-surface-2 px-3 text-[13px] font-medium text-warn disabled:opacity-50"
+      on:click={onStop}
+      disabled={!canStop || busy !== null}
+      data-testid="drive-stop"
+    >
+      {busy === 'cancel' ? 'Stopping…' : 'Stop'}
+    </button>
+    <button
+      class="min-h-[36px] flex-1 rounded-xl border border-border bg-surface-2 px-3 text-[13px] font-medium text-text-2 disabled:opacity-50"
+      on:click={onEject}
+      disabled={!canEject || busy !== null}
+      data-testid="drive-eject"
+    >
+      {busy === 'eject' ? 'Ejecting…' : 'Eject'}
+    </button>
+  </div>
+  {#if errMsg}
+    <div class="mt-2 text-[11px] text-error">{errMsg}</div>
+  {/if}
 </div>

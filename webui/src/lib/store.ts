@@ -195,20 +195,26 @@ export function handleSSEEvent(name: string, payload: unknown): void {
     }
 
     case 'disc.changed': {
-      // Partial update for an existing disc. Today the only publisher
-      // is the scan-job orchestrator path, which sends
-      // {id, metadata_json} once the title list lands; AwaitingDecisionList
-      // re-runs hasScanResult on the updated disc and swaps in the
-      // TitlePicker. Defensive overlay: only the keys actually present
-      // in the payload get written so a future publisher omitting a
-      // field can't undefine it (mirrors the drive.changed pattern).
+      // Partial update for an existing disc. Publishers:
+      //   - scan-job orchestrator path → {id, metadata_json}
+      //   - StartDisc (user picked a candidate) → {id, title, year,
+      //     metadata_provider, metadata_id, metadata_json, runtime_seconds}
+      // Defensive overlay: only the keys actually present in the payload
+      // get written so a publisher omitting a field can't undefine it
+      // (mirrors the drive.changed pattern — see CLAUDE.md webui notes).
       const id = p.id as string;
       if (!id) break;
       discs.update((m) => {
         const existing = m[id];
         if (!existing) return m;
         const patch: Partial<Disc> = {};
+        if (typeof p.title === 'string') patch.title = p.title;
+        if (typeof p.year === 'number') patch.year = p.year;
+        if (typeof p.metadata_provider === 'string')
+          patch.metadata_provider = p.metadata_provider as Disc['metadata_provider'];
+        if (typeof p.metadata_id === 'string') patch.metadata_id = p.metadata_id;
         if (typeof p.metadata_json === 'string') patch.metadata_json = p.metadata_json;
+        if (typeof p.runtime_seconds === 'number') patch.runtime_seconds = p.runtime_seconds;
         return { ...m, [id]: { ...existing, ...patch } };
       });
       break;

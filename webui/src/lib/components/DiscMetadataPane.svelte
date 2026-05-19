@@ -14,7 +14,6 @@
     genres?: string[];
     rating?: number;
     poster_url?: string;
-    dvd_titles?: Array<{ Number: number; DurationSeconds: number }>;
   };
   type Audio = {
     label?: string;
@@ -58,15 +57,13 @@
   function tabsFor(k: Kind): string[] {
     switch (k) {
       case 'movie':
-        return ['Overview', 'Cast', 'Files'];
+        return ['Overview', 'Cast'];
       case 'audio':
         return ['Overview', 'Tracks'];
       case 'game':
-        return ['Overview'];
       case 'data':
-        return ['Overview', 'Files'];
       default:
-        return ['Overview', 'Files'];
+        return ['Overview'];
     }
   }
 
@@ -231,16 +228,6 @@
           </ol>
         {:else}
           <p class="text-text-3">No track information.</p>
-        {/if}
-      {:else if activeTab === 'Files'}
-        {#if kind === 'movie' && movieMeta.dvd_titles?.length}
-          <ul class="space-y-1 font-mono text-[11px]">
-            {#each movieMeta.dvd_titles as t}
-              <li>title {t.Number} · {formatDuration(t.DurationSeconds)}</li>
-            {/each}
-          </ul>
-        {:else}
-          <p class="text-text-3">No file inventory available.</p>
         {/if}
       {/if}
     </div>

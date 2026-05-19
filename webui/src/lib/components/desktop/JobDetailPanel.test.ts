@@ -55,13 +55,13 @@ describe('JobDetailPanel', () => {
   });
 
   it('delegates to DiscMetadataPane with the job disc when given a job', () => {
-    const { getByText } = render(JobDetailPanel, { job: ripJob });
+    const { getByText, queryByText } = render(JobDetailPanel, { job: ripJob });
     expect(getByText('Arrival')).toBeInTheDocument();
     // DiscMetadataPane Overview tab surfaces director from the blob.
     expect(getByText('Denis Villeneuve')).toBeInTheDocument();
-    // Tabs row shows Overview / Cast / Files for a DVD.
+    // Tabs row shows Overview / Cast for a DVD; Files was removed.
     expect(getByText('Overview')).toBeInTheDocument();
     expect(getByText('Cast')).toBeInTheDocument();
-    expect(getByText('Files')).toBeInTheDocument();
+    expect(queryByText('Files')).toBeNull();
   });
 });

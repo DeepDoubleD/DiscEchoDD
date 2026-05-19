@@ -167,6 +167,30 @@ func (h *Handlers) StartDisc(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Push the picked-candidate fields out via SSE so the dashboard
+	// flips the rip card to the chosen title/cover/year/runtime
+	// immediately, without waiting for a page reload. Re-read the disc
+	// to capture every Update* write (UpdateDiscMetadata,
+	// UpdateDiscRuntime, UpdateDiscMetadataBlob) in one atomic payload.
+	// Best-effort: a re-read or publish failure here doesn't block the
+	// rip submit below.
+	if h.Broadcaster != nil {
+		if fresh, err := h.Store.GetDisc(r.Context(), disc.ID); err == nil {
+			h.Broadcaster.Publish(state.Event{
+				Name: "disc.changed",
+				Payload: map[string]any{
+					"id":                fresh.ID,
+					"title":             fresh.Title,
+					"year":              fresh.Year,
+					"metadata_provider": fresh.MetadataProvider,
+					"metadata_id":       fresh.MetadataID,
+					"metadata_json":     fresh.MetadataJSON,
+					"runtime_seconds":   fresh.RuntimeSeconds,
+				},
+			})
+		}
+	}
+
 	job, err := h.Orchestrator.Submit(r.Context(), disc.ID, req.ProfileID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
