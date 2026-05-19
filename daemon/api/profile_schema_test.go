@@ -194,11 +194,12 @@ func TestValidateProfile_MakeMKVHandBrakeSeededOptions(t *testing.T) {
 	// Extras (movie) profile + a video-codec change to nvenc_h265 —
 	// exactly the edit the user couldn't save.
 	extras := &state.Profile{
-		DiscType:   state.DiscTypeDVD,
-		Name:       "DVD-Movie + Extras (MakeMKV)",
-		Engine:     "MakeMKV+HandBrake",
-		Container:  "MKV",
-		VideoCodec: "nvenc_h265",
+		DiscType:      state.DiscTypeDVD,
+		Name:          "DVD-Movie + Extras (MakeMKV)",
+		Engine:        "MakeMKV+HandBrake",
+		Container:     "MKV",
+		VideoCodec:    "nvenc_h265",
+		QualityPreset: "high",
 		Options: map[string]any{
 			"dvd_selection_mode": "main_feature",
 			"quality_rf":         20,
@@ -215,11 +216,12 @@ func TestValidateProfile_MakeMKVHandBrakeSeededOptions(t *testing.T) {
 	}
 
 	series := &state.Profile{
-		DiscType:   state.DiscTypeDVD,
-		Name:       "DVD-Series (MakeMKV)",
-		Engine:     "MakeMKV+HandBrake",
-		Container:  "MKV",
-		VideoCodec: "x265",
+		DiscType:      state.DiscTypeDVD,
+		Name:          "DVD-Series (MakeMKV)",
+		Engine:        "MakeMKV+HandBrake",
+		Container:     "MKV",
+		VideoCodec:    "x265",
+		QualityPreset: "high",
 		Options: map[string]any{
 			"min_title_seconds":  300,
 			"season":             1,
@@ -237,10 +239,12 @@ func TestValidateProfile_MakeMKVHandBrakeSeededOptions(t *testing.T) {
 
 func TestValidateProfile_TypedContainerWins(t *testing.T) {
 	p := validProfile()
+	p.DiscType = state.DiscTypeDVD
 	p.Engine = "HandBrake"
 	p.Format = ""
 	p.Container = "MP4"
 	p.VideoCodec = "x264"
+	p.QualityPreset = "high"
 	p.HDRPipeline = "passthrough"
 	if errs := api.ValidateProfile(p); len(errs) != 0 {
 		t.Fatalf("expected valid; got %v", errs)
@@ -327,6 +331,106 @@ func TestValidateProfile_BadDrivePolicy(t *testing.T) {
 	}
 }
 
+func TestValidateProfile_EngineNotAllowedForDiscType(t *testing.T) {
+	// AUDIO_CD only permits whipper; MakeMKV is a video engine.
+	p := validProfile()
+	p.Engine = "MakeMKV"
+	p.Format = ""
+	p.Container = "MKV"
+	p.VideoCodec = "copy"
+	errs := api.ValidateProfile(p)
+	var found bool
+	for _, e := range errs {
+		if e.Field == "engine" && strings.Contains(e.Msg, "does not support engine") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want engine-allowlist error for AUDIO_CD+MakeMKV, got %+v", errs)
+	}
+}
+
+func TestValidateProfile_AllowedEnginesPerDiscType(t *testing.T) {
+	cases := []struct {
+		dt        state.DiscType
+		engine    string
+		container string
+		codec     string
+		qp        string
+	}{
+		{state.DiscTypeAudioCD, "whipper", "FLAC", "", ""},
+		{state.DiscTypeDVD, "MakeMKV", "MKV", "copy", ""},
+		{state.DiscTypeDVD, "MakeMKV+HandBrake", "MKV", "x265", "high"},
+		{state.DiscTypeDVD, "HandBrake", "MKV", "x264", "balanced"},
+		{state.DiscTypeBDMV, "MakeMKV+HandBrake", "MKV", "x265", "archival"},
+		{state.DiscTypeUHD, "MakeMKV", "MKV", "copy", ""},
+		{state.DiscTypePSX, "redumper+chdman", "CHD", "", ""},
+		{state.DiscTypeXBOX, "redumper", "ISO", "", ""},
+		{state.DiscTypeData, "ddrescue", "ISO", "", ""},
+	}
+	for _, tc := range cases {
+		p := &state.Profile{
+			Name:               "ok",
+			DiscType:           tc.dt,
+			Engine:             tc.engine,
+			Container:          tc.container,
+			VideoCodec:         tc.codec,
+			QualityPreset:      tc.qp,
+			Options:            map[string]any{},
+			OutputPathTemplate: `{{.Title}}.x`,
+		}
+		if errs := api.ValidateProfile(p); len(errs) != 0 {
+			t.Errorf("%s/%s: expected valid, got %+v", tc.dt, tc.engine, errs)
+		}
+	}
+}
+
+func TestValidateProfile_BadQualityPresetSlug(t *testing.T) {
+	p := &state.Profile{
+		Name:               "x",
+		DiscType:           state.DiscTypeDVD,
+		Engine:             "HandBrake",
+		Container:          "MKV",
+		VideoCodec:         "x264",
+		QualityPreset:      "ultra",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}}.mkv`,
+	}
+	errs := api.ValidateProfile(p)
+	var found bool
+	for _, e := range errs {
+		if e.Field == "quality_preset" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want quality_preset error for bad slug, got %+v", errs)
+	}
+}
+
+func TestValidateProfile_QualityPresetRequiredForEncode(t *testing.T) {
+	p := &state.Profile{
+		Name:               "x",
+		DiscType:           state.DiscTypeDVD,
+		Engine:             "HandBrake",
+		Container:          "MKV",
+		VideoCodec:         "x264",
+		QualityPreset:      "",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}}.mkv`,
+	}
+	errs := api.ValidateProfile(p)
+	var found bool
+	for _, e := range errs {
+		if e.Field == "quality_preset" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("want quality_preset required error for encode profile, got %+v", errs)
+	}
+}
+
 // TestValidateProfile_SeededDVDProfileOptions guards against the
 // seeder and the validation schema drifting apart. The DVD-Movie and
 // DVD-Series profiles are seeded (settings.go) and migrated
@@ -353,6 +457,7 @@ func TestValidateProfile_SeededDVDProfileOptions(t *testing.T) {
 				Engine:             "HandBrake",
 				Container:          "MKV",
 				VideoCodec:         "x264",
+				QualityPreset:      "high",
 				Options:            tc.opts,
 				OutputPathTemplate: `{{.Title}}.mkv`,
 				StepCount:          7,

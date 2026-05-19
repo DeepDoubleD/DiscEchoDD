@@ -51,6 +51,36 @@ The embedded SvelteKit UI does not send an `Authorization` header,
 so once you set `DISCECHO_TOKEN` the UI only works through a proxy
 that injects the header for you.
 
+### Profiles
+
+A profile decides how discs of one type are ripped and where the output
+lands. Each disc type has a curated set of compatible engines — the
+editor only offers valid combinations, and choosing a disc type
+pre-fills a working profile you can tweak:
+
+- **AUDIO_CD** → `whipper`. Audio CDs are ripped to lossless **FLAC**;
+  whipper has no lossy output, so MP3/Ogg are intentionally not offered.
+- **DVD** → `MakeMKV+HandBrake` (re-encode), `MakeMKV` (lossless
+  passthrough), or `HandBrake` (dvdbackup + encode).
+- **BDMV / UHD** → `MakeMKV+HandBrake` or `MakeMKV`.
+- **PSX / PS2 / Saturn / Dreamcast** → `redumper+chdman` (CHD).
+- **Xbox** → `redumper` (ISO). **DATA** → `ddrescue` (ISO).
+
+**Quality** (encoding profiles only) is a tier — `Archival`, `High`,
+`Balanced`, `Space-saver`, or `Custom`. A tier resolves to the right
+constant-quality RF and encoder speed-preset for the chosen codec
+(x265, x264, NVENC, AV1 each use different RF scales). `Custom` exposes
+the raw RF and encoder-preset fields. Lossless/passthrough engines have
+no quality knob.
+
+**Output path** is a Go `text/template` rooted at the library path. The
+editor shows the variables available for the disc type as clickable
+chips plus a live preview. Common variables: `.Artist .Album .Year
+.TrackNumber .Title .DiscNumber` (audio), `.Title .Year` and
+`.Show .Season .EpisodeNumber .EpisodeTitle` (video), `.Title .Year
+.Region` (games). `printf` and `if` work, e.g.
+`{{.Show}}/Season {{printf "%02d" .Season}}/…`.
+
 ### TMDB
 
 DVD identification queries TMDB (https://www.themoviedb.org/). To enable

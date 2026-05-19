@@ -24,8 +24,8 @@ func TestOpen_AppliesMigrationsOnFreshDB(t *testing.T) {
 	if err := row.Scan(&v); err != nil {
 		t.Fatalf("scan version: %v", err)
 	}
-	if v != 18 {
-		t.Errorf("schema_migrations max version: want 18, got %d", v)
+	if v != 19 {
+		t.Errorf("schema_migrations max version: want 19, got %d", v)
 	}
 
 	for _, tbl := range []string{
@@ -63,8 +63,8 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	if err := row.Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 18 {
-		t.Errorf("schema_migrations rows after second open: want 18, got %d", n)
+	if n != 19 {
+		t.Errorf("schema_migrations rows after second open: want 19, got %d", n)
 	}
 }
 
@@ -202,6 +202,75 @@ func TestMigration006_BackfillsDVDQualityOptions(t *testing.T) {
 	}
 	if preset != "x264 RF 18 · slow" || qualityPreset != "x264 RF 18 · slow" {
 		t.Errorf("display strings not refreshed: preset=%q quality_preset=%q", preset, qualityPreset)
+	}
+}
+
+// TestMigration019_RewritesQualityPresetSlugs seeds profiles carrying the
+// legacy free-text quality_preset display strings and confirms migration
+// 019 maps the known encode strings to the "high" tier slug and the
+// lossless/passthrough strings to "", while leaving an unrecognised
+// user-authored value untouched.
+func TestMigration019_RewritesQualityPresetSlugs(t *testing.T) {
+	dir := t.TempDir()
+	db, err := state.Open(filepath.Join(dir, "test.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := context.Background()
+
+	rows := []struct{ id, qp string }{
+		{"enc", "x265 RF 20 · slow · + extras"},
+		{"pass", "passthrough"},
+		{"def", "default"},
+		{"ar", "AccurateRip · cuesheet"},
+		{"custom", "my hand-rolled preset"},
+	}
+	for _, r := range rows {
+		if _, err := db.Conn().ExecContext(ctx, `
+			INSERT INTO profiles (id, disc_type, name, engine, format, preset,
+			                      container, video_codec, quality_preset,
+			                      drive_policy, options_json,
+			                      output_path_template, enabled, step_count,
+			                      created_at, updated_at)
+			VALUES (?, 'DVD', ?, 'HandBrake', 'MKV', ?, 'MKV', 'x264', ?, 'any',
+			        '{}', '{{.Title}}.mkv', 1, 7,
+			        '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+			r.id, r.id, r.qp, r.qp); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body, err := migrationBody("019_quality_preset_slugs.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Conn().ExecContext(ctx, body); err != nil {
+		t.Fatalf("re-exec migration 019: %v", err)
+	}
+
+	want := map[string]string{
+		"enc":    "high",
+		"pass":   "",
+		"def":    "",
+		"ar":     "",
+		"custom": "my hand-rolled preset",
+	}
+	for id, exp := range want {
+		var qp, preset string
+		if err := db.Conn().QueryRowContext(ctx,
+			`SELECT quality_preset, preset FROM profiles WHERE id = ?`, id).
+			Scan(&qp, &preset); err != nil {
+			t.Fatal(err)
+		}
+		if qp != exp {
+			t.Errorf("%s: quality_preset = %q, want %q", id, qp, exp)
+		}
+		// preset mirror tracks quality_preset for the rewritten rows; the
+		// untouched custom row keeps both as-is.
+		if id != "custom" && preset != exp {
+			t.Errorf("%s: preset = %q, want %q", id, preset, exp)
+		}
 	}
 }
 

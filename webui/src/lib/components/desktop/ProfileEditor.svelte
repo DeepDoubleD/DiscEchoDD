@@ -6,11 +6,17 @@
   import {
     ENGINES,
     DISC_TYPES,
+    DISC_TYPE_DEFAULTS,
     HDR_PIPELINES,
     HDR_PIPELINE_LABELS,
     DRIVE_POLICIES,
     DRIVE_POLICY_LABELS,
-    engineNames,
+    QUALITY_TIER_SLUGS,
+    QUALITY_TIER_LABELS,
+    enginesFor,
+    defaultsFor,
+    resolveTier,
+    varsFor,
     specFor,
   } from '$lib/profile_schema';
   import { createEventDispatcher } from 'svelte';
@@ -55,29 +61,44 @@
   }
 
   $: spec = specFor(working.engine);
+  $: validEngines = enginesFor(working.disc_type);
   $: validContainers = spec?.containers ?? [working.container || working.format || ''];
   $: validVideoCodecs = spec?.videoCodecs ?? [];
-  $: optionKeys = spec ? Object.keys(spec.options) : [];
+  // quality_rf + encoder_preset are owned by the quality-tier control, not
+  // the generic engine-options dump.
+  $: optionKeys = spec
+    ? Object.keys(spec.options).filter((k) => k !== 'quality_rf' && k !== 'encoder_preset')
+    : [];
   $: discType = working.disc_type as DiscType;
   $: discMeta = DISC_TYPE_META[discType] ?? null;
+  // A quality tier only applies when the codec actually encodes ("copy" is
+  // a lossless passthrough). selectedTier coerces any unrecognised stored
+  // value (legacy free-text) to "custom" so the select stays valid.
+  $: isEncodeBearing = !!working.video_codec && working.video_codec !== 'copy';
+  $: selectedTier = QUALITY_TIER_SLUGS.includes(working.quality_preset)
+    ? working.quality_preset
+    : 'custom';
+  $: pathVars = varsFor(working.disc_type);
+  $: previewPath = renderPreview(working.output_path_template, working.disc_type);
 
   function blank(): Profile {
+    const d = DISC_TYPE_DEFAULTS.AUDIO_CD;
     return {
       id: '',
       disc_type: 'AUDIO_CD',
       name: '',
-      engine: 'whipper',
-      format: 'FLAC',
-      preset: '',
-      container: 'FLAC',
-      video_codec: '',
-      quality_preset: '',
+      engine: d.engine,
+      format: d.container,
+      preset: d.qualityPreset,
+      container: d.container,
+      video_codec: d.videoCodec,
+      quality_preset: d.qualityPreset,
       hdr_pipeline: '',
       drive_policy: 'any',
       options: {},
-      output_path_template: '',
+      output_path_template: d.outputPathTemplate,
       enabled: true,
-      step_count: ENGINES.whipper.stepCount,
+      step_count: ENGINES[d.engine].stepCount,
       created_at: '',
       updated_at: '',
     };
@@ -106,13 +127,135 @@
         if (s.options[k]) filtered[k] = working.options[k];
       }
       working.options = filtered;
+      applyTierForCodec();
     }
+  }
+
+  // onDiscTypeChange (create-only) pre-fills a valid, runnable profile from
+  // the per-disc-type defaults table, then normalises engine-derived state.
+  function onDiscTypeChange(): void {
+    const d = defaultsFor(working.disc_type);
+    if (!d) return;
+    working.engine = d.engine;
+    working.container = d.container;
+    working.format = d.container;
+    working.video_codec = d.videoCodec;
+    working.quality_preset = d.qualityPreset;
+    working.output_path_template = d.outputPathTemplate;
+    const s = specFor(working.engine);
+    working.step_count = s?.stepCount ?? working.step_count;
+    // Drop options that don't belong to the new engine, then let the tier
+    // control repopulate quality_rf / encoder_preset.
+    const filtered: Record<string, unknown> = {};
+    for (const k of Object.keys(working.options)) {
+      if (s?.options[k]) filtered[k] = working.options[k];
+    }
+    working.options = filtered;
+    applyTierForCodec();
   }
 
   function onContainerChange(): void {
     // Keep the deprecated `format` mirror in sync for the one-release
     // window where the daemon still falls back to it.
     working.format = working.container;
+  }
+
+  function onVideoCodecChange(): void {
+    applyTierForCodec();
+  }
+
+  // applyTierForCodec keeps quality_preset + options.quality_rf/encoder_preset
+  // consistent after an engine/codec change. Lossless codecs carry no tier;
+  // encode-bearing codecs default to "high" and resolve the RF + preset for
+  // the current codec. "custom" keeps whatever raw values the user set.
+  function applyTierForCodec(): void {
+    if (!working.video_codec || working.video_codec === 'copy') {
+      working.quality_preset = '';
+      const opts = { ...working.options };
+      delete opts.quality_rf;
+      delete opts.encoder_preset;
+      working.options = opts;
+      return;
+    }
+    let tier = working.quality_preset;
+    if (!QUALITY_TIER_SLUGS.includes(tier)) tier = 'high';
+    if (tier === 'custom') {
+      working.quality_preset = 'custom';
+      return;
+    }
+    working.quality_preset = tier;
+    const r = resolveTier(working.video_codec, tier);
+    if (r) {
+      working.options = {
+        ...working.options,
+        quality_rf: r.quality_rf,
+        encoder_preset: r.encoder_preset,
+      };
+    }
+  }
+
+  function onTierChange(e: Event): void {
+    const tier = (e.currentTarget as HTMLSelectElement).value;
+    working.quality_preset = tier;
+    if (tier !== 'custom') {
+      const r = resolveTier(working.video_codec, tier);
+      if (r) {
+        working.options = {
+          ...working.options,
+          quality_rf: r.quality_rf,
+          encoder_preset: r.encoder_preset,
+        };
+      }
+    }
+  }
+
+  function appendVar(name: string): void {
+    working.output_path_template = `${working.output_path_template}{{.${name}}}`;
+  }
+
+  // renderPreview does a best-effort client-side render of an output-path
+  // template against sample values, covering the {{.X}}, {{printf "%0Nd"
+  // .X}} and {{if .X}}…{{end}} forms the seeder templates use. Display only.
+  function renderPreview(tmpl: string, dt: string): string {
+    if (!tmpl) return '';
+    const f = sampleFor(dt);
+    let s = tmpl;
+    s = s.replace(/\{\{if \.(\w+)\}\}(.*?)\{\{end\}\}/g, (_m, k, inner) => (f[k] ? inner : ''));
+    s = s.replace(/\{\{printf "%0?(\d*)d" \.(\w+)\}\}/g, (_m, width, k) => {
+      const v = f[k];
+      if (v === undefined) return '';
+      return String(v).padStart(Number(width) || 0, '0');
+    });
+    s = s.replace(/\{\{\.(\w+)\}\}/g, (_m, k) => (f[k] !== undefined ? String(f[k]) : ''));
+    return s;
+  }
+
+  function sampleFor(dt: string): Record<string, string | number> {
+    if (dt === 'AUDIO_CD') {
+      return {
+        Artist: 'Radiohead',
+        Album: 'OK Computer',
+        Year: 1997,
+        TrackNumber: 3,
+        Title: 'Paranoid Android',
+        DiscNumber: 1,
+      };
+    }
+    if (dt === 'PSX' || dt === 'PS2' || dt === 'SAT' || dt === 'DC' || dt === 'XBOX') {
+      return { Title: 'Final Fantasy VII', Year: 1997, Region: 'USA' };
+    }
+    if (dt === 'DATA') {
+      return { Title: 'BACKUP_DISC' };
+    }
+    // DVD / BDMV / UHD — populate both movie + series fields.
+    return {
+      Title: 'Inception',
+      Year: 2010,
+      Show: 'The Office',
+      Season: 2,
+      EpisodeNumber: 5,
+      EpisodeTitle: 'Halloween',
+    };
   }
 
   export async function onSave(): Promise<void> {
@@ -326,7 +469,12 @@
       {#if creating}
         <FormSection title="Identity" sub="Disc type and engine lock once the profile is created.">
           <FormRow label="Disc type" error={fieldErrors.disc_type}>
-            <select name="disc_type" bind:value={working.disc_type} class={inputClass}>
+            <select
+              name="disc_type"
+              bind:value={working.disc_type}
+              on:change={onDiscTypeChange}
+              class={inputClass}
+            >
               {#each DISC_TYPES as dt}
                 <option value={dt}>{dt}</option>
               {/each}
@@ -344,7 +492,7 @@
             disabled={!creating}
             class={inputDisabledClass}
           >
-            {#each engineNames() as e}
+            {#each validEngines as e}
               <option value={e}>{e}</option>
             {/each}
           </select>
@@ -373,21 +521,50 @@
         </FormRow>
         {#if validVideoCodecs.length > 0}
           <FormRow label="Video codec" error={fieldErrors.video_codec}>
-            <select name="video_codec" bind:value={working.video_codec} class={inputClass}>
+            <select
+              name="video_codec"
+              bind:value={working.video_codec}
+              on:change={onVideoCodecChange}
+              class={inputClass}
+            >
               {#each validVideoCodecs as v}
                 <option value={v}>{v}</option>
               {/each}
             </select>
           </FormRow>
         {/if}
-        <FormRow label="Quality preset" error={fieldErrors.quality_preset ?? fieldErrors.preset}>
-          <input
-            name="quality_preset"
-            type="text"
-            bind:value={working.quality_preset}
-            class="w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 font-mono text-[12px] text-text"
-          />
-        </FormRow>
+        {#if isEncodeBearing}
+          <FormRow label="Quality" error={fieldErrors.quality_preset ?? fieldErrors.preset}>
+            <select
+              name="quality_preset"
+              value={selectedTier}
+              on:change={onTierChange}
+              class={inputClass}
+            >
+              {#each QUALITY_TIER_SLUGS as slug}
+                <option value={slug}>{QUALITY_TIER_LABELS[slug] ?? slug}</option>
+              {/each}
+            </select>
+          </FormRow>
+          {#if selectedTier === 'custom'}
+            <FormRow label="RF (quality)">
+              <input
+                type="number"
+                value={Number(working.options.quality_rf ?? 20)}
+                on:input={(e) => onOptionIntInput('quality_rf', e)}
+                class={inputClass}
+              />
+            </FormRow>
+            <FormRow label="Encoder preset">
+              <input
+                type="text"
+                value={String(working.options.encoder_preset ?? 'slow')}
+                on:input={(e) => onOptionStringInput('encoder_preset', e)}
+                class={inputClass}
+              />
+            </FormRow>
+          {/if}
+        {/if}
         {#if validVideoCodecs.length > 0}
           <FormRow label="HDR pipeline" error={fieldErrors.hdr_pipeline}>
             <select name="hdr_pipeline" bind:value={working.hdr_pipeline} class={inputClass}>
@@ -399,15 +576,26 @@
         {/if}
       </FormSection>
 
-      <FormSection title="Post-processing" sub="Chain runs after encode finishes, in order.">
-        <div class="px-4 py-6 text-center text-[12px] text-text-3">
-          Coming next — verification, cuesheet, metadata tagging.
-        </div>
-      </FormSection>
-
       <FormSection title="Library">
         <FormRow label="Output path" error={fieldErrors.output_path_template}>
           <PathField value={working.output_path_template} on:change={onOutputPathChange} />
+          {#if pathVars.length > 0}
+            <div class="mt-2 flex flex-wrap gap-1.5">
+              {#each pathVars as v}
+                <button
+                  type="button"
+                  title={v.desc}
+                  on:click={() => appendVar(v.name)}
+                  class="rounded border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-text-2 transition-colors hover:border-accent hover:text-text"
+                >
+                  {'{{.' + v.name + '}}'}
+                </button>
+              {/each}
+            </div>
+          {/if}
+          <div class="mt-2 text-[11px] text-text-3">
+            Preview: <span class="font-mono text-text-2">{previewPath || '—'}</span>
+          </div>
         </FormRow>
       </FormSection>
 

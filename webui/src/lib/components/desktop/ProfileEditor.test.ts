@@ -43,7 +43,7 @@ const bd: Profile = {
   format: 'MKV',
   container: 'MKV',
   video_codec: 'x265',
-  quality_preset: 'x265 RF 19 10-bit',
+  quality_preset: 'high',
   hdr_pipeline: 'passthrough',
   drive_policy: 'any',
   output_path_template: '/library/movies/{{.Title}} ({{.Year}}).mkv',
@@ -74,16 +74,15 @@ describe('ProfileEditor', () => {
       creating: false,
     });
     expect(getByDisplayValue('CD-FLAC')).toBeInTheDocument();
-    expect(getByDisplayValue('AccurateRip')).toBeInTheDocument();
     expect(getByText('{{.Title}}.flac')).toBeInTheDocument();
   });
 
-  it('renders the four mockup FormSections in edit mode', () => {
-    const { getByText } = render(ProfileEditor, { profile: bd, creating: false });
+  it('renders the mockup FormSections in edit mode (no Post-processing)', () => {
+    const { getByText, queryByText } = render(ProfileEditor, { profile: bd, creating: false });
     expect(getByText('Engine')).toBeInTheDocument();
     expect(getByText('Encoding')).toBeInTheDocument();
-    expect(getByText('Post-processing')).toBeInTheDocument();
     expect(getByText('Library')).toBeInTheDocument();
+    expect(queryByText('Post-processing')).toBeNull();
   });
 
   it('locks Engine in edit mode', () => {

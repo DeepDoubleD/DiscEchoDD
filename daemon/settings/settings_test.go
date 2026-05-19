@@ -459,8 +459,11 @@ func TestSeedBDMVProfile(t *testing.T) {
 	if p.Format != "MKV" {
 		t.Errorf("BD-1080p format = %q", p.Format)
 	}
-	if p.Preset != "x265 RF 19 10-bit" {
+	if p.Preset != "high" {
 		t.Errorf("BD-1080p preset = %q", p.Preset)
+	}
+	if p.QualityPreset != "high" {
+		t.Errorf("BD-1080p quality_preset = %q", p.QualityPreset)
 	}
 	if p.StepCount != 7 {
 		t.Errorf("BD-1080p step_count = %d, want 7", p.StepCount)
@@ -500,8 +503,11 @@ func TestSeedUHDProfile(t *testing.T) {
 	if p.Format != "MKV" {
 		t.Errorf("UHD-Remux format = %q", p.Format)
 	}
-	if p.Preset != "passthrough" {
+	if p.Preset != "" {
 		t.Errorf("UHD-Remux preset = %q", p.Preset)
+	}
+	if p.QualityPreset != "" {
+		t.Errorf("UHD-Remux quality_preset = %q", p.QualityPreset)
 	}
 	if p.StepCount != 6 {
 		t.Errorf("UHD-Remux step_count = %d, want 6", p.StepCount)

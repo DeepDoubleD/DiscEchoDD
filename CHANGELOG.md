@@ -6,7 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Profile engine choices are now constrained per disc type. The editor's engine dropdown only offers engines that suit the disc type (e.g. AUDIO_CD → whipper; DVD → MakeMKV / MakeMKV+HandBrake / HandBrake; XBOX → redumper), and the daemon rejects out-of-allow-list combinations. Previously any engine could be paired with any disc type, allowing nonsensical profiles like an audio CD ripped with HandBrake.
+- Choosing a disc type for a new profile now pre-fills a valid, runnable profile — engine, container, codec, quality tier, and a sensible output-path template — instead of leaving fields blank.
+- The Output path field now lists the template variables available for the selected disc type as clickable chips (e.g. `{{.Title}}`, `{{.Year}}`, `{{.Artist}}`) and shows a live preview of the rendered path against sample values.
+
+### Changed
+- Quality preset is now a functional picker (`Archival / High / Balanced / Space-saver / Custom`) instead of a free-text label that no pipeline read. Picking a tier resolves the right constant-quality RF and encoder speed-preset for the chosen codec (x265 RF differs from x264, NVENC and AV1 again); Custom exposes the raw RF + encoder-preset inputs. The field only appears for encoding profiles (lossless/passthrough engines don't show it).
+
+### Removed
+- The empty "Post-processing — coming next" placeholder section in the profile editor.
+
 ### Fixed
+- The webui engine mirror listed a stale `dd` engine; the daemon engine is `ddrescue` (renamed in migration 012). Corrected so the DATA engine resolves correctly client-side.
+
 - MakeMKV rips now actually display progress and ETA. The rip command was missing `--progress=-same`; in robot mode makemkvcon emits no PRGV/PRGC progress lines unless this flag is set, so the bar sat at 0% with no ETA for the whole rip. The v0.27.0 PRGV `total/max` + ETA + multi-title aggregation work was correct but never received any progress input on real discs — only the title-length `MSG:` lines from the scan still printed, which masked the gap. (The scan/`info` path was unaffected because robot-mode *messages* print by default; only *progress* requires the flag.)
 
 ## [0.27.0] - 2026-05-20

@@ -142,6 +142,78 @@ var engineSchemas = map[string]EngineSchema{
 	},
 }
 
+// DiscTypeEngines is the curated allow-list of engines per disc type.
+// ValidateProfile rejects an engine that isn't listed for the profile's
+// disc type. The first entry is the recommended default the editor
+// pre-fills when a new profile's disc type is chosen. A disc type absent
+// from this map imposes no engine constraint (defensive — every type the
+// editor offers is listed here).
+var DiscTypeEngines = map[state.DiscType][]string{
+	state.DiscTypeAudioCD: {"whipper"},
+	state.DiscTypeDVD:     {"MakeMKV+HandBrake", "MakeMKV", "HandBrake"},
+	state.DiscTypeBDMV:    {"MakeMKV+HandBrake", "MakeMKV"},
+	state.DiscTypeUHD:     {"MakeMKV", "MakeMKV+HandBrake"},
+	state.DiscTypePSX:     {"redumper+chdman"},
+	state.DiscTypePS2:     {"redumper+chdman"},
+	state.DiscTypeSAT:     {"redumper+chdman"},
+	state.DiscTypeDC:      {"redumper+chdman"},
+	state.DiscTypeXBOX:    {"redumper"},
+	state.DiscTypeData:    {"ddrescue"},
+}
+
+// QualityTier is a resolved (constant-quality RF, encoder speed-preset)
+// pair for one codec at one named quality tier.
+type QualityTier struct {
+	RF     int
+	Preset string
+}
+
+// QualityTierSlugs are the valid quality_preset values for an
+// encode-bearing profile. "" is the value for lossless/passthrough
+// engines; "custom" means the user supplies raw quality_rf +
+// encoder_preset directly (no tier resolution).
+var QualityTierSlugs = []string{"archival", "high", "balanced", "space-saver", "custom"}
+
+// QualityTiers maps video codec → tier slug → resolved encode settings.
+// Picking a tier in the editor writes options.quality_rf +
+// options.encoder_preset from this table (the webui mirror resolves the
+// same values); the pipeline reads those two options unchanged. "custom"
+// is intentionally absent — it stores raw user values instead. RF values
+// follow the codec-equivalence rule of thumb (x265 ≈ x264+2, NVENC needs
+// a few more, AV1 on its own scale) and are tunable.
+var QualityTiers = map[string]map[string]QualityTier{
+	"x264": {
+		"archival":    {RF: 16, Preset: "slower"},
+		"high":        {RF: 18, Preset: "slow"},
+		"balanced":    {RF: 21, Preset: "medium"},
+		"space-saver": {RF: 23, Preset: "fast"},
+	},
+	"x265": {
+		"archival":    {RF: 18, Preset: "slower"},
+		"high":        {RF: 20, Preset: "slow"},
+		"balanced":    {RF: 23, Preset: "medium"},
+		"space-saver": {RF: 25, Preset: "fast"},
+	},
+	"nvenc_h264": {
+		"archival":    {RF: 18, Preset: "slower"},
+		"high":        {RF: 21, Preset: "slow"},
+		"balanced":    {RF: 24, Preset: "medium"},
+		"space-saver": {RF: 27, Preset: "fast"},
+	},
+	"nvenc_h265": {
+		"archival":    {RF: 18, Preset: "slower"},
+		"high":        {RF: 21, Preset: "slow"},
+		"balanced":    {RF: 24, Preset: "medium"},
+		"space-saver": {RF: 27, Preset: "fast"},
+	},
+	"av1": {
+		"archival":    {RF: 20, Preset: "slower"},
+		"high":        {RF: 24, Preset: "slow"},
+		"balanced":    {RF: 28, Preset: "medium"},
+		"space-saver": {RF: 32, Preset: "fast"},
+	},
+}
+
 // HDRPipelines lists the valid hdr_pipeline values. Empty is allowed
 // (per-engine default — no HDR concept for audio/data engines).
 var HDRPipelines = []string{"", "passthrough", "hdr10plus", "tone-map-sdr", "strip"}
@@ -163,6 +235,10 @@ type ValidationError struct {
 // Rules:
 //   - Name + DiscType + Engine required.
 //   - Engine must exist in engineSchemas.
+//   - Engine must be allowed for the disc type (DiscTypeEngines).
+//   - QualityPreset must be a tier slug (QualityTierSlugs) or "";
+//     encode-bearing profiles (real video codec, not "copy") require a
+//     tier.
 //   - Container must be in schema.Containers (or, during the
 //     deprecation window, Format must be in schema.Formats when
 //     Container is empty).
@@ -195,6 +271,13 @@ func ValidateProfile(p *state.Profile) []ValidationError {
 			Msg:   fmt.Sprintf("unknown engine %q", p.Engine),
 		})
 		return errs
+	}
+
+	if allowed, known := DiscTypeEngines[p.DiscType]; known && !contains(allowed, p.Engine) {
+		errs = append(errs, ValidationError{
+			Field: "engine",
+			Msg:   fmt.Sprintf("disc type %s does not support engine %q (allowed: %v)", p.DiscType, p.Engine, allowed),
+		})
 	}
 
 	switch {
@@ -231,6 +314,23 @@ func ValidateProfile(p *state.Profile) []ValidationError {
 				Msg:   fmt.Sprintf("engine %s requires video codec in %v, got %q", p.Engine, schema.VideoCodecs, p.VideoCodec),
 			})
 		}
+	}
+
+	// quality_preset is a tier slug (or "" for lossless/passthrough
+	// engines). Encode-bearing profiles (a real video codec, not the
+	// "copy" passthrough) must carry a tier so the field can never be
+	// the empty/garbage string the free-text version allowed.
+	if p.QualityPreset != "" && !contains(QualityTierSlugs, p.QualityPreset) {
+		errs = append(errs, ValidationError{
+			Field: "quality_preset",
+			Msg:   fmt.Sprintf("quality_preset must be one of %v, got %q", QualityTierSlugs, p.QualityPreset),
+		})
+	}
+	if p.VideoCodec != "" && p.VideoCodec != "copy" && p.QualityPreset == "" {
+		errs = append(errs, ValidationError{
+			Field: "quality_preset",
+			Msg:   "quality_preset is required for encoding profiles",
+		})
 	}
 
 	if !contains(HDRPipelines, p.HDRPipeline) {
