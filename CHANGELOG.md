@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-05-20
+
 ### Added
 - MakeMKV scan now emits a `scan` sub-step on the rip job, surfaced on drive cards as "Rip — Scanning titles (this can take several minutes)". The `info` enumeration on slim USB DVD drives can run 5+ minutes before any rip bytes flow; the prior label said "Rip — Read raw data", which was misleading and gave the impression of a stuck rip.
 - MakeMKV `MSG:` lines from the scan phase are forwarded to the job log in real time (startup banner, `direct disc access mode` notice, errors). The log tail used to sit at a single line for the entire scan; users now see the same liveness signal the redumper path already had.
