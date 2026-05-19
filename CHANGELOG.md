@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- `Settings → Integrations → MakeMKV` now accepts both free `T-` beta keys and purchased `M-` permanent licenses. The API-level validator previously hard-rejected anything that didn't match `^T-…`, which locked out paid registrations. The settings.conf writer was always format-agnostic — only the gate on the way in needed widening. The UI field label is now "License key (T- beta or M- purchased)".
+
 ## [0.26.1] - 2026-05-19
 
 ### Fixed

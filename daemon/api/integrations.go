@@ -16,10 +16,11 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
 
-// makemkvBetaKeyRE matches the canonical MakeMKV beta key shape
-// `T-<base64ish>`. Validated only on PUT; existing rows are not
-// re-checked.
-var makemkvBetaKeyRE = regexp.MustCompile(`^T-[A-Za-z0-9+/=]+$`)
+// makemkvKeyRE matches both MakeMKV key shapes accepted by makemkvcon:
+// `T-<base64ish>` for rotating free beta keys, and `M-<base64ish>` for
+// purchased permanent licenses. Validated only on PUT; existing rows
+// are not re-checked.
+var makemkvKeyRE = regexp.MustCompile(`^[TM]-[A-Za-z0-9+/=]+$`)
 
 type integrationListEntry struct {
 	Name          string              `json:"name"`
@@ -278,9 +279,9 @@ func validateIntegrationPut(name string, body map[string]string) []validationErr
 			errs = append(errs, validationError{Field: "key", Msg: "required"})
 		}
 	case "makemkv":
-		if v, ok := body["beta_key"]; ok && !makemkvBetaKeyRE.MatchString(v) {
+		if v, ok := body["beta_key"]; ok && !makemkvKeyRE.MatchString(v) {
 			errs = append(errs, validationError{Field: "beta_key",
-				Msg: "must match T-<key> shape"})
+				Msg: "must start with T- (free beta key) or M- (purchased license)"})
 		}
 	}
 	return errs

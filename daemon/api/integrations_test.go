@@ -173,16 +173,31 @@ func TestPutIntegration_ValidatesIGDBPair(t *testing.T) {
 }
 
 func TestPutIntegration_ValidatesMakeMKVKeyShape(t *testing.T) {
-	h := apitestServerWithIntegrations(t, newFakeRegistry())
-	r := chi.NewRouter()
-	r.Put("/api/integrations/{name}", h.PutIntegration)
+	cases := []struct {
+		name     string
+		key      string
+		wantCode int
+	}{
+		{"reject unprefixed", "not-a-key", http.StatusUnprocessableEntity},
+		{"reject X-prefix", "X-foo", http.StatusUnprocessableEntity},
+		{"accept T- beta", "T-sJ5R5BKxhD671U9s0teXbyP19MhCkkkB7rmnNbb1aEHaqveiVqyI3RXGMHDXhoyNUC", http.StatusOK},
+		{"accept M- purchased", "M-abcdef0123456789ABCDEF0123456789abcdef==", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := apitestServerWithIntegrations(t, newFakeRegistry())
+			r := chi.NewRouter()
+			r.Put("/api/integrations/{name}", h.PutIntegration)
 
-	req := httptest.NewRequest(http.MethodPut, "/api/integrations/makemkv",
-		strings.NewReader(`{"beta_key":"not-a-T-key"}`))
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Errorf("status %d want 422", w.Code)
+			body, _ := json.Marshal(map[string]string{"beta_key": tc.key})
+			req := httptest.NewRequest(http.MethodPut, "/api/integrations/makemkv",
+				strings.NewReader(string(body)))
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			if w.Code != tc.wantCode {
+				t.Errorf("status %d want %d (%s)", w.Code, tc.wantCode, w.Body.String())
+			}
+		})
 	}
 }
 

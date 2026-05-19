@@ -69,7 +69,7 @@
       { name: 'key', label: 'API key (v3)', secret: true },
       { name: 'lang', label: 'Language (e.g. en-US)', secret: false },
     ],
-    makemkv: [{ name: 'beta_key', label: 'Beta key', secret: true }],
+    makemkv: [{ name: 'beta_key', label: 'License key (T- beta or M- purchased)', secret: true }],
   };
 
   const INTEGRATION_ENV_HINTS: Record<'igdb' | 'tmdb' | 'makemkv', string> = {
