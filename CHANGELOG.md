@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.26.3] - 2026-05-19
+
+### Fixed
+- MakeMKV `M-` license-key validator now accepts the URL-safe base64 alphabet (`-` and `_`). v0.26.2 widened the prefix gate but kept the body charset on the standard-base64 alphabet, so real purchased keys like `M-_6P312gXv…` still failed validation with the same 422.
+
 ## [0.26.2] - 2026-05-19
 
 ### Changed

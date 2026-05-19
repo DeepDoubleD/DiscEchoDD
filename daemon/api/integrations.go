@@ -18,9 +18,11 @@ import (
 
 // makemkvKeyRE matches both MakeMKV key shapes accepted by makemkvcon:
 // `T-<base64ish>` for rotating free beta keys, and `M-<base64ish>` for
-// purchased permanent licenses. Validated only on PUT; existing rows
-// are not re-checked.
-var makemkvKeyRE = regexp.MustCompile(`^[TM]-[A-Za-z0-9+/=]+$`)
+// purchased permanent licenses. The body is base64-ish — purchased
+// keys use the URL-safe alphabet (`-_`) where beta keys use standard
+// base64 (`+/`), so the charset accepts either. Validated only on
+// PUT; existing rows are not re-checked.
+var makemkvKeyRE = regexp.MustCompile(`^[TM]-[A-Za-z0-9+/=_-]+$`)
 
 type integrationListEntry struct {
 	Name          string              `json:"name"`
