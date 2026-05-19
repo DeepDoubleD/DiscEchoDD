@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-05-19
+
+### Changed
+- DVD/Blu-ray/UHD identify now ranks TMDB results by how well each candidate title matches the disc label, with TMDB popularity as a tiebreaker — instead of letting popularity alone decide. Volume-numbered direct-to-video releases ("Jackass Volume Three" against a `JACKASS_VOLUME_3` label) no longer get shadowed by a more popular but unrelated entry ("Jackass 3.5") just because TMDB ranks the latter higher. Scoring uses a Jaccard token overlap with digit↔word folding (`3` ↔ `three`, `10` ↔ `ten`), so a `Volume 3` label scores 1.0 against `Volume Three`. The 100/80/60/40/20 rank-position confidence numbers in the picker now reflect match quality, not popularity.
+
 ## [0.24.1] - 2026-05-19
 
 ### Fixed

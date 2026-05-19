@@ -351,7 +351,7 @@ func (c *tmdbClient) SearchMovie(ctx context.Context, query string) ([]state.Can
 	if err != nil {
 		return nil, err
 	}
-	applyRankConfidence(out)
+	applyRankConfidence(out, query)
 	return out, nil
 }
 
@@ -360,7 +360,7 @@ func (c *tmdbClient) SearchTV(ctx context.Context, query string) ([]state.Candid
 	if err != nil {
 		return nil, err
 	}
-	applyRankConfidence(out)
+	applyRankConfidence(out, query)
 	return out, nil
 }
 
@@ -406,13 +406,25 @@ func (c *tmdbClient) SearchBoth(ctx context.Context, query string) ([]state.Cand
 		return nil, fmt.Errorf("tmdb both: movie=%w; tv=%v", movieErr, tvErr)
 	}
 
+	// Pre-cap ordering: similarity to the query first, popularity
+	// (which still lives in Confidence) as tiebreaker. Keeps the
+	// best-matching candidates when there are more than tmdbCandidateCap
+	// results across the two endpoints, instead of dropping them in
+	// favour of irrelevant-but-popular titles.
 	sort.SliceStable(out, func(i, j int) bool {
+		if query != "" {
+			si := titleSimilarity(query, out[i].Title)
+			sj := titleSimilarity(query, out[j].Title)
+			if si != sj {
+				return si > sj
+			}
+		}
 		return out[i].Confidence > out[j].Confidence
 	})
 	if len(out) > tmdbCandidateCap {
 		out = out[:tmdbCandidateCap]
 	}
-	applyRankConfidence(out)
+	applyRankConfidence(out, query)
 	return out, nil
 }
 
@@ -436,12 +448,24 @@ func rankConfidence(rank int) int {
 	}
 }
 
-// applyRankConfidence sorts cands by their existing Confidence (treated
-// as the popularity-derived sort key) descending, then overwrites each
-// Confidence with its rank position. Stable sort preserves relative
-// order between ties.
-func applyRankConfidence(cands []state.Candidate) {
+// applyRankConfidence sorts cands by title-vs-query similarity desc,
+// breaks ties on the existing Confidence (which still holds the TMDB
+// popularity-derived score at this point), then overwrites each
+// Confidence with its rank position (100, 80, 60, 40, 20).
+//
+// Passing an empty query falls back to popularity-only ordering — the
+// pre-similarity behaviour — for tests and callers that don't have a
+// natural query (none in production today). Stable sort preserves the
+// relative order of full ties.
+func applyRankConfidence(cands []state.Candidate, query string) {
 	sort.SliceStable(cands, func(i, j int) bool {
+		if query != "" {
+			si := titleSimilarity(query, cands[i].Title)
+			sj := titleSimilarity(query, cands[j].Title)
+			if si != sj {
+				return si > sj
+			}
+		}
 		return cands[i].Confidence > cands[j].Confidence
 	})
 	for i := range cands {
