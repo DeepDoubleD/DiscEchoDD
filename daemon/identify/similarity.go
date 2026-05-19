@@ -1,8 +1,8 @@
 package identify
 
 import (
+	"regexp"
 	"strings"
-	"unicode"
 )
 
 // titleSimilarity returns a 0..1 Jaccard similarity between two title
@@ -49,11 +49,16 @@ var digitWord = map[string]string{
 	"10": "ten",
 }
 
+// tokenRE matches an alnum run, optionally followed by `.digits` runs
+// so decimal numbers like "3.5" stay as a single token. Otherwise the
+// "3" half folds to "three" via digitWord and matches a query "3" —
+// which makes the wrong title win when the disc label is "Jackass 3"
+// and TMDB returns both "Jackass 3.5" and "Jackass Volume Three".
+var tokenRE = regexp.MustCompile(`[a-z0-9]+(?:\.[0-9]+)*`)
+
 func tokenise(s string) []string {
 	s = strings.ToLower(s)
-	fields := strings.FieldsFunc(s, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
+	fields := tokenRE.FindAllString(s, -1)
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
 		if w, ok := digitWord[f]; ok {

@@ -7,7 +7,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
 
-func TestTitleSimilarity_JackassVolumeThreeBeatsJackass35(t *testing.T) {
+func TestTitleSimilarity_JackassVolume3Label(t *testing.T) {
 	q := "Jackass Volume 3"
 	cases := []struct {
 		title string
@@ -15,12 +15,12 @@ func TestTitleSimilarity_JackassVolumeThreeBeatsJackass35(t *testing.T) {
 	}{
 		// All 3 query tokens match (3 ↔ three) → 3/3 = 1.0.
 		{"Jackass Volume Three", 1.0},
-		// {jackass, three, five} vs {jackass, volume, three} →
-		// intersect {jackass, three}, union 4 → 0.5.
-		{"Jackass 3.5", 0.5},
-		// {jackass, 3d} vs {jackass, volume, three} →
-		// intersect {jackass}, union 4 → 0.25. ("3d" is one alnum token,
-		// not split into digits.)
+		// "3.5" stays as a single token (not split into 3+5), so it
+		// does NOT fold to "three". {jackass, 3.5} vs {jackass, volume,
+		// three} → intersect {jackass}, union 4 → 0.25.
+		{"Jackass 3.5", 0.25},
+		// {jackass, 3d} vs {jackass, volume, three} → intersect
+		// {jackass}, union 4 → 0.25.
 		{"Jackass 3D", 0.25},
 		// {the, making, of, jackass, 3d} vs query of 3 →
 		// intersect {jackass}, union 7 → 1/7.
@@ -34,17 +34,31 @@ func TestTitleSimilarity_JackassVolumeThreeBeatsJackass35(t *testing.T) {
 	}
 }
 
-func TestTitleSimilarity_RanksJackassCandidatesCorrectly(t *testing.T) {
-	// End-to-end: feed the rank-confidence pipeline the same candidates
-	// in the order TMDB returned them (popularity-ordered), confirm
-	// Volume Three lands at rank 0 after the similarity pass.
+// TestTitleSimilarity_Jackass3Label is the actual regression: the
+// homelab disc had volume label `Jackass_3` (NOT `Jackass_Volume_3`),
+// which normalises to "Jackass 3". Under the original tokeniser
+// "3.5" split into ["3","5"] and the "3"→"three" fold made
+// "Jackass 3.5" share two tokens with the query — tying with the
+// correct "Jackass Volume Three" and letting popularity break the
+// tie in favour of the wrong title.
+func TestTitleSimilarity_Jackass3Label(t *testing.T) {
+	q := "Jackass 3"
+	if got := titleSimilarity(q, "Jackass 3.5"); got >= titleSimilarity(q, "Jackass Volume Three") {
+		t.Errorf("Jackass 3.5 should NOT outscore Jackass Volume Three for query %q: 3.5=%v, Volume Three=%v",
+			q, got, titleSimilarity(q, "Jackass Volume Three"))
+	}
+}
+
+func TestApplyRankConfidence_RanksJackassCandidatesCorrectly(t *testing.T) {
+	// End-to-end: candidates in TMDB-popularity order; after the
+	// similarity pass Volume Three lands at rank 0.
 	cands := []state.Candidate{
 		{Title: "Jackass 3.5", Confidence: 100, TMDBID: 65851},
 		{Title: "Jackass Volume Three", Confidence: 12, TMDBID: 347115},
 		{Title: "The Making of 'Jackass 3D'", Confidence: 8, TMDBID: 936730},
 		{Title: "Jackass 3D", Confidence: 75, TMDBID: 16290},
 	}
-	applyRankConfidence(cands, "Jackass Volume 3")
+	applyRankConfidence(cands, "Jackass 3")
 	if cands[0].Title != "Jackass Volume Three" {
 		t.Errorf("top match: want Jackass Volume Three, got %q (full order: %v)",
 			cands[0].Title, titlesOf(cands))

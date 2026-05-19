@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.24.3] - 2026-05-19
+
+### Fixed
+- v0.24.2's similarity-based DVD candidate scoring still surfaced the wrong top match for short numeric labels like `Jackass_3`. The tokeniser split `3.5` into `3` + `5`, and the digit→word fold turned that `3` into `three` — which then tied `Jackass 3.5` with `Jackass Volume Three` on token overlap, leaving popularity to break the tie in favour of the more popular but wrong title. Keep decimal numbers as a single token so `3.5` no longer masquerades as the integer `3`.
+
 ## [0.24.2] - 2026-05-19
 
 ### Changed
