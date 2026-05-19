@@ -116,15 +116,24 @@ func (m *MakeMKV) Scan(ctx context.Context, devPath string, sink Sink) ([]MakeMK
 	return ParseMakeMKVInfo(buf.String())
 }
 
-// Rip runs `makemkvcon -r --decrypt --noscan mkv dev:<devPath> <titleID> <outDir>`
-// and streams progress to the sink. outDir gets one .mkv per title
-// ripped (we always rip a single title, so one file).
-func (m *MakeMKV) Rip(ctx context.Context, devPath string, titleID int, outDir string, sink Sink) error {
-	args := []string{
-		"-r", "--decrypt", "--noscan",
+// makeMKVRipArgs builds the makemkvcon argument vector for a single-title
+// rip. `--progress=-same` is mandatory: in robot mode makemkvcon defaults to
+// "no progress output", so without it PRGV/PRGC lines never reach stdout and
+// the rip bar is stuck at 0% with no ETA (the title-length MSG lines from the
+// scan still print, which masked the gap). `-same` routes progress onto the
+// same stream as messages (stdout), where ParseMakeMKVProgressStream reads it.
+func makeMKVRipArgs(devPath string, titleID int, outDir string) []string {
+	return []string{
+		"-r", "--decrypt", "--noscan", "--progress=-same",
 		"mkv", "dev:" + devPath, strconv.Itoa(titleID), outDir,
 	}
-	cmd := exec.CommandContext(ctx, m.bin, args...)
+}
+
+// Rip runs `makemkvcon -r --decrypt --noscan --progress=-same mkv dev:<devPath>
+// <titleID> <outDir>` and streams progress to the sink. outDir gets one .mkv
+// per title ripped (we always rip a single title, so one file).
+func (m *MakeMKV) Rip(ctx context.Context, devPath string, titleID int, outDir string, sink Sink) error {
+	cmd := exec.CommandContext(ctx, m.bin, makeMKVRipArgs(devPath, titleID, outDir)...)
 	if m.dataDir != "" {
 		cmd.Env = append(cmd.Environ(), "HOME="+m.dataDir+"/..")
 	}

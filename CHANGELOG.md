@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- MakeMKV rips now actually display progress and ETA. The rip command was missing `--progress=-same`; in robot mode makemkvcon emits no PRGV/PRGC progress lines unless this flag is set, so the bar sat at 0% with no ETA for the whole rip. The v0.27.0 PRGV `total/max` + ETA + multi-title aggregation work was correct but never received any progress input on real discs — only the title-length `MSG:` lines from the scan still printed, which masked the gap. (The scan/`info` path was unaffected because robot-mode *messages* print by default; only *progress* requires the flag.)
+
 ## [0.27.0] - 2026-05-20
 
 ### Added
