@@ -42,22 +42,18 @@ RUN CGO_ENABLED=0 go build \
 # runtime image. We compile it in this isolated stage and the runtime
 # stage copies only the resulting binary + shared libs.
 ###############################################################################
-FROM debian:bookworm-slim AS makemkv-build
-ARG MAKEMKV_VERSION=1.18.3
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-        build-essential pkg-config libc6-dev libssl-dev libexpat1-dev \
-        libavcodec-dev libgl1-mesa-dev qtbase5-dev zlib1g-dev curl \
-        ca-certificates \
- && curl -fsSL "https://www.makemkv.com/download/makemkv-oss-${MAKEMKV_VERSION}.tar.gz" \
-        | tar xz -C /tmp \
- && curl -fsSL "https://www.makemkv.com/download/makemkv-bin-${MAKEMKV_VERSION}.tar.gz" \
-        | tar xz -C /tmp \
- && cd "/tmp/makemkv-oss-${MAKEMKV_VERSION}" \
-        && ./configure --disable-gui && make -j"$(nproc)" && make install \
- && cd "/tmp/makemkv-bin-${MAKEMKV_VERSION}" \
-        && mkdir -p tmp && echo accepted > tmp/eula_accepted \
-        && make install
+# Pulled from jlesage/makemkv rather than built from source. Our previous
+# from-source build linked makemkvcon against Debian bookworm's libcrypto3
+# / libssl3 / libavcodec59. The resulting binary saved + loaded purchased
+# `M-` registration keys correctly (verified byte-perfect on disk) but
+# MakeMKV's internal signature verification still rejected them with
+# MSG:5021 ("application version is too old"). The same key + same upstream
+# version (v1.18.3) worked on the user's desktop, so the divergence was in
+# the build/linkage. jlesage/makemkv bundles its own complete library tree
+# (including its own dynamic linker at /opt/makemkv/lib/ld-linux-x86-64.so.2)
+# matched to MakeMKV's expectations, so we adopt that pre-built bundle
+# wholesale.
+FROM jlesage/makemkv:latest AS makemkv-build
 
 ###############################################################################
 # Stage — build HandBrakeCLI from source on Debian bookworm
@@ -169,12 +165,14 @@ FROM python:3.12-slim-bookworm AS runtime
 # probe). HandBrakeCLI itself comes from the handbrake-build stage
 # below — the Debian package lacks NVENC support. libdvd-pkg lives in
 # Debian's `contrib` archive, which the python:slim base doesn't enable
-# by default. libbluray-bin ships bd_info (UHD AACS2 detection);
-# libssl3 + libexpat1 + libavcodec59 are makemkvcon's runtime
-# shared-lib deps. libass9 + libturbojpeg0 are HandBrakeCLI runtime
-# deps not pulled in transitively by anything else in this image.
-# libsdl2-2.0-0 is the sole runtime dep of the chdman binary built from
-# MAME source in the chdman-build stage above (chdman links ocore_sdl).
+# by default. libbluray-bin ships bd_info (UHD AACS2 detection).
+# makemkvcon ships with its own bundled libraries under /opt/makemkv/lib/
+# (its own ld-linux + libcrypto3 + libssl3 + libexpat + libavcodec) so
+# the runtime image no longer needs to provide them on its behalf.
+# libass9 + libturbojpeg0 are HandBrakeCLI runtime deps not pulled in
+# transitively by anything else in this image. libsdl2-2.0-0 is the
+# sole runtime dep of the chdman binary built from MAME source in the
+# chdman-build stage above (chdman links ocore_sdl).
 RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
         > /etc/apt/sources.list.d/contrib.list \
  && apt-get update \
@@ -185,7 +183,6 @@ RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
         libdvd-pkg dvdbackup genisoimage \
         gddrescue \
         libbluray-bdj libbluray2 libbluray-bin \
-        libssl3 libexpat1 libavcodec59 \
         libass9 libturbojpeg0 \
         libsdl2-2.0-0 \
         libebur128-1 libavformat59 libswresample4 libavutil57 libtag1v5 \
@@ -193,10 +190,13 @@ RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
  && rm -rf /var/lib/apt/lists/* \
  && pip install --no-cache-dir apprise
 
-# Copy MakeMKV's built binary + shared libs from the build stage.
-COPY --from=makemkv-build /usr/bin/makemkvcon /usr/bin/makemkvcon
-COPY --from=makemkv-build /lib/libmakemkv.so.1 /lib/libmakemkv.so.1
-COPY --from=makemkv-build /lib/libdriveio.so.0 /lib/libdriveio.so.0
+# Copy the entire MakeMKV install tree from jlesage's image. The bundle
+# at /opt/makemkv/{bin,lib} is self-contained (its own ld-linux,
+# libcrypto, libssl, libexpat, libavcodec). Symlink the entry point
+# to /usr/bin/makemkvcon so the daemon's exec.Command resolution via
+# PATH keeps working unchanged.
+COPY --from=makemkv-build /opt/makemkv /opt/makemkv
+RUN ln -sf /opt/makemkv/bin/makemkvcon /usr/bin/makemkvcon
 
 # HandBrake built from source on Debian bookworm. The binary links
 # against the same bookworm shared libs already present in the runtime

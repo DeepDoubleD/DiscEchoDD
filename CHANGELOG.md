@@ -6,7 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.26.4] - 2026-05-19
+### Changed
+- MakeMKV is now sourced from the upstream `jlesage/makemkv` image instead of being compiled from `makemkv-oss` / `makemkv-bin` inside the Dockerfile. The from-source build linked `makemkvcon` against Debian bookworm's libcrypto3 / libssl3 / libavcodec59, and the resulting binary subtly broke purchased `M-` license-key signature verification — MakeMKV stored the key correctly but emitted `MSG:5021 "application version is too old"` against any disc command, even though the exact same upstream version + key worked elsewhere. `jlesage/makemkv` ships a self-contained MakeMKV install at `/opt/makemkv` (including its own dynamic linker and library tree), which key validation accepts.
+
+
 
 ### Fixed
 - MakeMKV license-key validator no longer second-guesses the body charset. v0.26.2 and v0.26.3 each widened the allowed character class chasing real purchased keys, and real keys still slipped past with characters neither version covered. The validator now gates only on the prefix (`T-` or `M-`) and a minimum length; the body is treated as opaque and forwarded to makemkvcon, which has the only authoritative parse.
