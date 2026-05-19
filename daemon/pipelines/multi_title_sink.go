@@ -21,11 +21,11 @@ import (
 // remaining work. Speed forwards unchanged (MakeMKV doesn't emit
 // bytes/sec; redumper passes the LBA-derived value through).
 type MultiTitleSink struct {
-	inner      tools.Sink
-	titleIdx   int    // 1..totalTitles
+	inner       tools.Sink
+	titleIdx    int // 1..totalTitles
 	totalTitles int
-	startWall  time.Time
-	nowFn      func() time.Time
+	startWall   time.Time
+	nowFn       func() time.Time
 }
 
 // NewMultiTitleSink wraps inner so that Progress(pct) for the current

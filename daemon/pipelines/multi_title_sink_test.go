@@ -28,11 +28,11 @@ func (r *recordingToolsSink) SubStep(name string) { r.subs = append(r.subs, name
 
 func TestMultiTitleSink_ScalesProgress(t *testing.T) {
 	cases := []struct {
-		name      string
-		titleIdx  int
-		total     int
-		inputPct  float64
-		wantAgg   float64
+		name     string
+		titleIdx int
+		total    int
+		inputPct float64
+		wantAgg  float64
 	}{
 		{"first title 0%", 1, 4, 0, 0},
 		{"first title 50%", 1, 4, 50, 12.5},
