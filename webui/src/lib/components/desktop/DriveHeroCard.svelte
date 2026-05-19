@@ -7,8 +7,12 @@
   import { ripSubStepLabel } from '$lib/ripSubStepLabel';
   import { formatProgress } from '$lib/formatProgress';
   import { createEventDispatcher } from 'svelte';
-  import { cancelJob, ejectDrive, reidentify, jobs, startDisc } from '$lib/store';
+  import { cancelJob, ejectDrive, reidentify, jobs, discs, startDisc } from '$lib/store';
   import { lastDoneJobForDisc } from '$lib/components/lastDoneJobForDisc';
+  import { lastEncodingDiscForDrive, activeTranscodeJob } from '$lib/discLifecycle';
+  import EncodingChip from '$lib/components/EncodingChip.svelte';
+  import { apiPost } from '$lib/api';
+  import { goto } from '$app/navigation';
 
   export let drive: Drive;
   export let disc: Disc | undefined = undefined;
@@ -111,6 +115,14 @@
     }
     return '';
   })();
+
+  // When a previous disc from this drive is still encoding (rip-half done,
+  // disc ejected or replaced), surface it as a chip so it stays visible
+  // until the full pipeline completes. Hidden when the encoding disc IS
+  // the primary disc — its progress is already shown above.
+  $: encodingDisc = lastEncodingDiscForDrive(drive, $discs, $jobs);
+  $: showEncodingChip = !!(encodingDisc && disc && encodingDisc.id !== disc.id);
+  $: encodingJob = encodingDisc ? activeTranscodeJob(encodingDisc, $jobs) : undefined;
 </script>
 
 <div
@@ -241,5 +253,15 @@
   {/if}
   {#if errMsg}
     <div class="mt-2 text-[11px] text-error">{errMsg}</div>
+  {/if}
+  {#if showEncodingChip && encodingDisc && encodingJob}
+    <EncodingChip
+      disc={encodingDisc}
+      job={encodingJob}
+      on:cancel={(e) => {
+        void apiPost(`/api/jobs/${encodeURIComponent(e.detail)}/cancel`, {});
+      }}
+      on:navigate={(e) => goto(`/jobs/${encodeURIComponent(e.detail)}`)}
+    />
   {/if}
 </div>

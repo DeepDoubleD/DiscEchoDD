@@ -2,7 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/svelte';
 import DriveHeroCard from './DriveHeroCard.svelte';
-import { jobs } from '$lib/store';
+import { jobs, discs } from '$lib/store';
 import type { Drive, Disc, Job } from '$lib/wire';
 
 const idleDrive: Drive = {
@@ -46,6 +46,7 @@ const ripJob: Job = {
 describe('DriveHeroCard', () => {
   beforeEach(() => {
     jobs.set([]);
+    discs.set({});
   });
 
   it('renders model and bus', () => {
@@ -166,5 +167,96 @@ describe('DriveHeroCard', () => {
     });
     const label = getByTestId('active-step-label');
     expect(label.textContent).toContain('Read raw data');
+  });
+
+  describe('encoding chip (T10)', () => {
+    it('renders the chip when a prior disc from this drive is still encoding', () => {
+      const newDisc: Disc = {
+        id: 'd-new',
+        type: 'DVD',
+        title: 'Number Two',
+        candidates: [],
+        created_at: '2026-05-19T10:30:00Z',
+        drive_id: 'd1',
+        lifecycle_state: 'awaiting_decision',
+      };
+      const priorDisc: Disc = {
+        id: 'd-old',
+        type: 'DVD',
+        title: 'Volume Three',
+        candidates: [],
+        created_at: '2026-05-19T10:00:00Z',
+        drive_id: 'd1',
+        lifecycle_state: 'encoding',
+      };
+      const transcodeJob: Job = {
+        id: 'j-tr',
+        disc_id: 'd-old',
+        drive_id: 'd1',
+        profile_id: 'p1',
+        state: 'running',
+        kind: 'transcode',
+        progress: 42,
+        eta_seconds: 480,
+        active_step: 'transcode',
+        created_at: '2026-05-19T10:10:00Z',
+      };
+      discs.set({ 'd-old': priorDisc, 'd-new': newDisc });
+      jobs.set([transcodeJob]);
+      const { queryByTestId } = render(DriveHeroCard, {
+        drive: idleDrive,
+        disc: newDisc,
+      });
+      expect(queryByTestId('encoding-chip')).not.toBeNull();
+    });
+
+    it('does NOT render the chip when no prior disc is encoding', () => {
+      const newDisc: Disc = {
+        id: 'd-new',
+        type: 'DVD',
+        title: 'Number Two',
+        candidates: [],
+        created_at: '2026-05-19T10:30:00Z',
+        drive_id: 'd1',
+        lifecycle_state: 'awaiting_decision',
+      };
+      discs.set({ 'd-new': newDisc });
+      jobs.set([]);
+      const { queryByTestId } = render(DriveHeroCard, {
+        drive: idleDrive,
+        disc: newDisc,
+      });
+      expect(queryByTestId('encoding-chip')).toBeNull();
+    });
+
+    it('does NOT render the chip when the encoding disc IS the primary disc', () => {
+      const sameDisc: Disc = {
+        id: 'disc-1',
+        type: 'DVD',
+        title: 'Vol 3',
+        candidates: [],
+        created_at: '2026-05-19T10:00:00Z',
+        drive_id: 'd1',
+        lifecycle_state: 'encoding',
+      };
+      const transcodeJob: Job = {
+        id: 'j-tr',
+        disc_id: 'disc-1',
+        drive_id: 'd1',
+        profile_id: 'p1',
+        state: 'running',
+        kind: 'transcode',
+        progress: 42,
+        active_step: 'transcode',
+        created_at: '2026-05-19T10:10:00Z',
+      };
+      discs.set({ 'disc-1': sameDisc });
+      jobs.set([transcodeJob]);
+      const { queryByTestId } = render(DriveHeroCard, {
+        drive: rippingDrive,
+        disc: sameDisc,
+      });
+      expect(queryByTestId('encoding-chip')).toBeNull();
+    });
   });
 });
