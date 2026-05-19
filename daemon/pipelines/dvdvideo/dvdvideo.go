@@ -341,10 +341,11 @@ func (h *Handler) runRipMakeMKV(ctx context.Context, drv *state.Drive, disc *sta
 	}
 
 	ripStart := time.Now()
-	for _, t := range picked {
+	for i, t := range picked {
 		sink.OnLog(state.LogLevelInfo, "MakeMKV: ripping title %d (%s)",
 			t.ID, pipelines.HumanDuration(time.Duration(t.DurationSec)*time.Second))
-		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, ripStepSink); err != nil {
+		titleSink := pipelines.NewMultiTitleSink(ripStepSink, i+1, len(picked), ripStart)
+		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, titleSink); err != nil {
 			sink.OnStepFailed(state.StepRip, err)
 			return pipelines.RipResult{}, fmt.Errorf("makemkv rip title %d: %w", t.ID, err)
 		}

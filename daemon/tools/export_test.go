@@ -24,3 +24,12 @@ func SetRedumperNowForTest(now func() time.Time) {
 func ExportedParseMakeMKVMessage(payload string) string {
 	return parseMakeMKVMessage(payload)
 }
+
+// SetMakeMKVNowForTest swaps the MakeMKV parser's clock with the
+// provided function and returns a restore closure. Mirrors the
+// whipper / redumper test seams.
+func SetMakeMKVNowForTest(now func() time.Time) (restore func()) {
+	prev := makemkvNow
+	makemkvNow = now
+	return func() { makemkvNow = prev }
+}

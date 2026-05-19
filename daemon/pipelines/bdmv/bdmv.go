@@ -236,8 +236,9 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 		return pipelines.RipResult{}, err
 	}
 	ripStart := time.Now()
-	for _, t := range picked {
-		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, ripStepSink); err != nil {
+	for i, t := range picked {
+		titleSink := pipelines.NewMultiTitleSink(ripStepSink, i+1, len(picked), ripStart)
+		if err := h.deps.MakeMKVRipper.Rip(ctx, drv.DevPath, t.ID, ripDir, titleSink); err != nil {
 			sink.OnStepFailed(state.StepRip, err)
 			return pipelines.RipResult{}, fmt.Errorf("makemkv rip title %d: %w", t.ID, err)
 		}

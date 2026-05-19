@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 	"github.com/jumpingmushroom/DiscEcho/daemon/tools"
@@ -14,11 +15,15 @@ import (
 
 type captureSink struct {
 	progress []float64
+	speeds   []string
+	etas     []int
 	logs     []string
 }
 
-func (c *captureSink) Progress(pct float64, _ string, _ int) {
+func (c *captureSink) Progress(pct float64, speed string, eta int) {
 	c.progress = append(c.progress, pct)
+	c.speeds = append(c.speeds, speed)
+	c.etas = append(c.etas, eta)
 }
 func (c *captureSink) Log(_ state.LogLevel, format string, args ...any) {
 	c.logs = append(c.logs, fmt.Sprintf(format, args...))
@@ -102,10 +107,15 @@ func TestMakeMKVParseInfo_Empty(t *testing.T) {
 
 func TestMakeMKVProgressStream_PRGV(t *testing.T) {
 	sink := &captureSink{}
+	// PRGV format: current,total,max — we drive on `total/max` so the
+	// per-title progress is monotonic against the file the user is
+	// waiting on. `current` resets per sub-operation; using it produced
+	// progress=0 in v0.26.5 even while a 3.6 GB title was being
+	// written.
 	in := bytes.NewBufferString(strings.Join([]string{
-		`PRGV:0,1024,65536`,
-		`PRGV:32768,1024,65536`,
-		`PRGV:65536,1024,65536`,
+		`PRGV:1024,0,65536`,
+		`PRGV:1024,32768,65536`,
+		`PRGV:1024,65536,65536`,
 	}, "\n"))
 	tools.ParseMakeMKVProgressStream(in, sink)
 	if len(sink.progress) != 3 {
@@ -114,8 +124,50 @@ func TestMakeMKVProgressStream_PRGV(t *testing.T) {
 	if sink.progress[0] != 0 {
 		t.Errorf("first progress = %f, want 0", sink.progress[0])
 	}
+	if sink.progress[1] != 50 {
+		t.Errorf("mid progress = %f, want 50", sink.progress[1])
+	}
 	if sink.progress[2] != 100 {
 		t.Errorf("last progress = %f, want 100", sink.progress[2])
+	}
+}
+
+func TestMakeMKVProgressStream_ETA(t *testing.T) {
+	// Feed a deterministic clock: t0 at the first sample, then +60s for
+	// the second (25%) and +120s for the third (50%). At 25% over 60s
+	// the rate is 25 pct / 60s; 75 remaining pct → 180s ETA. At 50%
+	// over 120s the rate is 50/120; 50 remaining → 120s ETA.
+	t0 := time.Unix(1_700_000_000, 0)
+	clockCalls := 0
+	steps := []time.Duration{0, 60 * time.Second, 120 * time.Second}
+	restore := tools.SetMakeMKVNowForTest(func() time.Time {
+		idx := clockCalls
+		if idx >= len(steps) {
+			idx = len(steps) - 1
+		}
+		clockCalls++
+		return t0.Add(steps[idx])
+	})
+	defer restore()
+
+	sink := &captureSink{}
+	in := bytes.NewBufferString(strings.Join([]string{
+		`PRGV:1024,0,65536`,
+		`PRGV:1024,16384,65536`,
+		`PRGV:1024,32768,65536`,
+	}, "\n"))
+	tools.ParseMakeMKVProgressStream(in, sink)
+	if len(sink.etas) != 3 {
+		t.Fatalf("want 3 ETA values, got %d", len(sink.etas))
+	}
+	if sink.etas[0] != 0 {
+		t.Errorf("first ETA = %d, want 0 (no rate yet)", sink.etas[0])
+	}
+	if sink.etas[1] != 180 {
+		t.Errorf("ETA at 25%% after 60s = %d, want 180", sink.etas[1])
+	}
+	if sink.etas[2] != 120 {
+		t.Errorf("ETA at 50%% after 120s = %d, want 120", sink.etas[2])
 	}
 }
 

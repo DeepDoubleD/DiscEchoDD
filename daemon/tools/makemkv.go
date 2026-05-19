@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
@@ -216,10 +217,21 @@ func ParseMakeMKVInfo(s string) ([]MakeMKVTitle, error) {
 }
 
 // ParseMakeMKVProgressStream reads PRGV/PRGC lines and emits sink
-// events. PRGV → progress percent. PRGC → log line with the operation
+// events. PRGV carries `current,total,max` — `current` is per
+// sub-operation (resets each phase), `total` is the per-title file
+// progress (monotonic 0→max over the title's rip). We use `total/max`
+// so the bar is monotonic for a single title and tracks the file size
+// the user is actually waiting on. PRGC → log line with the operation
 // label ("Saving to MKV file"). PRGT is ignored (mirrors PRGC for our
 // single-title rips).
+//
+// ETA seconds is extrapolated from wall-clock elapsed vs the percent
+// delta, mirroring redumper's approach. Speed is left empty — MakeMKV
+// doesn't surface bytes/sec on stdout and we don't have a stable LBA
+// reference like redumper. The ETA chip alone gives the user a useful
+// signal during the long quiet phases.
 func ParseMakeMKVProgressStream(r io.Reader, sink Sink) {
+	rate := newMakeMKVRate()
 	drainAfterScan(r, func(scanner *bufio.Scanner) {
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -229,13 +241,14 @@ func ParseMakeMKVProgressStream(r io.Reader, sink Sink) {
 				if len(parts) < 3 {
 					continue
 				}
-				cur, _ := strconv.Atoi(parts[0])
+				total, _ := strconv.Atoi(parts[1])
 				max, _ := strconv.Atoi(parts[2])
 				if max <= 0 {
 					continue
 				}
-				pct := float64(cur) / float64(max) * 100
-				sink.Progress(pct, "", 0)
+				pct := float64(total) / float64(max) * 100
+				eta := rate.observePercent(pct, makemkvNow())
+				sink.Progress(pct, "", eta)
 			case strings.HasPrefix(line, "PRGC:"):
 				label := unquoteMakeMKVLast(strings.TrimPrefix(line, "PRGC:"))
 				if label != "" {
@@ -248,6 +261,40 @@ func ParseMakeMKVProgressStream(r io.Reader, sink Sink) {
 			}
 		}
 	})
+}
+
+// makemkvNow is a package var so tests can substitute a deterministic
+// clock. Same pattern as redumperNow / whipperNow.
+var makemkvNow = func() time.Time { return time.Now() }
+
+// makemkvRateTracker extrapolates ETA seconds from a stream of PRGV
+// percent samples. One per ParseMakeMKVProgressStream call.
+type makemkvRateTracker struct {
+	firstSeen time.Time
+	firstPct  float64
+}
+
+func newMakeMKVRate() *makemkvRateTracker { return &makemkvRateTracker{} }
+
+// observePercent returns the ETA in seconds. Returns 0 until the
+// percent has measurably advanced (avoids divide-by-zero and noisy
+// first-sample numbers).
+func (r *makemkvRateTracker) observePercent(pct float64, now time.Time) int {
+	if r.firstSeen.IsZero() {
+		r.firstSeen = now
+		r.firstPct = pct
+		return 0
+	}
+	pctDone := pct - r.firstPct
+	if pctDone <= 0 {
+		return 0
+	}
+	remaining := 100 - pct
+	if remaining <= 0 {
+		return 0
+	}
+	elapsed := now.Sub(r.firstSeen).Seconds()
+	return int(elapsed * remaining / pctDone)
 }
 
 // parseTINFO splits a TINFO row payload (the part after "TINFO:") and

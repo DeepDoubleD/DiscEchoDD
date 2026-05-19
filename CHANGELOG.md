@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Mobile drive card log tail now includes the `HH:MM:SS` timestamp alongside the level marker. Previously the timestamp was dropped, leaving only `· <message>`.
 - Mobile drive card now renders an `Eject` button disabled alongside `Stop` while a rip is in progress, matching the desktop RipCard. Previously the action was hidden mid-rip.
 
+### Fixed
+- MakeMKV per-title progress now reads `total/max` from PRGV instead of `current/max`. `current` is the per-sub-operation counter and resets repeatedly; `total` is the file-progress counter the user is actually waiting on. v0.26.5 multi-title DVD rips reported `progress=0` for the entire job even though the spool directory was filling with finished `.mkv` files.
+- MakeMKV rip jobs now extrapolate ETA seconds from wall-clock elapsed vs percent delta and forward it on every PRGV. The progress chip on drive cards / queue rows used to show `—` for every MakeMKV rip; ETA now populates the same way it does for redumper.
+- Multi-title MakeMKV rips (DVD / BDMV / UHD picked-extras flows) now report an aggregated 0→100 progress across the whole title set rather than resetting to 0 at every title boundary. Aggregate ETA tracks the wall-clock since the first title started, so the chip reflects total work remaining, not just the current title.
+
 ## [0.26.5] - 2026-05-19
 
 ### Changed
