@@ -63,6 +63,9 @@ func NewRouter(h *Handlers, static http.Handler) http.Handler {
 			// /discs/{id}/identify with force=true and /start are moved
 			// out of this group below — they need withLongTimeout instead
 			// of the default 30s.
+			// /discs/history must come before /discs/{id} so chi's
+			// route matcher prefers the literal segment over the param.
+			authed.Get("/discs/history", h.ListDiscHistory)
 			authed.Delete("/discs/{id}", h.DeleteDisc)
 
 			authed.Get("/profiles", h.ListProfiles)

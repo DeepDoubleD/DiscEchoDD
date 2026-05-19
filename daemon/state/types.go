@@ -369,3 +369,17 @@ type LogLine struct {
 	Level   LogLevel  `json:"level"`
 	Message string    `json:"message"`
 }
+
+// DiscHistoryRow is one row from /api/discs/history — a disc plus the
+// summary metadata the UI needs to render the disc-as-unit history page
+// without re-fetching per row.
+type DiscHistoryRow struct {
+	Disc                 Disc       `json:"disc"`
+	LatestRipJobID       string     `json:"latest_rip_job_id"`
+	LatestTranscodeJobID string     `json:"latest_transcode_job_id,omitempty"`
+	FirstAttemptAt       time.Time  `json:"first_attempt_at"`
+	CompletedAt          *time.Time `json:"completed_at,omitempty"`
+	OutputBytes          int64      `json:"output_bytes,omitempty"`
+	OutputPaths          []string   `json:"output_paths,omitempty"`
+	AttemptSummary       string     `json:"attempt_summary,omitempty"`
+}

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 - Stop and Eject buttons on the busy-drive rip card. Until now Stop was only reachable from the job detail panel — the rip card itself had no actions row, so cancelling a running rip required clicking through to `/jobs/<id>`. The card now mirrors the idle-drive hero card: Stop is enabled while the job is running or queued and prompts before cancelling; Eject sits dim during the rip and lights up the moment the drive releases.
+- Daemon: `Disc.lifecycle_state` aggregate field computed from each disc's rip+transcode chain, exposed in `/api/state` and the SSE snapshot.
+- Daemon: new `GET /api/discs/history` endpoint returning disc-keyed history rows for the upcoming UI rework.
 
 ### Changed
 - Removed the empty `Files` tab from the disc detail pane. The tab was only ever populated for DVD movies with a `dvd_titles` blob, and even then it duplicated information that already lives in the title picker; for every other disc type it rendered "No file inventory available." Movies now show Overview + Cast; data and unknown discs show Overview only.

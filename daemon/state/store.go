@@ -2127,6 +2127,340 @@ func (s *Store) CountHistory(ctx context.Context, f HistoryFilter) (int, error) 
 	return n, nil
 }
 
+// ListDiscHistory returns disc-as-unit history rows, newest-first by
+// latest associated job. Discs with zero jobs are excluded (those are
+// awaiting-decision discs, surfaced by AwaitingDecisionList instead).
+//
+// limit / offset use the same pagination shape as ListHistory.
+// Returns (rows, total, error) — total counts ALL discs with at least
+// one job (for the UI pager), not just the returned page.
+func (s *Store) ListDiscHistory(ctx context.Context, limit, offset int) ([]DiscHistoryRow, int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var total int
+	err := s.db.Conn().QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT disc_id) FROM jobs
+		WHERE disc_id IS NOT NULL AND disc_id != ''`).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("disc history count: %w", err)
+	}
+	if total == 0 {
+		return nil, 0, nil
+	}
+
+	// One row per disc; sort by latest job timestamp. We pull the
+	// disc IDs first, then hydrate (disc fields + lifecycle + journey
+	// summary) in batched follow-up queries.
+	rows, err := s.db.Conn().QueryContext(ctx, `
+		SELECT j.disc_id, MAX(j.created_at) AS latest_at
+		FROM jobs j
+		WHERE j.disc_id IS NOT NULL AND j.disc_id != ''
+		GROUP BY j.disc_id
+		ORDER BY latest_at DESC
+		LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("disc history page: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var discIDs []string
+	for rows.Next() {
+		var id, latestAt string
+		if err := rows.Scan(&id, &latestAt); err != nil {
+			return nil, 0, fmt.Errorf("disc history scan: %w", err)
+		}
+		discIDs = append(discIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	if len(discIDs) == 0 {
+		return nil, total, nil
+	}
+
+	discs, err := s.discsByIDs(ctx, discIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	states, err := s.LifecycleStates(ctx, discIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	summaries, err := s.discJourneySummaries(ctx, discIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	out := make([]DiscHistoryRow, 0, len(discIDs))
+	for _, id := range discIDs {
+		d := discs[id]
+		d.LifecycleState = states[id]
+		row := DiscHistoryRow{Disc: d}
+		if sum, ok := summaries[id]; ok {
+			row.LatestRipJobID = sum.LatestRipJobID
+			row.LatestTranscodeJobID = sum.LatestTranscodeJobID
+			row.FirstAttemptAt = sum.FirstAttemptAt
+			row.CompletedAt = sum.CompletedAt
+			row.OutputBytes = sum.OutputBytes
+			row.OutputPaths = sum.OutputPaths
+			row.AttemptSummary = sum.AttemptSummary
+		}
+		out = append(out, row)
+	}
+	return out, total, nil
+}
+
+// discJourneySummary collects the per-disc fields ListDiscHistory needs.
+// Internal helper struct — never serialised; the caller maps it onto
+// DiscHistoryRow.
+type discJourneySummary struct {
+	LatestRipJobID       string
+	LatestTranscodeJobID string
+	FirstAttemptAt       time.Time
+	CompletedAt          *time.Time
+	OutputBytes          int64
+	OutputPaths          []string
+	AttemptSummary       string
+}
+
+// discJourneySummaries returns one summary per disc ID. Issues one
+// batched SELECT against jobs + one against job_steps for move-step
+// notes. Discs with no jobs are absent from the result.
+func (s *Store) discJourneySummaries(ctx context.Context, discIDs []string) (map[string]discJourneySummary, error) {
+	if len(discIDs) == 0 {
+		return map[string]discJourneySummary{}, nil
+	}
+	args := make([]any, len(discIDs))
+	for i, id := range discIDs {
+		args[i] = id
+	}
+	placeholders := strings.Repeat("?,", len(args))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	rows, err := s.db.Conn().QueryContext(ctx, `
+		SELECT id, disc_id, COALESCE(kind, 'rip'), state, COALESCE(parent_job_id, ''),
+		       created_at, finished_at, output_bytes
+		  FROM jobs WHERE disc_id IN (`+placeholders+`)
+		  ORDER BY disc_id, created_at`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("journey jobs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type bucket struct {
+		latestRip       *Job
+		latestTranscode *Job
+		first           time.Time
+		completed       *time.Time
+		bytes           int64
+		ok              int
+		failed          int
+		cancelled       int
+		interrupted     int
+	}
+	out := map[string]bucket{}
+
+	for rows.Next() {
+		var (
+			id, discID, kindStr, stateStr, parentID string
+			createdStr, finishedStr                 string
+			outBytes                                int64
+		)
+		if err := rows.Scan(&id, &discID, &kindStr, &stateStr, &parentID,
+			&createdStr, &finishedStr, &outBytes); err != nil {
+			return nil, fmt.Errorf("journey scan: %w", err)
+		}
+		created, err := parseTime(createdStr)
+		if err != nil {
+			return nil, fmt.Errorf("journey parse created: %w", err)
+		}
+		finished, err := parseTimePtr(finishedStr)
+		if err != nil {
+			return nil, fmt.Errorf("journey parse finished: %w", err)
+		}
+		j := Job{
+			ID:          id,
+			DiscID:      discID,
+			Kind:        JobKind(kindStr),
+			State:       JobState(stateStr),
+			ParentJobID: parentID,
+			CreatedAt:   created,
+			FinishedAt:  finished,
+			OutputBytes: outBytes,
+		}
+		b := out[discID]
+		if b.first.IsZero() || j.CreatedAt.Before(b.first) {
+			b.first = j.CreatedAt
+		}
+		kind := j.Kind
+		if kind == "" {
+			kind = JobKindRip
+		}
+		switch kind {
+		case JobKindRip:
+			if b.latestRip == nil || j.CreatedAt.After(b.latestRip.CreatedAt) {
+				jj := j
+				b.latestRip = &jj
+			}
+		case JobKindTranscode:
+			if b.latestTranscode == nil || j.CreatedAt.After(b.latestTranscode.CreatedAt) {
+				jj := j
+				b.latestTranscode = &jj
+			}
+		}
+		switch j.State {
+		case JobStateDone:
+			b.ok++
+			b.bytes += j.OutputBytes
+			if j.FinishedAt != nil {
+				b.completed = j.FinishedAt
+			}
+		case JobStateFailed:
+			b.failed++
+		case JobStateCancelled:
+			b.cancelled++
+		case JobStateInterrupted:
+			b.interrupted++
+		}
+		out[discID] = b
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	pathsByDisc, err := s.movePathsForDiscs(ctx, discIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	summaries := make(map[string]discJourneySummary, len(out))
+	for discID, b := range out {
+		sum := discJourneySummary{
+			FirstAttemptAt: b.first,
+			CompletedAt:    b.completed,
+			OutputBytes:    b.bytes,
+			OutputPaths:    pathsByDisc[discID],
+		}
+		if b.latestRip != nil {
+			sum.LatestRipJobID = b.latestRip.ID
+		}
+		if b.latestTranscode != nil {
+			sum.LatestTranscodeJobID = b.latestTranscode.ID
+		}
+		totalAttempts := b.ok + b.failed + b.cancelled + b.interrupted
+		if totalAttempts > 1 {
+			parts := []string{}
+			if b.failed > 0 {
+				parts = append(parts, fmt.Sprintf("%d failures", b.failed))
+			}
+			if b.cancelled > 0 {
+				parts = append(parts, fmt.Sprintf("%d cancelled", b.cancelled))
+			}
+			if b.interrupted > 0 {
+				parts = append(parts, fmt.Sprintf("%d interrupted", b.interrupted))
+			}
+			if b.ok > 0 {
+				parts = append(parts, fmt.Sprintf("%d success", b.ok))
+			}
+			sum.AttemptSummary = strings.Join(parts, ", ")
+		}
+		summaries[discID] = sum
+	}
+	return summaries, nil
+}
+
+// movePathsForDiscs returns disc_id → list of file paths produced by
+// the latest done move step on the disc's journey. Empty for discs
+// whose journey hasn't moved any files yet.
+func (s *Store) movePathsForDiscs(ctx context.Context, discIDs []string) (map[string][]string, error) {
+	if len(discIDs) == 0 {
+		return map[string][]string{}, nil
+	}
+	args := make([]any, len(discIDs))
+	for i, id := range discIDs {
+		args[i] = id
+	}
+	placeholders := strings.Repeat("?,", len(args))
+	placeholders = placeholders[:len(placeholders)-1]
+	rows, err := s.db.Conn().QueryContext(ctx, `
+		SELECT j.disc_id, s.notes_json
+		  FROM job_steps s
+		  JOIN jobs j ON j.id = s.job_id
+		 WHERE j.disc_id IN (`+placeholders+`)
+		   AND s.step = 'move' AND s.state = 'done'
+		 ORDER BY j.disc_id, s.id DESC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("move paths: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string][]string{}
+	for rows.Next() {
+		var discID, notesJSON string
+		if err := rows.Scan(&discID, &notesJSON); err != nil {
+			return nil, fmt.Errorf("move paths scan: %w", err)
+		}
+		if _, ok := out[discID]; ok {
+			continue
+		}
+		if notesJSON == "" || notesJSON == "{}" {
+			continue
+		}
+		var notes map[string]any
+		if err := json.Unmarshal([]byte(notesJSON), &notes); err != nil {
+			continue
+		}
+		raw, ok := notes["paths"].([]any)
+		if !ok {
+			continue
+		}
+		paths := make([]string, 0, len(raw))
+		for _, p := range raw {
+			if s, ok := p.(string); ok {
+				paths = append(paths, s)
+			}
+		}
+		out[discID] = paths
+	}
+	return out, rows.Err()
+}
+
+// discsByIDs returns id → Disc for the given disc IDs in a single
+// SELECT. Used by ListDiscHistory and any other batched disc loader.
+func (s *Store) discsByIDs(ctx context.Context, ids []string) (map[string]Disc, error) {
+	if len(ids) == 0 {
+		return map[string]Disc{}, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	placeholders := strings.Repeat("?,", len(args))
+	placeholders = placeholders[:len(placeholders)-1]
+	rows, err := s.db.Conn().QueryContext(ctx, `
+		SELECT id, COALESCE(drive_id, ''), type, title, year, runtime_seconds,
+		       size_bytes_raw, toc_hash, metadata_provider, metadata_id,
+		       candidates_json, metadata_json, created_at
+		  FROM discs WHERE id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("discsByIDs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]Disc{}
+	for rows.Next() {
+		d, err := scanDisc(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[d.ID] = *d
+	}
+	return out, rows.Err()
+}
+
 // PruneHistoryBefore deletes jobs in {done, failed, cancelled} whose
 // finished_at is before cutoff. Returns the number of jobs deleted.
 // FK cascades remove job_steps and log_lines automatically; orphan

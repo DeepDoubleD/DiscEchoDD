@@ -904,3 +904,52 @@ func TestIdentifyDisc_GameDiscNoIGDB503(t *testing.T) {
 		t.Fatalf("status = %d, want 503", rr.Code)
 	}
 }
+
+func TestListDiscHistory_ReturnsDiscRows(t *testing.T) {
+	h := apitestServer(t)
+	drv := seedDrive(t, h)
+	prof := seedProfile(t, h)
+	disc := seedDisc(t, h, drv.ID)
+
+	// Seed one done rip on the disc so history includes it.
+	j := &state.Job{
+		DiscID: disc.ID, DriveID: drv.ID, ProfileID: prof.ID,
+		Kind: state.JobKindRip,
+	}
+	if err := h.Store.CreateJob(context.Background(), j); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	if err := h.Store.UpdateJobState(context.Background(), j.ID, state.JobStateDone, ""); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+
+	r := chi.NewRouter()
+	r.Get("/api/discs/history", h.ListDiscHistory)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/discs/history", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Discs []state.DiscHistoryRow `json:"discs"`
+		Total int                    `json:"total"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Total != 1 {
+		t.Errorf("total: got %d, want 1", resp.Total)
+	}
+	if len(resp.Discs) != 1 {
+		t.Fatalf("rows: got %d, want 1", len(resp.Discs))
+	}
+	if resp.Discs[0].Disc.ID != disc.ID {
+		t.Errorf("disc id mismatch: got %q, want %q", resp.Discs[0].Disc.ID, disc.ID)
+	}
+	if resp.Discs[0].LatestRipJobID != j.ID {
+		t.Errorf("latest_rip_job_id: got %q, want %q", resp.Discs[0].LatestRipJobID, j.ID)
+	}
+}

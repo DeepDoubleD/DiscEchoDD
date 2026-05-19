@@ -315,3 +315,56 @@ func TestStore_DiscUniqueIndex_EnforcesOnePerDriveTOC(t *testing.T) {
 		t.Fatalf("empty-toc second: %v", err)
 	}
 }
+
+func TestStore_ListDiscHistory(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+
+	drv := newDrive(t, s, "/dev/sr0")
+	profDVD := newProfile(t, s, "DVD-MKV", state.DiscTypeDVD)
+	profPSX := newProfile(t, s, "PSX-CHD", state.DiscTypePSX)
+	profCD := newProfile(t, s, "CD-FLAC", state.DiscTypeAudioCD)
+
+	// Disc A: DVD, fully done (rip done + transcode done).
+	discA := newDiscTyped(t, s, drv, state.DiscTypeDVD)
+	rA := newJobKind(t, s, drv, profDVD, discA, state.JobKindRip, state.JobStateDone)
+	newJobChild(t, s, profDVD, discA, state.JobKindTranscode, state.JobStateDone, rA.ID)
+
+	// Disc B: PSX, rip done (monolithic — no transcode half).
+	discB := newDiscTyped(t, s, drv, state.DiscTypePSX)
+	newJobKind(t, s, drv, profPSX, discB, state.JobKindRip, state.JobStateDone)
+
+	// Disc C: DVD, rip failed.
+	discC := newDiscTyped(t, s, drv, state.DiscTypeDVD)
+	newJobKind(t, s, drv, profDVD, discC, state.JobKindRip, state.JobStateFailed)
+
+	// Disc D: still awaiting decision (no jobs) — excluded from history.
+	_ = newDiscTyped(t, s, drv, state.DiscTypeAudioCD)
+	_ = profCD
+
+	rows, total, err := s.ListDiscHistory(ctx, 50, 0)
+	if err != nil {
+		t.Fatalf("ListDiscHistory: %v", err)
+	}
+	// Awaiting-decision discs are excluded — history is for discs
+	// with at least one job.
+	if total != 3 {
+		t.Errorf("total: got %d, want 3", total)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows: got %d, want 3", len(rows))
+	}
+	seen := map[string]state.DiscLifecycleState{}
+	for _, r := range rows {
+		seen[r.Disc.ID] = r.Disc.LifecycleState
+	}
+	if seen[discA.ID] != state.DiscLifecycleDone {
+		t.Errorf("disc A: got %q, want done", seen[discA.ID])
+	}
+	if seen[discB.ID] != state.DiscLifecycleDone {
+		t.Errorf("disc B: got %q, want done", seen[discB.ID])
+	}
+	if seen[discC.ID] != state.DiscLifecycleFailed {
+		t.Errorf("disc C: got %q, want failed", seen[discC.ID])
+	}
+}

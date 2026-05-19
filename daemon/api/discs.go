@@ -697,3 +697,36 @@ func (h *Handlers) forceReidentify(w http.ResponseWriter, r *http.Request, disc 
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"disc": disc, "candidates": cands})
 }
+
+// ListDiscHistory serves disc-keyed history, newest-first by latest
+// associated job timestamp. Mirrors ListHistory's pagination shape
+// (limit / offset query params) so the webui page component changes
+// minimally.
+func (h *Handlers) ListDiscHistory(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	offset := 0
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+	rows, total, err := h.Store.ListDiscHistory(r.Context(), limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if rows == nil {
+		rows = []state.DiscHistoryRow{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"discs":  rows,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
