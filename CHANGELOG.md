@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-05-19
+
 ### Added
 - Stop and Eject buttons on the busy-drive rip card. Until now Stop was only reachable from the job detail panel — the rip card itself had no actions row, so cancelling a running rip required clicking through to `/jobs/<id>`. The card now mirrors the idle-drive hero card: Stop is enabled while the job is running or queued and prompts before cancelling; Eject sits dim during the rip and lights up the moment the drive releases.
 - Daemon: `Disc.lifecycle_state` aggregate field computed from each disc's rip+transcode chain, exposed in `/api/state` and the SSE snapshot.
