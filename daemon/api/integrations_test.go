@@ -180,9 +180,11 @@ func TestPutIntegration_ValidatesMakeMKVKeyShape(t *testing.T) {
 	}{
 		{"reject unprefixed", "not-a-key", http.StatusUnprocessableEntity},
 		{"reject X-prefix", "X-foo", http.StatusUnprocessableEntity},
+		{"reject too short", "M-abc", http.StatusUnprocessableEntity},
 		{"accept T- beta", "T-sJ5R5BKxhD671U9s0teXbyP19MhCkkkB7rmnNbb1aEHaqveiVqyI3RXGMHDXhoyNUC", http.StatusOK},
 		{"accept M- purchased", "M-abcdef0123456789ABCDEF0123456789abcdef==", http.StatusOK},
 		{"accept M- with base64url chars", "M-_6P312gXv-abcDEF0123456789==", http.StatusOK},
+		{"accept M- with arbitrary opaque body", "M-_6P312gXv!@#$%^&*()abc", http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.26.4] - 2026-05-19
+
+### Fixed
+- MakeMKV license-key validator no longer second-guesses the body charset. v0.26.2 and v0.26.3 each widened the allowed character class chasing real purchased keys, and real keys still slipped past with characters neither version covered. The validator now gates only on the prefix (`T-` or `M-`) and a minimum length; the body is treated as opaque and forwarded to makemkvcon, which has the only authoritative parse.
+
 ## [0.26.3] - 2026-05-19
 
 ### Fixed

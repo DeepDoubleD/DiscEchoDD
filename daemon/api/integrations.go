@@ -17,12 +17,13 @@ import (
 )
 
 // makemkvKeyRE matches both MakeMKV key shapes accepted by makemkvcon:
-// `T-<base64ish>` for rotating free beta keys, and `M-<base64ish>` for
-// purchased permanent licenses. The body is base64-ish — purchased
-// keys use the URL-safe alphabet (`-_`) where beta keys use standard
-// base64 (`+/`), so the charset accepts either. Validated only on
+// `T-…` for rotating free beta keys, and `M-…` for purchased
+// permanent licenses. The body is opaque to us — MakeMKV mixes
+// alphabets between key types and rotates the format periodically —
+// so we only gate on the prefix and length, and let makemkvcon itself
+// reject malformed bodies via its own MSG codes. Validated only on
 // PUT; existing rows are not re-checked.
-var makemkvKeyRE = regexp.MustCompile(`^[TM]-[A-Za-z0-9+/=_-]+$`)
+var makemkvKeyRE = regexp.MustCompile(`^[TM]-\S{8,}$`)
 
 type integrationListEntry struct {
 	Name          string              `json:"name"`
