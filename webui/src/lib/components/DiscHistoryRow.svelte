@@ -26,6 +26,17 @@
   $: actionLabel = failedLike ? 'Retry' : inFlight ? 'Stop' : 'Re-rip';
   $: navigateTo = row.latest_transcode_job_id || row.latest_rip_job_id;
 
+  // Join only non-empty fragments so an absent year doesn't produce a
+  // dangling leading bullet (`· 1h 16m · 5.7 GB`).
+  $: metaLine = [
+    row.disc.year ? String(row.disc.year) : '',
+    row.disc.runtime_seconds ? formatDuration(row.disc.runtime_seconds) : '',
+    row.output_bytes ? formatBytes(row.output_bytes) : '',
+    row.attempt_summary ?? '',
+  ]
+    .filter((s) => s !== '')
+    .join(' · ');
+
   let busy = false;
 
   async function onAction(e: MouseEvent): Promise<void> {
@@ -82,12 +93,7 @@
           </span>
           <LifecyclePill {state} />
         </div>
-        <div class="truncate text-[11px] text-text-3">
-          {row.disc.year ?? ''}
-          {row.disc.runtime_seconds ? '· ' + formatDuration(row.disc.runtime_seconds) : ''}
-          {row.output_bytes ? '· ' + formatBytes(row.output_bytes) : ''}
-          {row.attempt_summary ? '· ' + row.attempt_summary : ''}
-        </div>
+        <div class="truncate text-[11px] text-text-3">{metaLine}</div>
       </div>
     </button>
     <div class="flex-shrink-0">
