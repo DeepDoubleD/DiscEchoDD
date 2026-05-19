@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-05-19
+
 ### Fixed
 - Awaiting-decision picker no longer kicks off a rip the instant you click a candidate row. Rows now act as radio buttons — clicking selects the candidate, highlights the row, and updates the primary action's label to `Start rip · <chosen title>`. The rip only fires when you click that button. Any row click or profile dropdown change also cancels the batch-mode auto-rip countdown so a late timer can't pre-empt your choice.
 
