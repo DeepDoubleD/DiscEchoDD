@@ -902,7 +902,9 @@ func TestDVD_Run_EncodeArgs_ProfileOverridesQuality(t *testing.T) {
 // include_extras profile path: HandBrake scan returns a main feature,
 // one extras-band title, and a navigation loop; the encode set picks
 // up main + the extra, the nav loop is dropped, the main lands at
-// the top-level path and the extra at <mainDir>/extras/extra-01.mkv.
+// the top-level path and the extra at the duration-derived
+// Jellyfin/Emby subfolder — the 480 s extra is between the 5-min and
+// 30-min thresholds → "featurettes/Featurette 01.mkv".
 func TestDVD_Run_MovieExtras_RipsMainPlusExtras(t *testing.T) {
 	libRoot := t.TempDir()
 
@@ -975,7 +977,7 @@ func TestDVD_Run_MovieExtras_RipsMainPlusExtras(t *testing.T) {
 	if _, err := os.Stat(wantMain); err != nil {
 		t.Errorf("main feature missing at %s: %v", wantMain, err)
 	}
-	wantExtra := filepath.Join(libRoot, "Arrival (2016)", "extras", "extra-01.mkv")
+	wantExtra := filepath.Join(libRoot, "Arrival (2016)", "featurettes", "Featurette 01.mkv")
 	if _, err := os.Stat(wantExtra); err != nil {
 		t.Errorf("extra missing at %s: %v", wantExtra, err)
 	}

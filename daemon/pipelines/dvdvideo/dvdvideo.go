@@ -688,11 +688,13 @@ func (h *Handler) moveOutputs(transcoded []string, encodeTitles []tools.HandBrak
 	epMap := pipelines.SelectedEpisodeMapFromDisc(disc)
 
 	// In the extras flow (mainNum > 0) we need the rendered main
-	// path first to derive `<mainDir>/extras/` for the bonus files.
-	// Pre-resolve it here so the first extra in the loop knows where
-	// to land. extraIdx counts the bonus title order across the loop.
+	// path first to derive `<mainDir>/<bucket-folder>/` for the bonus
+	// files. Pre-resolve it here so the first extra in the loop knows
+	// where to land. extraCounters counts the bonus title order
+	// per-bucket so each Jellyfin/Emby subfolder reads 01, 02, … with
+	// no gaps when the disc mixes trailers and featurettes.
 	var mainDir string
-	var extraIdx int
+	extraCounters := map[string]int{}
 	if mainNum > 0 {
 		mainFields := pipelines.OutputFields{
 			Title: disc.Title,
@@ -717,9 +719,10 @@ func (h *Handler) moveOutputs(transcoded []string, encodeTitles []tools.HandBrak
 
 		var rel string
 		if isExtra {
-			extraIdx++
-			rel = filepath.Join(mainDir, "extras",
-				fmt.Sprintf("extra-%02d.%s", extraIdx, ext))
+			bucket := pipelines.ClassifyExtraByDuration(encodeTitles[episodeIdx].DurationSeconds)
+			extraCounters[bucket.Folder]++
+			rel = filepath.Join(mainDir, bucket.Folder,
+				fmt.Sprintf("%s %02d.%s", bucket.Label, extraCounters[bucket.Folder], ext))
 		} else {
 			fields := pipelines.OutputFields{
 				Title:         disc.Title,

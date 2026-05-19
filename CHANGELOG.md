@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- DVD and Blu-ray bonus features no longer all land in a single `extras/` folder named `extra-01.mkv`, `extra-02.mkv`, … Each detected extra now goes into the Jellyfin/Emby-standard subfolder that matches its length and gets a descriptive filename. The mapping for the DVD-Video pipeline is based on the source title duration (≤5 min → `trailers/Trailer NN.mkv`, ≤30 min → `featurettes/Featurette NN.mkv`, >30 min → `behind the scenes/Behind The Scenes NN.mkv`); the BDMV pipeline buckets by the transcoded file's size relative to the main feature using equivalent thresholds (≤5%, ≤25%, >25%). Both servers also still recognise the old generic `extras/` folder so previously-ripped libraries keep working — no rename required. Numbering is per-bucket so each subfolder reads 01, 02, … without gaps.
+
 ## [0.23.2] - 2026-05-18
 
 ### Added

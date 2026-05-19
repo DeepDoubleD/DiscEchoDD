@@ -71,8 +71,10 @@ type fakeMakeMKV struct {
 	// so multi-title rips produce one file per Rip call.
 	stubName string
 	// stubBytes lets tests vary the per-Rip file size so extras-mode
-	// indexOfLargestFile picks deterministically. Keyed by title id;
-	// titles without an entry get a 4-byte stub.
+	// indexOfLargest picks deterministically and the size-ratio
+	// classifier in moveMultiTitle falls into the expected
+	// Jellyfin/Emby bucket. Keyed by title id; titles without an entry
+	// get a 4-byte stub.
 	stubBytes map[int]int
 }
 
@@ -98,7 +100,11 @@ func (f *fakeMakeMKV) Rip(_ context.Context, _ string, titleID int, outDir strin
 }
 
 // fakeHandBrake satisfies tools.Tool. On Run: writes a stub file at
-// the --output arg and records the argv for assertion in tests.
+// the --output arg and records the argv for assertion in tests. The
+// stub output size mirrors the --input file size when present so
+// downstream code that uses transcoded file sizes (e.g. moveOutputs
+// extras-bucket size-ratio classifier) sees a realistic ratio. Empty
+// or missing --input falls back to 7 bytes ("ENCODED").
 type fakeHandBrake struct {
 	encodeErr error
 	calls     [][]string
@@ -111,12 +117,29 @@ func (f *fakeHandBrake) Run(_ context.Context, args []string, _ map[string]strin
 	if f.encodeErr != nil {
 		return f.encodeErr
 	}
+	var inputPath, outputPath string
 	for i, a := range args {
-		if a == "--output" && i+1 < len(args) {
-			_ = os.WriteFile(args[i+1], []byte("ENCODED"), 0o644)
+		switch a {
+		case "--input":
+			if i+1 < len(args) {
+				inputPath = args[i+1]
+			}
+		case "--output":
+			if i+1 < len(args) {
+				outputPath = args[i+1]
+			}
 		}
 	}
-	return nil
+	if outputPath == "" {
+		return nil
+	}
+	size := int64(len("ENCODED"))
+	if inputPath != "" {
+		if fi, err := os.Stat(inputPath); err == nil && fi.Size() > 0 {
+			size = fi.Size()
+		}
+	}
+	return os.WriteFile(outputPath, make([]byte, size), 0o644)
 }
 
 func newRegistry() (*tools.Registry, *tools.MockTool, *tools.MockTool, *fakeHandBrake) {
@@ -493,7 +516,8 @@ func TestBDMV_Run_NVENCH264HardwarePassthrough(t *testing.T) {
 // main (7000s), one extras-band title (480s), and a navigation
 // loop (30s). The encode set should be main + the extra; the nav
 // loop drops below min_extra_seconds. Output: main at top-level,
-// extra under `<mainDir>/extras/extra-01.mkv`.
+// extra under the size-ratio-derived Jellyfin/Emby bucket — the
+// extra is 10% of main (1_000 / 10_000 bytes) → "featurettes".
 func TestBDMV_Run_Extras_RipsMainPlusExtras(t *testing.T) {
 	libRoot := t.TempDir()
 	reg, _, _, _ := newRegistry()
@@ -504,8 +528,8 @@ func TestBDMV_Run_Extras_RipsMainPlusExtras(t *testing.T) {
 			{ID: 2, DurationSec: 480, SourceFile: "00010.mpls"},  // extra
 		}},
 		MakeMKVRipper: &fakeMakeMKV{stubBytes: map[int]int{
-			1: 10_000, // main: largest file → indexOfLargestFile picks it
-			2: 1_000,  // extra
+			1: 10_000, // main: largest file → indexOfLargest picks it
+			2: 1_000,  // extra: 10% of main → featurettes bucket
 		}},
 		Tools:       reg,
 		LibraryRoot: libRoot,
@@ -536,12 +560,12 @@ func TestBDMV_Run_Extras_RipsMainPlusExtras(t *testing.T) {
 	if _, err := os.Stat(wantMain); err != nil {
 		t.Errorf("main feature missing at %s: %v", wantMain, err)
 	}
-	wantExtra := filepath.Join(libRoot, "Arrival (2016)", "extras", "extra-01.mkv")
+	wantExtra := filepath.Join(libRoot, "Arrival (2016)", "featurettes", "Featurette 01.mkv")
 	if _, err := os.Stat(wantExtra); err != nil {
 		t.Errorf("extra missing at %s: %v", wantExtra, err)
 	}
 	// Sanity: no navigation loop output should have been moved.
-	navUnexpected := filepath.Join(libRoot, "Arrival (2016)", "extras", "extra-02.mkv")
+	navUnexpected := filepath.Join(libRoot, "Arrival (2016)", "featurettes", "Featurette 02.mkv")
 	if _, err := os.Stat(navUnexpected); err == nil {
 		t.Errorf("nav loop should have been dropped; found %s", navUnexpected)
 	}

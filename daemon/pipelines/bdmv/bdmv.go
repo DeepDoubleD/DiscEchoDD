@@ -499,8 +499,14 @@ func (h *Handler) moveMultiTitle(srcs []string, disc *state.Disc, prof *state.Pr
 		pipelines.IncludeExtrasFromProfile(prof)
 	mainIdx := -1
 	var mainDir string
+	var srcSizes []int64
+	var mainSize int64
 	if extrasMode {
-		mainIdx = indexOfLargestFile(srcs)
+		srcSizes = sizeOfFiles(srcs)
+		mainIdx = indexOfLargest(srcSizes)
+		if mainIdx >= 0 && mainIdx < len(srcSizes) {
+			mainSize = srcSizes[mainIdx]
+		}
 		mainFields := pipelines.OutputFields{
 			Title: disc.Title,
 			Year:  disc.Year,
@@ -514,12 +520,13 @@ func (h *Handler) moveMultiTitle(srcs []string, disc *state.Disc, prof *state.Pr
 	}
 
 	rendered := make([]string, len(srcs))
-	extraOrdinal := 0
+	extraCounters := map[string]int{}
 	for i := range srcs {
 		if extrasMode && i != mainIdx {
-			extraOrdinal++
-			rendered[i] = filepath.Join(mainDir, "extras",
-				fmt.Sprintf("extra-%02d.mkv", extraOrdinal))
+			bucket := pipelines.ClassifyExtraBySizeRatio(srcSizes[i], mainSize)
+			extraCounters[bucket.Folder]++
+			rendered[i] = filepath.Join(mainDir, bucket.Folder,
+				fmt.Sprintf("%s %02d.mkv", bucket.Label, extraCounters[bucket.Folder]))
 			continue
 		}
 		fields := pipelines.OutputFields{
@@ -571,20 +578,30 @@ func (h *Handler) createWorkDir(discID string) (string, error) {
 	return pipelines.CreateWorkDir(h.deps.WorkRoot, "bdmv", discID)
 }
 
-// indexOfLargestFile returns the index of the largest file by stat
-// size, or 0 when sizes can't be read (e.g. test stubs that don't
-// write real content). Used by extras-mode moveMultiTitle to
-// identify the main feature among multiple ripped titles.
-func indexOfLargestFile(paths []string) int {
+// sizeOfFiles stats every path and returns the resulting sizes in
+// the same order. Entries we couldn't stat (e.g. test stubs that
+// don't write real content) come back as 0 — callers treat that as
+// "unknown size" rather than failing the move.
+func sizeOfFiles(paths []string) []int64 {
+	out := make([]int64, len(paths))
+	for i, p := range paths {
+		if fi, err := os.Stat(p); err == nil {
+			out[i] = fi.Size()
+		}
+	}
+	return out
+}
+
+// indexOfLargest returns the index of the largest entry in sizes, or
+// 0 when every entry is zero (i.e. stubbed-out test content). Used by
+// extras-mode moveMultiTitle to identify the main feature among
+// multiple ripped titles.
+func indexOfLargest(sizes []int64) int {
 	best := 0
 	var bestSize int64
-	for i, p := range paths {
-		fi, err := os.Stat(p)
-		if err != nil {
-			continue
-		}
-		if fi.Size() > bestSize {
-			bestSize = fi.Size()
+	for i, s := range sizes {
+		if s > bestSize {
+			bestSize = s
 			best = i
 		}
 	}
