@@ -7,6 +7,7 @@
   import RipCard from '$lib/components/RipCard.svelte';
   import StatsRow from './StatsRow.svelte';
   import AwaitingDecisionList from '../AwaitingDecisionList.svelte';
+  import { lastEncodingDiscForDrive } from '$lib/discLifecycle';
   import type { Job } from '$lib/wire';
 
   const TERMINAL_STATES: ReadonlyArray<Job['state']> = [
@@ -29,11 +30,23 @@
     const bQ = b.state === 'queued' ? 1 : 0;
     return aQ - bQ;
   });
-  $: orderedTranscodeJobs = [...transcodeActiveJobs].sort((a, b) => {
-    const aQ = a.state === 'queued' ? 1 : 0;
-    const bQ = b.state === 'queued' ? 1 : 0;
-    return aQ - bQ;
-  });
+  // Transcodes whose source drive is rendering an EncodingChip for the
+  // same disc are already visible — keep them OUT of the bottom queue
+  // table to avoid the same encode appearing twice. Only orphans
+  // (source drive removed, or rare deeper-than-drive-count compute pool)
+  // fall through to the EncodeQueueCard.
+  $: anchoredDiscIDs = new Set(
+    $drives
+      .map((d) => lastEncodingDiscForDrive(d, $discs, $jobs)?.id)
+      .filter((id): id is string => !!id),
+  );
+  $: orderedTranscodeJobs = transcodeActiveJobs
+    .filter((j) => !anchoredDiscIDs.has(j.disc_id))
+    .sort((a, b) => {
+      const aQ = a.state === 'queued' ? 1 : 0;
+      const bQ = b.state === 'queued' ? 1 : 0;
+      return aQ - bQ;
+    });
   $: queuedByDrive = $jobs.reduce<Record<string, number>>((acc, j) => {
     if (j.state === 'queued' && j.drive_id) {
       acc[j.drive_id] = (acc[j.drive_id] ?? 0) + 1;

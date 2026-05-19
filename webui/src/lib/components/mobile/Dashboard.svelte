@@ -7,6 +7,7 @@
   import StatsGrid from './StatsGrid.svelte';
   import DriveCard from './DriveCard.svelte';
   import QueuedRow from './QueuedRow.svelte';
+  import { lastEncodingDiscForDrive } from '$lib/discLifecycle';
   import type { Job } from '$lib/wire';
 
   const TERMINAL_STATES: ReadonlyArray<Job['state']> = [
@@ -23,10 +24,20 @@
   $: queuedJobs = activeJobs.filter(
     (j) => j.state === 'queued' && (j.kind ?? 'rip') !== 'transcode',
   );
+  // Transcodes whose source drive is rendering an EncodingChip for the
+  // same disc are already visible — keep them OUT of the bottom queue
+  // section to avoid the same encode appearing twice. Only orphans
+  // (source drive removed, or rare deeper-than-drive-count compute pool)
+  // fall through to the Encode queue list.
+  $: anchoredDiscIDs = new Set(
+    $drives
+      .map((d) => lastEncodingDiscForDrive(d, $discs, $jobs)?.id)
+      .filter((id): id is string => !!id),
+  );
   // Encode-queue rows include both queued AND in-flight transcodes
   // so the user can see what's currently running on the compute pool.
   $: encodeJobs = activeJobs
-    .filter((j) => j.kind === 'transcode')
+    .filter((j) => j.kind === 'transcode' && !anchoredDiscIDs.has(j.disc_id))
     .sort((a, b) => {
       const aQ = a.state === 'queued' ? 1 : 0;
       const bQ = b.state === 'queued' ? 1 : 0;
