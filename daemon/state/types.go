@@ -23,6 +23,59 @@ const (
 	DiscTypeData    DiscType = "DATA"
 )
 
+// HasTranscodeHalf reports whether the pipeline for a disc of this
+// type splits rip into a separate compute-bound transcode job. False
+// for types whose monolithic rip job ends in a library-ready file.
+func (t DiscType) HasTranscodeHalf() bool {
+	switch t {
+	case DiscTypeDVD, DiscTypeBDMV, DiscTypeUHD:
+		return true
+	}
+	return false
+}
+
+// DiscLifecycleState is the disc-as-unit aggregate state derived from
+// the disc's rip + transcode chain. Computed (not stored) by
+// Store.LifecycleStates and stamped onto Disc by buildSnapshot.
+type DiscLifecycleState string
+
+const (
+	// DiscLifecycleAwaitingDecision — identify done, candidate list
+	// shown, user has not picked. Either no jobs exist for the disc,
+	// or every prior rip attempt is terminal-failed/cancelled/interrupted.
+	DiscLifecycleAwaitingDecision DiscLifecycleState = "awaiting_decision"
+
+	// DiscLifecycleRipping — a rip job is queued or running on a drive.
+	DiscLifecycleRipping DiscLifecycleState = "ripping"
+
+	// DiscLifecycleAwaitingEncode — rip done, transcode-half required
+	// but not yet queued. Transient (orchestrator queues the child
+	// within milliseconds) but emitted when the gap is observable.
+	DiscLifecycleAwaitingEncode DiscLifecycleState = "awaiting_encode"
+
+	// DiscLifecycleEncoding — transcode job queued or running on the
+	// compute pool.
+	DiscLifecycleEncoding DiscLifecycleState = "encoding"
+
+	// DiscLifecycleDone — files are in the library. For DVD/BDMV/UHD
+	// this means the transcode-half is done; for other types the rip
+	// is the terminal step.
+	DiscLifecycleDone DiscLifecycleState = "done"
+
+	// DiscLifecycleFailed — the latest attempt's terminal job (rip or
+	// transcode, whichever is the journey terminus) is failed and
+	// nothing newer has succeeded.
+	DiscLifecycleFailed DiscLifecycleState = "failed"
+
+	// DiscLifecycleCancelled — same shape as failed, terminal state
+	// is cancelled.
+	DiscLifecycleCancelled DiscLifecycleState = "cancelled"
+
+	// DiscLifecycleInterrupted — same shape as failed, terminal state
+	// is interrupted (daemon crash mid-job).
+	DiscLifecycleInterrupted DiscLifecycleState = "interrupted"
+)
+
 // DriveState transitions:
 //
 //	idle → identifying → ripping → ejecting → idle
