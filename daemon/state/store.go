@@ -1109,6 +1109,87 @@ func (s *Store) hydrateJobSteps(ctx context.Context, jobs []Job) error {
 	return nil
 }
 
+// LifecycleStates returns disc_id → DiscLifecycleState for the given
+// disc IDs using one batched SELECT per table (discs.type, then jobs)
+// and an in-memory per-disc reduction via DeriveLifecycleState.
+// Empty/nil input returns an empty map. Mirrors the hydrateJobSteps
+// batching pattern so buildSnapshot doesn't fan out an N+1 across
+// the snapshot's disc list.
+func (s *Store) LifecycleStates(ctx context.Context, discIDs []string) (map[string]DiscLifecycleState, error) {
+	if len(discIDs) == 0 {
+		return map[string]DiscLifecycleState{}, nil
+	}
+
+	idArgs := make([]any, len(discIDs))
+	for i, id := range discIDs {
+		idArgs[i] = id
+	}
+	placeholders := strings.Repeat("?,", len(idArgs))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	// Pull disc type alongside the id — DeriveLifecycleState branches
+	// on HasTranscodeHalf, which is a disc-type predicate.
+	typeRows, err := s.db.Conn().QueryContext(ctx,
+		`SELECT id, type FROM discs WHERE id IN (`+placeholders+`)`, idArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("lifecycle: disc types: %w", err)
+	}
+	types := make(map[string]DiscType, len(discIDs))
+	for typeRows.Next() {
+		var id, tStr string
+		if err := typeRows.Scan(&id, &tStr); err != nil {
+			_ = typeRows.Close()
+			return nil, fmt.Errorf("lifecycle: scan disc type: %w", err)
+		}
+		types[id] = DiscType(tStr)
+	}
+	if err := typeRows.Err(); err != nil {
+		_ = typeRows.Close()
+		return nil, err
+	}
+	if err := typeRows.Close(); err != nil {
+		return nil, err
+	}
+
+	// Every job (any state) for these discs. DeriveLifecycleState only
+	// reads kind/state/parent_job_id/created_at, so leave the rest off.
+	jobRows, err := s.db.Conn().QueryContext(ctx,
+		`SELECT id, disc_id, kind, state, COALESCE(parent_job_id, ''), created_at
+		   FROM jobs WHERE disc_id IN (`+placeholders+`)`, idArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("lifecycle: jobs: %w", err)
+	}
+	defer func() { _ = jobRows.Close() }()
+	byDisc := make(map[string][]Job, len(discIDs))
+	for jobRows.Next() {
+		var id, discID, kindStr, stateStr, parentID, createdStr string
+		if err := jobRows.Scan(&id, &discID, &kindStr, &stateStr, &parentID, &createdStr); err != nil {
+			return nil, fmt.Errorf("lifecycle: scan job: %w", err)
+		}
+		created, err := parseTime(createdStr)
+		if err != nil {
+			return nil, fmt.Errorf("lifecycle: parse created_at: %w", err)
+		}
+		byDisc[discID] = append(byDisc[discID], Job{
+			ID:          id,
+			DiscID:      discID,
+			Kind:        JobKind(kindStr),
+			State:       JobState(stateStr),
+			ParentJobID: parentID,
+			CreatedAt:   created,
+		})
+	}
+	if err := jobRows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]DiscLifecycleState, len(discIDs))
+	for _, id := range discIDs {
+		out[id] = DeriveLifecycleState(types[id], byDisc[id])
+	}
+	return out, nil
+}
+
 // HasActiveJobOnDrive reports whether the given drive currently has a
 // job in queued / running / identifying state. Used by the udev event
 // handler to drop mid-rip media-change events that would otherwise
