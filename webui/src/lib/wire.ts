@@ -117,6 +117,16 @@ export interface JobLogsResponse {
   offset: number;
 }
 
+export type DiscLifecycleState =
+  | 'awaiting_decision'
+  | 'ripping'
+  | 'awaiting_encode'
+  | 'encoding'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted';
+
 export interface Disc {
   id: string;
   drive_id?: string;
@@ -131,6 +141,9 @@ export interface Disc {
   metadata_json?: string; // raw JSON blob with per-disc-type extended fields
   candidates: Candidate[];
   created_at: string;
+  // Aggregate state computed daemon-side from the disc's job history.
+  // Optional during deploy window when daemon is upgraded but UI cached.
+  lifecycle_state?: DiscLifecycleState;
 }
 
 export interface JobStep {
@@ -279,3 +292,21 @@ export type SSEEvent =
   | { event: 'job.failed'; data: { job_id: string; error?: string; state?: 'cancelled' } }
   | { event: 'state.snapshot'; data: SnapshotPayload }
   | { event: 'integrations.changed'; data: { name: IntegrationName; source: IntegrationSource } };
+
+export interface DiscHistoryRow {
+  disc: Disc;
+  latest_rip_job_id: string;
+  latest_transcode_job_id?: string;
+  first_attempt_at: string;
+  completed_at?: string;
+  output_bytes?: number;
+  output_paths?: string[];
+  attempt_summary?: string;
+}
+
+export interface DiscHistoryResponse {
+  discs: DiscHistoryRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
