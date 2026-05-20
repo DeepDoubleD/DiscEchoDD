@@ -17,7 +17,6 @@ data/
 # not data directories.
 !daemon/pipelines/data/
 !daemon/identify/data/
-config/
 .env
 .env.local
 

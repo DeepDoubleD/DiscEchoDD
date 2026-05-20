@@ -24,7 +24,6 @@ services:
     volumes:
       - ${DISCECHO_LIBRARY_PATH:-/srv/media}:/library
       - ./.docker-data:/var/lib/discecho
-      - ./config:/etc/discecho
     environment:
       DISCECHO_ADDR: ":8088"
       DISCECHO_LIBRARY: "/library"

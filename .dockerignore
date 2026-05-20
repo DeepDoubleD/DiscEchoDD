@@ -1,7 +1,6 @@
 .git/
 .github/
 data/
-config/
 node_modules/
 webui/node_modules/
 webui/.svelte-kit/

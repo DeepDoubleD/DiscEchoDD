@@ -3,14 +3,14 @@
 Welcome, and thanks for looking. DiscEcho is a self-hosted homelab service
 that watches optical drives, classifies inserted discs, and runs per-disc-
 type rip → transcode → tag → move pipelines, fronted by a mobile-first web
-UI. The full design lives in [`ARCHITECTURE.md`](./ARCHITECTURE.md) — start
-there before opening a PR.
+UI. The [README's "How it works" section](./README.md#how-it-works) sketches
+the system shape; the code under `daemon/` and `webui/` is the rest.
 
 ## Dev setup
 
-Detailed setup will live in `README.md` once we have one (tracked in
-[`ROADMAP.md`](./ROADMAP.md), M0). For now: you need Go, Node, Docker,
-and a Linux host with at least one optical drive at `/dev/sr0`.
+See the [README](./README.md) for the full setup and command reference. In
+short: you need Go, Node, Docker, and a Linux host with at least one optical
+drive at `/dev/sr0`.
 
 ## Branching and commits
 
@@ -56,20 +56,15 @@ one.
 ## Good first issues
 
 Issues tagged `good first issue` are small, well-scoped, and a fine entry
-point. The other place opinions are very welcome is
-[`OPEN_QUESTIONS.md`](./OPEN_QUESTIONS.md) — answers, alternatives, and
-"have you considered…" comments are all useful, even if you're not
-writing code.
+point. Bug reports and "have you considered…" feature ideas are all useful
+contributions, even if you're not writing code.
 
-## License and sign-off
+## License
 
-> TODO: choose and document a license. Until then, contributors agree
-> that their contributions will be licensed under the project's eventual
-> license, whatever it turns out to be. We'll backfill DCO sign-off
-> requirements (`Signed-off-by:` trailers) when the license is settled.
+DiscEcho is released under the [MIT License](./LICENSE). By contributing you
+agree that your contributions are licensed under the same terms. A
+`Signed-off-by:` trailer (`git commit -s`) is welcome but not required.
 
 ## Code of conduct
 
-> TODO: a `CODE_OF_CONDUCT.md` will land before the first public release.
-> In the meantime: be kind, assume good faith, and stay focused on the
-> work.
+Be kind, assume good faith, and stay focused on the work.

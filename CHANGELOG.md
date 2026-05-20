@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- DiscEcho is now released under the MIT License (`LICENSE`).
+- GitHub issue templates for bug reports and feature requests.
+
+### Changed
+- README rewritten for the shipped feature set (DVD/Blu-ray/UHD, audio CD, and
+  game discs), with "How it works" and screenshot sections.
+
+### Removed
+- Obsolete planning docs (`ROADMAP.md`, `OPEN_QUESTIONS.md`, `ARCHITECTURE.md`)
+  and the unused `config/` → `/etc/discecho` mount.
+
 ## [0.30.2] - 2026-05-20
 
 ### Fixed

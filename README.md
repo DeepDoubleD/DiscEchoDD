@@ -5,8 +5,23 @@ optical drives, classifies inserted discs, runs per-disc-type rip →
 transcode → tag → move pipelines, and exposes a mobile-first web UI for
 live status and history.
 
-> Status: **M1** — audio CD pipeline shipping (M1.1 daemon, M1.2 mobile
-> UI). See [`ROADMAP.md`](./ROADMAP.md).
+Rip, transcode, tag and file your physical media automatically — just feed
+discs to the drive.
+
+Supported disc types:
+
+- **DVD / Blu-ray / 4K UHD** video (MakeMKV rip → optional HandBrake re-encode)
+- **Audio CD** (whipper → FLAC, MusicBrainz-tagged, ReplayGain)
+- **Game discs** — PlayStation, PlayStation 2, Saturn, Dreamcast, Xbox
+  (redumper, Redump-verified)
+
+## Screenshots
+
+<!-- Placeholders — capture against a live instance and drop the PNGs in docs/img/. -->
+
+![Dashboard](docs/img/dashboard.png)
+![Disc history](docs/img/history.png)
+![Settings](docs/img/settings.png)
 
 ## Quick start
 
@@ -27,6 +42,19 @@ in-container path the daemon writes to, normally `/library`) seed the
 library setting on first boot. After that, the value is editable from
 Settings → System → Library and the new value is used on the next
 container restart.
+
+## How it works
+
+A single Go daemon (chi + `modernc.org/sqlite`) watches the optical drives
+via udev. When a disc is inserted it classifies the disc, then runs the
+pipeline for that disc type (`daemon/pipelines/<type>/`) through the canonical
+steps — **rip → transcode → compress → move → notify** — writing the finished
+files into the library bind-mount. The same container also serves the embedded
+SvelteKit SPA, so there is no separate frontend service.
+
+The wire format shared between daemon and UI is defined once in
+`daemon/state/types.go` and mirrored by hand in `webui/src/lib/wire.ts` (the
+Go side is authoritative; there is no `shared/` package).
 
 ### Deployment
 
@@ -352,21 +380,15 @@ cd webui  && pnpm check
 
 | Path                  | Purpose                                             |
 |-----------------------|-----------------------------------------------------|
-| `daemon/`             | Go service: HTTP API, udev, pipelines (M1+)         |
+| `daemon/`             | Go service: HTTP API, udev, disc pipelines          |
 | `webui/`              | SvelteKit dark-only PWA + desktop dashboard         |
-| `shared/`             | Wire-format types (filled in at M1)                 |
 | `Dockerfile`          | Multi-stage build → `python:3.12-slim` runtime      |
 | `docker-compose.yml`  | Single-service homelab deploy                       |
 
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full system shape and
-[`ROADMAP.md`](./ROADMAP.md) for milestone planning.
-
 ## Contributing
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md). Open opinions on
-[`OPEN_QUESTIONS.md`](./OPEN_QUESTIONS.md) are welcome — answers in PRs
-count as contributions.
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## License
 
-> TODO: pin a license. Tracked in `OPEN_QUESTIONS.md`.
+Released under the [MIT License](./LICENSE).
