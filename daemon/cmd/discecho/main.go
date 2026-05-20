@@ -479,6 +479,13 @@ func main() {
 	apiH.ActiveSampler = api.NewActiveJobsSampler(store)
 	apiH.ActiveSampler.Start(ctx)
 
+	// Library sizer walks the configured roots on a 30-min timer and
+	// caches per-library on-disk sizes for the Settings → Libraries view.
+	// The first walk runs async on boot; the snapshot reports unmeasured
+	// until it lands.
+	apiH.LibrarySizer = api.NewLibrarySizer(cfg)
+	apiH.LibrarySizer.Start(ctx)
+
 	// disc-flow: listen for udev optical-media-change events and run
 	// classify → identify → persist.
 	df := &discFlow{

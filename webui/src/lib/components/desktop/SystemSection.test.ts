@@ -12,7 +12,18 @@ const hostResp = {
   kernel: '6.12.1',
   cpu_count: 8,
   uptime_seconds: 7200,
-  disks: [{ path: '/library/movies', total_bytes: 1000, used_bytes: 250, available_bytes: 750 }],
+};
+const librariesResp = {
+  libraries: [
+    { media: 'movies', label: 'Movies', path: '/library/movies', bytes: 1288490188, exists: true },
+    { media: 'tv', label: 'TV', path: '/library/tv', bytes: 858993459, exists: true },
+    { media: 'music', label: 'Music', path: '/library/music', bytes: 40000000, exists: true },
+    { media: 'games', label: 'Games', path: '/library/games', bytes: 0, exists: false },
+    { media: 'data', label: 'Data', path: '/library/data', bytes: 4831838208, exists: true },
+  ],
+  measured_at: '2026-05-20T12:00:00Z',
+  measuring: false,
+  array: { used_bytes: 6710886400, total_bytes: 13194139533, available_bytes: 6483253133 },
 };
 // After Task 8, TMDB and IGDB are no longer in /api/system/integrations.
 const integrationsResp = {
@@ -84,6 +95,14 @@ function mockEndpoints(overrides: Record<string, unknown> = {}) {
         return Promise.resolve(jsonResponse(overrides.host ?? hostResp));
       if (method === 'GET' && url === '/api/system/integrations')
         return Promise.resolve(jsonResponse(overrides.integrations ?? integrationsResp));
+      if (method === 'GET' && url === '/api/system/libraries')
+        return Promise.resolve(jsonResponse(overrides.libraries ?? librariesResp));
+      if (method === 'POST' && url === '/api/system/libraries/recalc') {
+        recalcMock();
+        return Promise.resolve(
+          jsonResponse(overrides.libraries ?? { ...librariesResp, measuring: true }),
+        );
+      }
       if (method === 'GET' && url === '/api/integrations/igdb')
         return Promise.resolve(jsonResponse(overrides.igdb ?? igdbResp));
       if (method === 'GET' && url === '/api/integrations/tmdb')
@@ -108,11 +127,13 @@ function mockEndpoints(overrides: Record<string, unknown> = {}) {
 
 const apiPutMock = vi.fn();
 const apiPatchMock = vi.fn();
+const recalcMock = vi.fn();
 
 describe('SystemSection', () => {
   beforeEach(() => {
     apiPutMock.mockReset();
     apiPatchMock.mockReset();
+    recalcMock.mockReset();
     mockEndpoints();
     toasts.set([]);
     settings.set({});
@@ -227,10 +248,28 @@ describe('SystemSection', () => {
     expect(container.textContent).toMatch(/makemkv/i);
   });
 
-  it('renders disk usage bar for each disk in host info', async () => {
+  it('renders per-library sizes and the array summary', async () => {
     const { container } = render(SystemSection);
-    await waitFor(() => expect(container.textContent).toContain('/library/movies'));
-    expect(container.textContent).toMatch(/free/);
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="libraries-panel"]')).toBeTruthy(),
+    );
+    // A row per media type, with the missing root showing a dash.
+    expect(container.querySelector('[data-testid="library-row-movies"]')).toBeTruthy();
+    const games = container.querySelector('[data-testid="library-row-games"]');
+    expect(games?.textContent).toContain('—');
+    // Array summary line + "last measured" affordance.
+    expect(container.querySelector('[data-testid="library-array"]')?.textContent).toMatch(/free/);
+    expect(container.textContent).toMatch(/last measured/);
+  });
+
+  it('recalculates library sizes via POST when the button is clicked', async () => {
+    const { container } = render(SystemSection);
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="library-recalc"]')).toBeTruthy(),
+    );
+    const btn = container.querySelector('[data-testid="library-recalc"]') as HTMLButtonElement;
+    await fireEvent.click(btn);
+    await waitFor(() => expect(recalcMock).toHaveBeenCalledTimes(1));
   });
 
   it('renders empty state when no drives', async () => {

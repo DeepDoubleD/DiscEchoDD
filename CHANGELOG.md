@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- Settings → Host now shows a dedicated **Libraries** section listing each library root (Movies, TV, Music, Games, Data) with its actual on-disk size, largest-first, followed by a single array used/total/free summary and capacity bar. Previously the Host section collapsed all five roots into one whole-array `df` bar (they share a mount on Unraid), which read like a per-library list but wasn't. Sizes are measured by a background walk (every 30 min, cached) with a manual **Recalculate** button and a "last measured" timestamp.
+
 ## [0.28.1] - 2026-05-20
 
 ### Changed

@@ -6,7 +6,7 @@
     integrations as integrationsStore,
     fetchIntegration,
   } from '$lib/store';
-  import { apiGet, apiPut, apiPatch } from '$lib/api';
+  import { apiGet, apiPut, apiPatch, apiPost } from '$lib/api';
   import { pushToast } from '$lib/toasts';
   import type { Drive } from '$lib/wire';
   import FormSection from './FormSection.svelte';
@@ -17,20 +17,26 @@
 
   type VersionInfo = { version?: string; commit?: string; build_date?: string };
 
-  type DiskInfo = {
-    path: string;
-    paths?: string[];
-    total_bytes: number;
-    used_bytes: number;
-    available_bytes: number;
-  };
-
   type HostInfo = {
     hostname: string;
     kernel: string;
     cpu_count: number;
     uptime_seconds: number;
-    disks: DiskInfo[];
+  };
+
+  type LibrarySize = {
+    media: string;
+    label: string;
+    path: string;
+    bytes: number;
+    exists: boolean;
+  };
+
+  type LibrariesInfo = {
+    libraries: LibrarySize[];
+    measured_at: string;
+    measuring: boolean;
+    array: { used_bytes: number; total_bytes: number; available_bytes: number };
   };
 
   type SubItem = {
@@ -106,6 +112,8 @@
   let version: VersionInfo | null = null;
   let host: HostInfo | null = null;
   let integrations: IntegrationsInfo | null = null;
+  let libraries: LibrariesInfo | null = null;
+  let recalcing = false;
 
   // Encoding section state. The cap is stored as bytes server-side but
   // displayed in GiB for usability. concurrentEncodes maps directly to
@@ -129,17 +137,19 @@
   $: hasDirty = Object.keys(dirty).length > 0;
 
   onMount(async () => {
-    const [v, h, i, s, settings] = await Promise.allSettled([
+    const [v, h, i, s, lib, settings] = await Promise.allSettled([
       apiGet<VersionInfo>('/api/version'),
       apiGet<HostInfo>('/api/system/host'),
       apiGet<IntegrationsInfo>('/api/system/integrations'),
       apiGet<SpoolInfo>('/api/system/spool'),
+      apiGet<LibrariesInfo>('/api/system/libraries'),
       apiGet<Record<string, string>>('/api/settings'),
     ]);
     version = v.status === 'fulfilled' ? v.value : null;
     host = h.status === 'fulfilled' ? h.value : null;
     integrations = i.status === 'fulfilled' ? i.value : null;
     spool = s.status === 'fulfilled' ? s.value : null;
+    libraries = lib.status === 'fulfilled' ? lib.value : null;
     if (settings.status === 'fulfilled') {
       const c = parseInt(settings.value['compute.concurrent_encodes'] ?? '1', 10);
       if (Number.isInteger(c) && c > 0) concurrentEncodes = c;
@@ -271,9 +281,35 @@
     return `${m}m`;
   }
 
-  function diskPercent(d: DiskInfo): number {
-    if (!d.total_bytes) return 0;
-    return Math.min(100, Math.round((d.used_bytes / d.total_bytes) * 100));
+  function arrayPercent(a: LibrariesInfo['array']): number {
+    if (!a.total_bytes) return 0;
+    return Math.min(100, Math.round((a.used_bytes / a.total_bytes) * 100));
+  }
+
+  // "12m ago" / "3h ago" / "2d ago" from an RFC3339 timestamp. Empty
+  // string (never measured) renders as a dash by the caller.
+  function relativeTime(iso: string): string {
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return '—';
+    const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (s < 60) return 'just now';
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  }
+
+  async function recalcLibraries() {
+    if (recalcing) return;
+    recalcing = true;
+    try {
+      libraries = await apiPost<LibrariesInfo>('/api/system/libraries/recalc');
+    } catch {
+      pushToast('error', 'Failed to start recalculation');
+    } finally {
+      recalcing = false;
+    }
   }
 
   // Per-drive offset editor state. Keyed by drive ID so multiple drives
@@ -589,29 +625,63 @@
         <div class="text-text-2">Build</div>
         <div class="font-mono text-text">{version?.version ?? '—'}</div>
       </div>
-      {#if host.disks.length > 0}
-        <div class="px-4 py-3 space-y-2">
-          {#each host.disks as d (d.path)}
-            <div>
-              <div class="flex justify-between text-[11px] text-text-3">
-                <span class="font-mono">{d.path}</span>
-                <span>
-                  {formatBytes(d.used_bytes)} / {formatBytes(d.total_bytes)}
-                  · {formatBytes(d.available_bytes)} free
-                </span>
-              </div>
-              {#if d.paths && d.paths.length > 0}
-                <div class="font-mono text-[10px] text-text-3">
-                  shared with {d.paths.join(', ')}
-                </div>
-              {/if}
-              <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-2">
-                <div class="h-full bg-accent" style="width: {diskPercent(d)}%"></div>
-              </div>
-            </div>
-          {/each}
+    {:else}
+      <div class="px-4 py-3 text-[12px] text-text-3">Loading…</div>
+    {/if}
+  </FormSection>
+
+  <FormSection title="Libraries" sub="On-disk size per library root.">
+    {#if libraries}
+      <div class="px-4 py-3 space-y-2" data-testid="libraries-panel">
+        <div class="flex items-center justify-between text-[11px] text-text-3">
+          <span>
+            {#if libraries.measuring}
+              measuring…
+            {:else if libraries.measured_at}
+              last measured {relativeTime(libraries.measured_at)}
+            {:else}
+              not yet measured
+            {/if}
+          </span>
+          <button
+            type="button"
+            class="rounded-md px-2 py-0.5 text-[11px] text-text-2 hover:bg-surface-2 disabled:opacity-50"
+            data-testid="library-recalc"
+            disabled={recalcing || libraries.measuring}
+            on:click={recalcLibraries}
+          >
+            ⟳ Recalculate
+          </button>
         </div>
-      {/if}
+        {#each libraries.libraries as lib (lib.media)}
+          <div
+            class="flex items-baseline justify-between gap-3 text-[12px]"
+            data-testid="library-row-{lib.media}"
+          >
+            <span class="w-16 shrink-0 text-text">{lib.label}</span>
+            <span class="flex-1 truncate font-mono text-[11px] text-text-3">{lib.path || '—'}</span>
+            <span class="shrink-0 tabular-nums text-text">
+              {lib.exists ? formatBytes(lib.bytes) : '—'}
+            </span>
+          </div>
+        {/each}
+        {#if libraries.array.total_bytes > 0}
+          <div class="border-t border-border pt-2" data-testid="library-array">
+            <div class="flex justify-between text-[11px] text-text-3">
+              <span>Array</span>
+              <span>
+                {formatBytes(libraries.array.used_bytes)} / {formatBytes(
+                  libraries.array.total_bytes,
+                )}
+                · {formatBytes(libraries.array.available_bytes)} free
+              </span>
+            </div>
+            <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-surface-2">
+              <div class="h-full bg-accent" style="width: {arrayPercent(libraries.array)}%"></div>
+            </div>
+          </div>
+        {/if}
+      </div>
     {:else}
       <div class="px-4 py-3 text-[12px] text-text-3">Loading…</div>
     {/if}

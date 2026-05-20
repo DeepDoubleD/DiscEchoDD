@@ -34,6 +34,7 @@ type Handlers struct {
 	IGDB          identify.IGDBClient
 	BootCodeIndex *identify.BootCodeIndex
 	ActiveSampler *ActiveJobsSampler
+	LibrarySizer  *LibrarySizer
 	Token         string
 	Apprise       Apprise // defined in notifications.go; nil-safe in handlers
 	Settings      *settings.Settings
