@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-05-20
+
 ### Fixed
 - MakeMKV rips (DVD / Blu-ray / UHD) failing with `Failed to execute external program 'mmgplsrv'`. MakeMKV's bundled GPL helper `mmgplsrv` is a musl binary, but its musl loader + support libraries weren't included in the container image (only the glibc `makemkvcon` tree was), so it couldn't start. The image now bundles the musl runtime `mmgplsrv` needs, isolated so it can't affect the other tools, with a build-time check that guards against this regressing again.
 
