@@ -13,7 +13,7 @@ import datetime as dt
 # Discs then fall back to DiscEcho's built-in ArtPlaceholder.
 USE_POSTERS = True
 
-BASE = dt.datetime(2026, 5, 19, 9, 0, 0)  # fixed base for deterministic output
+BASE = dt.datetime.now(dt.timezone.utc)  # anchored at run time so elapsed/ETA read naturally
 
 
 def ts(offset_minutes: int) -> str:
@@ -67,10 +67,12 @@ DRIVES = [
     ("shot-drv-1", "ASUS BW-16D1HT",   "sr1", "/dev/sr1", "idle",    5),
 ]
 
-# Done jobs: (job_id, disc_id, profile_disc_type, finished_offset_min, transcode_skipped)
+# Done jobs: (job_id, disc_id, profile_disc_type, finished_offset_min, has_transcode_half).
+# Disc types with a transcode half (DVD/BDMV/UHD) only read as DONE once a
+# done transcode-kind child job exists; AUDIO_CD/PSX are DONE on the rip alone.
 DONE_JOBS = [
-    ("shot-job-1", "shot-disc-bd",   "BDMV",     -60,   False),
-    ("shot-job-2", "shot-disc-dvd1", "DVD",      -240,  False),
+    ("shot-job-1", "shot-disc-bd",   "BDMV",     -60,   True),
+    ("shot-job-2", "shot-disc-dvd1", "DVD",      -240,  True),
     ("shot-job-3", "shot-disc-dvd2", "DVD",      -1500, True),
     ("shot-job-4", "shot-disc-cd",   "AUDIO_CD", -2880, False),
     ("shot-job-5", "shot-disc-psx",  "PSX",      -4320, False),
@@ -122,7 +124,7 @@ def emit():
             f"('shot-job-run',{sqlstr(st)},{sqlstr(state)},{1 if state!='pending' else 0},{sqlstr(sa)},{sqlstr(fa)},'{{}}');"
         )
 
-    for jid, disc, dtyp, foff, tskip in DONE_JOBS:
+    for jid, disc, dtyp, foff, has_enc in DONE_JOBS:
         pid = f"(SELECT id FROM profiles WHERE disc_type='{dtyp}' AND enabled=1 LIMIT 1)"
         started = foff - 45
         out.append(
@@ -131,16 +133,36 @@ def emit():
             f"({sqlstr(jid)},{sqlstr(disc)},NULL,{pid},'done','',100,'',0,2700,"
             f"{sqlstr(ts(started))},{sqlstr(ts(foff))},'',{sqlstr(ts(started-1))},'');"
         )
+        # On a transcode-half disc the rip job owns detect/identify/rip/eject;
+        # transcode/compress/move/notify belong to the child transcode job.
+        rip_done = {"detect", "identify", "rip", "eject"} if has_enc else set(STEP_ORDER)
         for i, st in enumerate(STEP_ORDER):
-            if st in ("transcode", "compress") and tskip:
-                state = "skipped"
-            else:
-                state = "done"
+            state = "done" if (not has_enc or st in rip_done) else "skipped"
             sa = ts(started + i)
             fa = ts(started + i + 1) if state == "done" else ""
             out.append(
                 "INSERT INTO job_steps (job_id,step,state,attempt_count,started_at,finished_at,notes_json) VALUES "
                 f"({sqlstr(jid)},{sqlstr(st)},{sqlstr(state)},{1 if state=='done' else 0},{sqlstr(sa)},{sqlstr(fa)},'{{}}');"
+            )
+
+        if not has_enc:
+            continue
+        # Done transcode-kind child job: flips the disc lifecycle from
+        # awaiting_encode to done. parent_job_id ties it to the rip.
+        ejid = jid + "-enc"
+        estart = foff + 2
+        out.append(
+            "INSERT INTO jobs (id,disc_id,drive_id,profile_id,state,active_step,progress,speed,"
+            "eta_seconds,elapsed_seconds,started_at,finished_at,error_message,created_at,active_substep,"
+            "kind,parent_job_id) VALUES "
+            f"({sqlstr(ejid)},{sqlstr(disc)},NULL,{pid},'done','',100,'',0,1800,"
+            f"{sqlstr(ts(estart))},{sqlstr(ts(estart + 30))},'',{sqlstr(ts(estart - 1))},'',"
+            f"'transcode',{sqlstr(jid)});"
+        )
+        for i, st in enumerate(["transcode", "compress", "move", "notify"]):
+            out.append(
+                "INSERT INTO job_steps (job_id,step,state,attempt_count,started_at,finished_at,notes_json) VALUES "
+                f"({sqlstr(ejid)},{sqlstr(st)},'done',1,{sqlstr(ts(estart + i))},{sqlstr(ts(estart + i + 1))},'{{}}');"
             )
 
     out.append("COMMIT;")

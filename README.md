@@ -17,11 +17,28 @@ Supported disc types:
 
 ## Screenshots
 
-<!-- Placeholders — capture against a live instance and drop the PNGs in docs/img/. -->
+### Dashboard
 
-![Dashboard](docs/img/dashboard.png)
-![Disc history](docs/img/history.png)
-![Settings](docs/img/settings.png)
+![DiscEcho dashboard — a disc mid-rip with the live pipeline and a second idle drive](docs/img/dashboard.png)
+
+### History
+
+![Disc history — completed rips across DVD, Blu-ray, 4K UHD, audio CD and game discs](docs/img/history.png)
+
+### Settings
+
+![Settings — drives, library paths, encoding queue, integrations, game-disc identification and retention](docs/img/settings.png)
+
+### On mobile
+
+The web UI is mobile-first:
+
+| Dashboard | History | Settings |
+|-----------|---------|----------|
+| ![Dashboard on mobile](docs/img/dashboard-mobile.png) | ![History on mobile](docs/img/history-mobile.png) | ![Settings on mobile](docs/img/settings-mobile.png) |
+
+<!-- Screenshots use fabricated, copyright-safe sample data; regenerate via docs/screenshots/. -->
+
 
 ## Quick start
 
