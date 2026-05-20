@@ -18,6 +18,7 @@ const sample: Stats = {
   library: {
     used_bytes: 14_200_000_000_000,
     total_bytes: 18_000_000_000_000,
+    available_bytes: 3_800_000_000_000,
     spark_30d_used: Array(30)
       .fill(0)
       .map((_, i) => i * 1e11),
@@ -49,6 +50,11 @@ describe('StatsRow', () => {
   it('renders titles subline for TODAY RIPPED', () => {
     const { getByText } = render(StatsRow, { stats: sample });
     expect(getByText(/\+12 titles/)).toBeInTheDocument();
+  });
+
+  it('renders free-space subline for LIBRARY SIZE', () => {
+    const { getByText } = render(StatsRow, { stats: sample });
+    expect(getByText(/free$/)).toBeInTheDocument();
   });
 
   it('renders prev-window delta for FAILURES', () => {

@@ -236,6 +236,7 @@ export interface TodayRippedStat {
 export interface LibraryStat {
   used_bytes: number;
   total_bytes: number;
+  available_bytes: number;
   spark_30d_used: number[];
 }
 export interface Failures7dStat {

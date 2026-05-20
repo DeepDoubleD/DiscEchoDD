@@ -63,7 +63,9 @@
         {formatBytes(stats.library.used_bytes)}
       </div>
       <div class="mt-1 font-mono text-[11px] text-text-3">
-        {stats.library.total_bytes > 0 ? `of ${formatBytes(stats.library.total_bytes)}` : ''}
+        {stats.library.available_bytes > 0
+          ? `${formatBytes(stats.library.available_bytes)} free`
+          : ''}
       </div>
     </div>
 

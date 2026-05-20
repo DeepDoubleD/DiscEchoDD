@@ -285,12 +285,15 @@ type TodayRippedStat struct {
 }
 
 // LibraryStat is the LIBRARY SIZE widget payload. UsedBytes sums
-// job.output_bytes across done jobs; TotalBytes is statfs of the
-// configured library roots and is filled in by the API layer.
+// job.output_bytes across done jobs (DiscEcho's own ripped data).
+// TotalBytes and AvailableBytes are statfs of the configured library
+// roots and are filled in by the API layer; the widget renders
+// AvailableBytes as the "free" subtext.
 type LibraryStat struct {
-	UsedBytes    int64   `json:"used_bytes"`
-	TotalBytes   int64   `json:"total_bytes"`
-	Spark30dUsed []int64 `json:"spark_30d_used"` // cumulative at each day-end, oldest first
+	UsedBytes      int64   `json:"used_bytes"`
+	TotalBytes     int64   `json:"total_bytes"`
+	AvailableBytes int64   `json:"available_bytes"`
+	Spark30dUsed   []int64 `json:"spark_30d_used"` // cumulative at each day-end, oldest first
 }
 
 // Failures7dStat is the FAILURES (7D) widget payload.

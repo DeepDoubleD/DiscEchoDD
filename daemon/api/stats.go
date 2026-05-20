@@ -96,25 +96,21 @@ func (h *Handlers) computeStats(ctx context.Context) state.Stats {
 		stats.ActiveJobs.Spark24h = ring[:]
 		stats.ActiveJobs.Delta1h = delta
 	}
-	used, total := h.libraryFSBytes(ctx)
+	// UsedBytes stays the jobs-sum from Store.statsLibrary — DiscEcho's
+	// own ripped data, which is what the widget headline reports. statfs
+	// only contributes TotalBytes (whole-mount capacity) and
+	// AvailableBytes (free space), the latter rendered as the subtext.
+	_, total, avail := h.libraryFSBytes(ctx)
 	stats.Library.TotalBytes = total
-	// Prefer the on-disk used figure when statfs returned anything: the
-	// jobs-sum fallback only counts DiscEcho's done jobs, so it reads 0
-	// after a fresh install or if every recent rip failed even though
-	// the user's library shares may already hold gigabytes from other
-	// sources or from history-pruned jobs. statfs measures what's
-	// actually there.
-	if used > 0 {
-		stats.Library.UsedBytes = used
-	}
+	stats.Library.AvailableBytes = avail
 	return stats
 }
 
 // libraryFSBytes walks the configured library roots, deduplicates by
-// filesystem id, and returns (used, total) across distinct mounts.
-// Returns (0, 0) on any error (the widget gracefully renders the
-// headline without the "of X TB" subline).
-func (h *Handlers) libraryFSBytes(ctx context.Context) (used, total int64) {
+// filesystem id, and returns (used, total, available) across distinct
+// mounts. Returns (0, 0, 0) on any error (the widget gracefully renders
+// the headline without the "free" subline).
+func (h *Handlers) libraryFSBytes(ctx context.Context) (used, total, available int64) {
 	roots := h.libraryRoots(ctx)
 	seen := map[uint64]bool{}
 	for _, root := range roots {
@@ -138,8 +134,11 @@ func (h *Handlers) libraryFSBytes(ctx context.Context) (used, total int64) {
 		// Used = total - free. Bfree (vs Bavail) matches what `df` reports
 		// for total used since we don't differentiate root-reserved space.
 		used += int64(stat.Blocks-stat.Bfree) * stat.Bsize
+		// Available = space usable by non-root processes; this is `df`'s
+		// "Avail" column, which is what the "free" subtext reports.
+		available += int64(stat.Bavail) * stat.Bsize
 	}
-	return used, total
+	return used, total, available
 }
 
 func (h *Handlers) libraryRoots(ctx context.Context) []string {
