@@ -198,6 +198,27 @@ RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
 COPY --from=makemkv-build /opt/makemkv /opt/makemkv
 RUN ln -sf /opt/makemkv/bin/makemkvcon /usr/bin/makemkvcon
 
+# mmgplsrv (MakeMKV's GPL/FFmpeg helper, forked by makemkvcon during a rip)
+# is a *musl* binary in jlesage's Alpine bundle (interpreter
+# /lib/ld-musl-x86_64.so.1), unlike makemkvcon which is glibc and uses the
+# bundled /opt/makemkv/lib loader. Its musl loader + musl-built support libs
+# live OUTSIDE /opt/makemkv, so the COPY above doesn't bring them and the
+# glibc runtime has no musl loader at all — exec fails with MSG "Failed to
+# execute external program 'mmgplsrv'". Pull the three artifacts it needs
+# (DT_NEEDED: libc.musl, libstdc++.so.6, libgcc_s.so.1) from the same jlesage
+# image. Isolate the support libs under /opt/makemkv/musl via
+# /etc/ld-musl-x86_64.path so they can't shadow the glibc libstdc++/libgcc the
+# rest of the runtime (HandBrake, loudgain, chdman) uses — Debian usrmerge
+# makes /lib == /usr/lib, so a plain copy would collide.
+COPY --from=makemkv-build /lib/ld-musl-x86_64.so.1 /lib/ld-musl-x86_64.so.1
+COPY --from=makemkv-build /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /opt/makemkv/musl/
+RUN ln -sf /lib/ld-musl-x86_64.so.1 /opt/makemkv/musl/libc.musl-x86_64.so.1 \
+ && printf '/opt/makemkv/musl\n' > /etc/ld-musl-x86_64.path \
+ # Guard against future jlesage drift: mmgplsrv must actually launch. An exec
+ # failure (missing interpreter/lib) yields 127; timeout because it's a server
+ # that blocks on its control pipe. Any non-127 exit means it loaded fine.
+ && sh -c 'timeout 5 /opt/makemkv/bin/mmgplsrv >/dev/null 2>&1; [ "$?" -ne 127 ]'
+
 # HandBrake built from source on Debian bookworm. The binary links
 # against the same bookworm shared libs already present in the runtime
 # image, so no extra lib COPYs are needed.
