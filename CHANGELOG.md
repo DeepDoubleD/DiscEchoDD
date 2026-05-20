@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-05-20
+
 ### Added
 - Rip notifications are now rich and media-aware. Instead of `DiscEcho: <title> — Ripped to <root>`, the message is formatted per disc type (movie / TV series / audio CD / game / data) and includes the relevant details — duration, output size, file/title or episode counts, codec/engine, audio track + AccurateRip status, game system/region, and so on — rendered as light Markdown so Discord/Telegram/Slack/ntfy show it nicely. When cover/poster art is available it's attached to the notification.
 - **Failure notifications now fire.** The `failed` trigger was configurable in the UI but never actually sent; a rip failure now notifies the subscribers that opted into `failed`, with the failed step and error. (`warn` remains reserved — no warning-class event is produced yet.)
