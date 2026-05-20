@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-05-20
+
 ### Changed
 - The dashboard's **Library size** widget now reports DiscEcho's own ripped data (sum of finished-job output) with free disk space as the subtext, instead of the whole library filesystem's used/total. On a shared array the widget previously showed the size of the entire array (e.g. 71.2 TB of 73.7 TB) rather than what DiscEcho had ripped.
 
