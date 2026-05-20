@@ -248,6 +248,44 @@ func TestStore_Job_UpdateState_SetsTimestamps(t *testing.T) {
 	}
 }
 
+func TestStore_Job_CancelIfActive(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	prof := newProfile(t, s, "CD-FLAC", state.DiscTypeAudioCD)
+	disc := newDisc(t, s, drv)
+
+	// A running job cancels.
+	running := newJob(t, s, drv, prof, disc)
+	if err := s.UpdateJobState(ctx, running.ID, state.JobStateRunning, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CancelJobIfActive(ctx, running.ID); err != nil {
+		t.Fatalf("cancel running: %v", err)
+	}
+	if g, _ := s.GetJob(ctx, running.ID); g.State != state.JobStateCancelled {
+		t.Errorf("running: want cancelled, got %s", g.State)
+	}
+
+	// A job that already finished must NOT be clobbered to cancelled —
+	// this is the Stop-click-races-worker-completion window.
+	done := newJob(t, s, drv, prof, disc)
+	if err := s.UpdateJobState(ctx, done.ID, state.JobStateDone, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CancelJobIfActive(ctx, done.ID); err != nil {
+		t.Fatalf("cancel done: %v", err)
+	}
+	if g, _ := s.GetJob(ctx, done.ID); g.State != state.JobStateDone {
+		t.Errorf("done: want done unchanged, got %s", g.State)
+	}
+
+	// Cancelling a missing job is a benign no-op.
+	if err := s.CancelJobIfActive(ctx, "nope"); err != nil {
+		t.Errorf("cancel missing: want nil, got %v", err)
+	}
+}
+
 func TestStore_Job_MarkInterrupted(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()

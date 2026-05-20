@@ -409,11 +409,7 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 		sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
 	}
 
-	pipelines.RunNotifyStep(ctx, sink, pipelines.NotifyDeps{
-		Tools:          h.deps.Tools,
-		URLsForTrigger: h.deps.URLsForTrigger,
-		LibraryRoot:    h.deps.LibraryRoot,
-	}, disc)
+	pipelines.RunNotifyStep(ctx, sink)
 	return nil
 }
 

@@ -32,6 +32,12 @@ import (
 // include the path so the user knows where to drop the file.
 var ErrAACS2KeyMissing = errors.New("uhd: AACS2 key file missing")
 
+// aacs2Guidance is appended to ErrAACS2KeyMissing messages. UHD failures
+// surface as the job's error_message (UHD discs pass classify; this is the
+// gate), so this is the one place to spell out the full UHD prerequisites
+// the user is likely missing.
+const aacs2Guidance = "UHD ripping requires: an AACS2 KEYDB.cfg key file (DiscEcho does not ship one), MakeMKV configured with a valid key (Settings → Integrations → MakeMKV), and a UHD-friendly Blu-ray drive with LibreDrive-compatible firmware."
+
 // MakeMKVScanner / MakeMKVRipper are the slice of tools.MakeMKV used
 // at scan-time and rip-time respectively. Mirrors the bdmv package.
 // sink receives MakeMKV's MSG: lines as info logs during the
@@ -81,11 +87,11 @@ func (h *Handler) DiscType() state.DiscType { return state.DiscTypeUHD }
 //   - ErrNoCandidates if the volume label doesn't normalise or TMDB returns 0
 func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, []state.Candidate, error) {
 	if h.deps.AACS2KeyDB == "" {
-		return nil, nil, fmt.Errorf("%w: AACS2KeyDB not configured", ErrAACS2KeyMissing)
+		return nil, nil, fmt.Errorf("%w: KEYDB.cfg path not configured. %s", ErrAACS2KeyMissing, aacs2Guidance)
 	}
 	if _, err := os.Stat(h.deps.AACS2KeyDB); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil, fmt.Errorf("%w: %s", ErrAACS2KeyMissing, h.deps.AACS2KeyDB)
+			return nil, nil, fmt.Errorf("%w: no file at %s. %s", ErrAACS2KeyMissing, h.deps.AACS2KeyDB, aacs2Guidance)
 		}
 		return nil, nil, fmt.Errorf("uhd: stat key file: %w", err)
 	}
@@ -305,11 +311,7 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 		sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
 	}
 
-	pipelines.RunNotifyStep(ctx, sink, pipelines.NotifyDeps{
-		Tools:          h.deps.Tools,
-		URLsForTrigger: h.deps.URLsForTrigger,
-		LibraryRoot:    h.deps.LibraryRoot,
-	}, disc)
+	pipelines.RunNotifyStep(ctx, sink)
 	return nil
 }
 

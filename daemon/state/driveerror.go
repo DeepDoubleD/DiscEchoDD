@@ -16,11 +16,11 @@ func DriveErrorTip(errMsg string) string {
 		// transient spin-up race that exhausted the classifier's retry
 		// budget, or a disc the drive can't physically read (XGD
 		// originals need Kreon firmware). The tip leads with the
-		// recoverable causes since most failures we see are dirty discs
-		// or chilled / slow drives — XGD is rare and gets a "less
-		// commonly" framing so users don't run off to flash firmware
-		// for a dirty pressed CD.
-		return "The drive couldn't read this disc. Most often: dirty or scratched surface (clean the disc and try again), or the drive is spinning the disc down before cd-info finishes (eject and re-insert — the second spin-up is usually faster). Less commonly: an original Xbox game disc requires Kreon-firmware drives (https://kreon.dev) since XGD media is unreadable on stock optical drives."
+		// recoverable causes — most failures are dirty discs or slow
+		// drives — but the Xbox/Kreon case gets its own clear sentence
+		// (rather than a buried "less commonly" tail) so users with an
+		// Xbox disc that won't detect at all aren't left guessing.
+		return "The drive couldn't read this disc. Two common, recoverable causes: a dirty or scratched surface (clean the disc and try again), or the drive spinning the disc down before cd-info finishes (eject and re-insert — the second spin-up is usually faster). One hardware cause: original Xbox game discs need a drive flashed with Kreon firmware (https://kreon.dev) — XGD media is unreadable on stock optical drives, so the disc won't be detected at all."
 	case strings.Contains(lower, "deadline exceeded"):
 		return "The drive is reading this disc very slowly — the identify step timed out before cd-info or isoinfo could finish. Try ejecting and re-inserting (often the second spin-up is faster), clean the disc surface, or try a different drive."
 	case strings.Contains(lower, "makemkv") && isMakeMKVKeyError(lower):

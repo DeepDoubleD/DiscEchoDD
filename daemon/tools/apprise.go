@@ -145,3 +145,37 @@ func BuildAppriseArgs(title, body, tag string, urls []string) []string {
 	args = append(args, urls...)
 	return args
 }
+
+// BuildAppriseRichArgs constructs argv for a Markdown notification with
+// optional image attachments. The body is sent as Markdown (`-i markdown`)
+// so rich services (Discord, Telegram, Slack, ntfy) render headers/bold/links
+// while plain-text targets still get a readable message. Each attachment is
+// passed via `--attach <url>` (apprise fetches the image itself).
+//
+// Every url and attachment is validated against validateURLArg (rejects a
+// leading `-`) so neither can smuggle a CLI flag; a bad value returns an
+// error so the caller can drop attachments and retry rather than send junk.
+// The `--` separator after the flags keeps positional urls out of flag
+// parsing even though they're already validated.
+func BuildAppriseRichArgs(title, body, tag string, urls, attachments []string) ([]string, error) {
+	for _, a := range attachments {
+		if err := validateURLArg(a); err != nil {
+			return nil, fmt.Errorf("apprise attach: %w", err)
+		}
+	}
+	for _, u := range urls {
+		if err := validateURLArg(u); err != nil {
+			return nil, fmt.Errorf("apprise url: %w", err)
+		}
+	}
+	args := []string{"-t", title, "-b", body, "-i", "markdown"}
+	for _, a := range attachments {
+		args = append(args, "--attach", a)
+	}
+	if tag != "" {
+		args = append(args, "--tag", tag)
+	}
+	args = append(args, "--")
+	args = append(args, urls...)
+	return args, nil
+}

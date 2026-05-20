@@ -36,7 +36,7 @@ func TestGetSettings_ReturnsKV(t *testing.T) {
 func TestSettings_Put_RetentionValid(t *testing.T) {
 	h := apitestServer(t)
 	body := mustMarshal(t, map[string]any{
-		"retention.forever": false, "retention.days": 30,
+		"retention.forever": false, "retention.success.days": 30, "retention.failed.count": 50,
 	})
 	req := authedReq(t, http.MethodPut, "/api/settings", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -44,33 +44,28 @@ func TestSettings_Put_RetentionValid(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("status: %d body: %s", rec.Code, rec.Body.String())
 	}
-	v, _ := h.Store.GetSetting(context.Background(), "retention.days")
-	if v != "30" {
-		t.Fatalf("days: %q", v)
+	if v, _ := h.Store.GetSetting(context.Background(), "retention.success.days"); v != "30" {
+		t.Fatalf("success.days: %q", v)
 	}
-	v2, _ := h.Store.GetSetting(context.Background(), "retention.forever")
-	if v2 != "false" {
-		t.Fatalf("forever: %q", v2)
+	if v, _ := h.Store.GetSetting(context.Background(), "retention.failed.count"); v != "50" {
+		t.Fatalf("failed.count: %q", v)
+	}
+	if v, _ := h.Store.GetSetting(context.Background(), "retention.forever"); v != "false" {
+		t.Fatalf("forever: %q", v)
 	}
 }
 
-func TestSettings_Put_RetentionForeverFalse_DaysZero_422(t *testing.T) {
+func TestSettings_Put_RetentionForeverFalse_AllKnobsZero_422(t *testing.T) {
 	h := apitestServer(t)
+	// Explicitly zero every knob (overriding the seeded failed.days=14) so
+	// nothing would ever be pruned — that's the meaningless case we reject.
 	body := mustMarshal(t, map[string]any{
-		"retention.forever": false, "retention.days": 0,
+		"retention.forever":       false,
+		"retention.success.days":  0,
+		"retention.success.count": 0,
+		"retention.failed.days":   0,
+		"retention.failed.count":  0,
 	})
-	req := authedReq(t, http.MethodPut, "/api/settings", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	h.PutSettings(rec, req)
-	if rec.Code != 422 {
-		t.Fatalf("status: %d", rec.Code)
-	}
-}
-
-func TestSettings_Put_RetentionForeverFalse_NoDaysInPatch_StoredZero_422(t *testing.T) {
-	h := apitestServer(t)
-	// No prior days value set; PATCH sets forever=false but doesn't include days.
-	body := mustMarshal(t, map[string]any{"retention.forever": false})
 	req := authedReq(t, http.MethodPut, "/api/settings", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.PutSettings(rec, req)
@@ -79,9 +74,10 @@ func TestSettings_Put_RetentionForeverFalse_NoDaysInPatch_StoredZero_422(t *test
 	}
 }
 
-func TestSettings_Put_RetentionForeverFalse_NoDaysInPatch_StoredValid_OK(t *testing.T) {
+func TestSettings_Put_RetentionForeverFalse_SeededDefaults_OK(t *testing.T) {
 	h := apitestServer(t)
-	_ = h.Store.SetSetting(context.Background(), "retention.days", "60")
+	// Migration 020 seeds failed.days=14, so turning off forever with no
+	// knob in the patch still has an active limit and is accepted.
 	body := mustMarshal(t, map[string]any{"retention.forever": false})
 	req := authedReq(t, http.MethodPut, "/api/settings", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
@@ -91,15 +87,24 @@ func TestSettings_Put_RetentionForeverFalse_NoDaysInPatch_StoredValid_OK(t *test
 	}
 }
 
-func TestSettings_Put_RetentionForeverTrue_DaysZero_OK(t *testing.T) {
+func TestSettings_Put_RetentionForeverTrue_OK(t *testing.T) {
 	h := apitestServer(t)
-	body := mustMarshal(t, map[string]any{
-		"retention.forever": true, "retention.days": 0,
-	})
+	body := mustMarshal(t, map[string]any{"retention.forever": true})
 	req := authedReq(t, http.MethodPut, "/api/settings", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.PutSettings(rec, req)
 	if rec.Code != 200 {
+		t.Fatalf("status: %d body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSettings_Put_RetentionNegative_422(t *testing.T) {
+	h := apitestServer(t)
+	body := mustMarshal(t, map[string]any{"retention.failed.days": -1})
+	req := authedReq(t, http.MethodPut, "/api/settings", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.PutSettings(rec, req)
+	if rec.Code != 422 {
 		t.Fatalf("status: %d body: %s", rec.Code, rec.Body.String())
 	}
 }

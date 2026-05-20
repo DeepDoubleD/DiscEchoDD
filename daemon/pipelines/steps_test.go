@@ -46,57 +46,16 @@ func (t *recordingTool) Run(_ context.Context, args []string, _ map[string]strin
 	return t.runErr
 }
 
-func TestRunNotifyStep_NoToolsRegistryIsNoOp(t *testing.T) {
+// RunNotifyStep is now a UI marker only — the actual apprise send happens at
+// the job's finalise point (jobs package). It must emit StepNotify start+done.
+func TestRunNotifyStep_EmitsMarker(t *testing.T) {
 	rec := &stepRecorder{}
-	RunNotifyStep(context.Background(), rec, NotifyDeps{}, &state.Disc{Title: "X"})
+	RunNotifyStep(context.Background(), rec)
 
-	if len(rec.events) != 2 || rec.events[0].kind != "start" || rec.events[1].kind != "done" {
-		t.Fatalf("want start+done only; got %+v", rec.events)
-	}
-}
-
-func TestRunNotifyStep_FiresAppriseWithExpectedArgs(t *testing.T) {
-	reg := tools.NewRegistry()
-	apprise := &recordingTool{name: "apprise"}
-	reg.Register(apprise)
-
-	rec := &stepRecorder{}
-	deps := NotifyDeps{
-		Tools:       reg,
-		LibraryRoot: "/lib",
-		URLsForTrigger: func(_ context.Context, trigger string) []string {
-			if trigger != "done" {
-				t.Errorf("want trigger=done, got %q", trigger)
-			}
-			return []string{"discord://x", "slack://y"}
-		},
-	}
-
-	RunNotifyStep(context.Background(), rec, deps, &state.Disc{Title: "Test Disc"})
-
-	if !apprise.runCalled {
-		t.Fatalf("apprise.Run not called")
-	}
-	wantArgs := tools.BuildAppriseArgs("DiscEcho: Test Disc", "Ripped to /lib", "", []string{"discord://x", "slack://y"})
-	if len(apprise.runArgs) != len(wantArgs) {
-		t.Fatalf("argv length: want %d got %d (%v)", len(wantArgs), len(apprise.runArgs), apprise.runArgs)
-	}
-	for i := range wantArgs {
-		if apprise.runArgs[i] != wantArgs[i] {
-			t.Errorf("argv[%d]: want %q got %q", i, wantArgs[i], apprise.runArgs[i])
-		}
-	}
-}
-
-func TestRunNotifyStep_ToolErrorSwallowedStillEmitsDone(t *testing.T) {
-	reg := tools.NewRegistry()
-	reg.Register(&recordingTool{name: "apprise", runErr: errors.New("boom")})
-
-	rec := &stepRecorder{}
-	RunNotifyStep(context.Background(), rec, NotifyDeps{Tools: reg}, &state.Disc{Title: "X"})
-
-	if rec.events[len(rec.events)-1].kind != "done" {
-		t.Fatalf("want trailing done, got %+v", rec.events)
+	if len(rec.events) != 2 ||
+		rec.events[0].kind != "start" || rec.events[0].step != state.StepNotify ||
+		rec.events[1].kind != "done" || rec.events[1].step != state.StepNotify {
+		t.Fatalf("want StepNotify start+done; got %+v", rec.events)
 	}
 }
 

@@ -16,6 +16,7 @@ import type {
   JobLogsResponse,
   IntegrationDetail,
   IntegrationName,
+  RetentionStatus,
 } from './wire';
 
 export interface LogLine {
@@ -717,11 +718,55 @@ export async function testNotification(id: string): Promise<{ sent: boolean; err
   }
 }
 
-export async function updateRetention(r: { forever: boolean; days: number }): Promise<void> {
+export interface RetentionPolicyInput {
+  forever: boolean;
+  // null/undefined → 0 (no limit) on the wire.
+  successDays: number | null;
+  successCount: number | null;
+  failedDays: number | null;
+  failedCount: number | null;
+}
+
+const n0 = (v: number | null | undefined): number => (v && v > 0 ? v : 0);
+
+export async function updateRetention(r: RetentionPolicyInput): Promise<void> {
   await apiPut('/api/settings', {
     'retention.forever': r.forever,
-    'retention.days': r.days,
+    'retention.success.days': n0(r.successDays),
+    'retention.success.count': n0(r.successCount),
+    'retention.failed.days': n0(r.failedDays),
+    'retention.failed.count': n0(r.failedCount),
   });
+}
+
+// fetchRetentionStatus returns history totals + what the policy would prune.
+// Pass a candidate policy to preview unsaved edits (query overrides; the
+// server never deletes for this call); omit it to read the saved policy.
+export async function fetchRetentionStatus(
+  preview?: RetentionPolicyInput,
+): Promise<RetentionStatus> {
+  let path = '/api/retention/status';
+  if (preview) {
+    const q = new URLSearchParams({
+      forever: String(preview.forever),
+      success_days: String(n0(preview.successDays)),
+      success_count: String(n0(preview.successCount)),
+      failed_days: String(n0(preview.failedDays)),
+      failed_count: String(n0(preview.failedCount)),
+    });
+    path += '?' + q.toString();
+  }
+  return await apiGet<RetentionStatus>(path);
+}
+
+// runRetentionNow triggers an immediate prune against the SAVED policy.
+export async function runRetentionNow(): Promise<{
+  success_deleted: number;
+  failed_deleted: number;
+  discs_deleted: number;
+  total: number;
+}> {
+  return await apiPost('/api/retention/run', {});
 }
 
 /**

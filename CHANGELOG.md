@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Rip notifications are now rich and media-aware. Instead of `DiscEcho: <title> — Ripped to <root>`, the message is formatted per disc type (movie / TV series / audio CD / game / data) and includes the relevant details — duration, output size, file/title or episode counts, codec/engine, audio track + AccurateRip status, game system/region, and so on — rendered as light Markdown so Discord/Telegram/Slack/ntfy show it nicely. When cover/poster art is available it's attached to the notification.
+- **Failure notifications now fire.** The `failed` trigger was configurable in the UI but never actually sent; a rip failure now notifies the subscribers that opted into `failed`, with the failed step and error. (`warn` remains reserved — no warning-class event is produced yet.)
+- The notifications settings page now explains that DiscEcho uses **Apprise**, shows example service URLs, and links to the supported-services list (appriseit.com/services).
+- History retention is now a real per-outcome policy instead of a single confusing "delete after N days" toggle. You can keep everything forever (default), or set independent limits for **successful** rips and **failed/cancelled** rips — each with an optional max age (days) *and* an optional max count (keep the newest N). Turning off "keep forever" is now immediately meaningful: out of the box it keeps successful rips and prunes failures after 14 days. The settings page shows a live preview ("removes X of Y history entries"), the last-run and next-scheduled-run times, and a **Run cleanup now** button. Retention only ever deletes history records — your ripped files are never touched.
+- The profile editor now shows the hardware/setup requirements for disc types that need them, so you find out before a rip fails (or silently never detects the disc). **Xbox** profiles warn that original Xbox discs need a Kreon-firmware drive (XGD media is unreadable on stock drives); **UHD** profiles list the full prerequisites — a LibreDrive-compatible UHD-friendly drive, MakeMKV with a valid key, and an AACS2 `KEYDB.cfg`; **Blu-ray** and **DVD** profiles note the MakeMKV key requirement (with the caveat that the DVD HandBrake engine needs none). Each note links out to the relevant resources.
+
+### Changed
+- The **Game discs** entry under Settings → API keys & connections is now a per-system coverage table instead of a single flat "connected" badge. Each system (PlayStation, PS2, Saturn, Dreamcast, Xbox) shows its built-in **boot-code map** (pre-rip naming) and whether a **Redump .dat file** (post-rip verification) is present, along with the dats directory and a link to redump.org. The status badge now goes amber **partial** when Redump dats are missing rather than misleadingly showing green. (Xbox has no boot-code map by design — shown as n/a.)
+- The daily history cleanup now also fixes a latent bug where the bulk prune could delete the disc currently sitting in a drive (the row the awaiting-decision card points at); it now keeps the drive's most-recent disc, matching the single-delete and clear-all paths.
+- The drive-error tip for an unreadable disc now calls out the Xbox/Kreon-firmware case as its own clear sentence instead of burying it as a "less commonly…" aside, so an original Xbox disc that won't detect at all is easier to diagnose.
+- A UHD rip that fails because the AACS2 `KEYDB.cfg` is missing now reports the full set of UHD prerequisites (key file, MakeMKV, and a LibreDrive-compatible drive) in the error, rather than just naming the missing path.
+
+### Fixed
+- Clicking **Stop** on a job in the brief window where its worker had just finished no longer flips the completed rip to "cancelled". The cancel-fallback path wrote `cancelled` unconditionally when the in-memory cancel entry was already gone (the normal state right after completion), clobbering a `done`/`failed` result and making the disc re-appear as awaiting a decision. The cancel write now only applies to jobs that aren't already in a terminal state.
+- The disc metadata pane no longer white-screens for a game/data disc that was detected but not yet identified. Such discs arrive with `candidates: null` (a Go nil slice marshals to JSON `null`), and the game branch indexed `candidates[0]` without guarding for null.
+- The job detail page (`/jobs/:id`) no longer shows the previous job's data when navigating directly between two finished jobs. The one-shot daemon-fetch fallback state wasn't reset on route change, and an in-flight fetch could resolve after navigating away and overwrite the new job.
+
 ## [0.29.0] - 2026-05-20
 
 ### Changed

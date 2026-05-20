@@ -18,12 +18,33 @@
     resolveTier,
     varsFor,
     specFor,
+    requirementFor,
   } from '$lib/profile_schema';
   import { createEventDispatcher } from 'svelte';
   import DiscTypeBadge, { DISC_TYPE_META } from '$lib/components/DiscTypeBadge.svelte';
+  import Callout from '$lib/components/Callout.svelte';
   import FormSection from './FormSection.svelte';
   import FormRow from './FormRow.svelte';
   import PathField from './PathField.svelte';
+
+  // Splits a requirement line into plain / **bold** / `code` segments so the
+  // template can render emphasis without {@html} (content is static, but this
+  // keeps it injection-proof and matches the design's inline styling).
+  type Seg = { text: string; kind: 'plain' | 'bold' | 'code' };
+  function segments(s: string): Seg[] {
+    const out: Seg[] = [];
+    const re = /\*\*([^*]+)\*\*|`([^`]+)`/g;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(s)) !== null) {
+      if (m.index > last) out.push({ text: s.slice(last, m.index), kind: 'plain' });
+      if (m[1] !== undefined) out.push({ text: m[1], kind: 'bold' });
+      else out.push({ text: m[2], kind: 'code' });
+      last = re.lastIndex;
+    }
+    if (last < s.length) out.push({ text: s.slice(last), kind: 'plain' });
+    return out;
+  }
 
   export let profile: Profile | null = null;
   export let creating: boolean = false;
@@ -71,6 +92,7 @@
     : [];
   $: discType = working.disc_type as DiscType;
   $: discMeta = DISC_TYPE_META[discType] ?? null;
+  $: requirement = requirementFor(discType);
   // A quality tier only applies when the codec actually encodes ("copy" is
   // a lossless passthrough). selectedTier coerces any unrecognised stored
   // value (legacy free-text) to "custom" so the select stays valid.
@@ -466,6 +488,40 @@
     {/if}
 
     <div class="space-y-7">
+      {#if requirement}
+        <Callout tone={requirement.tone} title={requirement.title}>
+          <ul class="space-y-1">
+            {#each requirement.items as item}
+              <li class="flex gap-1.5">
+                <span aria-hidden="true" class="select-none text-text-3">•</span>
+                <span>
+                  {#each segments(item) as seg}
+                    {#if seg.kind === 'bold'}<strong class="font-semibold text-text"
+                        >{seg.text}</strong
+                      >{:else if seg.kind === 'code'}<code
+                        class="rounded bg-surface-2 px-1 font-mono text-[11px]">{seg.text}</code
+                      >{:else}{seg.text}{/if}
+                  {/each}
+                </span>
+              </li>
+            {/each}
+          </ul>
+          {#if requirement.links?.length}
+            <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+              {#each requirement.links as link}
+                <a
+                  href={link.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="underline decoration-dotted underline-offset-2 hover:text-text"
+                >
+                  {link.label} ↗
+                </a>
+              {/each}
+            </div>
+          {/if}
+        </Callout>
+      {/if}
       {#if creating}
         <FormSection title="Identity" sub="Disc type and engine lock once the profile is created.">
           <FormRow label="Disc type" error={fieldErrors.disc_type}>

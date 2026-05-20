@@ -731,11 +731,20 @@ describe('prefs', () => {
       json: async () => ({ ok: true }),
     });
     const { updateRetention } = await import('./store');
-    await updateRetention({ forever: false, days: 60 });
+    await updateRetention({
+      forever: false,
+      successDays: 60,
+      successCount: null,
+      failedDays: 14,
+      failedCount: null,
+    });
     const call = fetchSpy.mock.calls[0];
     const body = JSON.parse((call[1] as RequestInit).body as string);
     expect(body['retention.forever']).toBe(false);
-    expect(body['retention.days']).toBe(60);
+    expect(body['retention.success.days']).toBe(60);
+    expect(body['retention.success.count']).toBe(0);
+    expect(body['retention.failed.days']).toBe(14);
+    expect(body['retention.failed.count']).toBe(0);
   });
 });
 

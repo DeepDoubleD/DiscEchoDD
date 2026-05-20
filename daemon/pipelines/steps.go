@@ -2,45 +2,20 @@ package pipelines
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 	"github.com/jumpingmushroom/DiscEcho/daemon/tools"
 )
 
-// NotifyDeps groups everything RunNotifyStep needs out of a handler's
-// Deps struct. Nil Tools or a missing apprise registration is a silent
-// no-op — same shape every handler used to duplicate inline.
-type NotifyDeps struct {
-	Tools          *tools.Registry
-	URLsForTrigger func(ctx context.Context, trigger string) []string
-	LibraryRoot    string
-}
-
-// RunNotifyStep emits the canonical notify step: looks up the apprise
-// tool, builds the "DiscEcho: <title> — Ripped to <root>" message
-// against the URLs that subscribe to the "done" trigger, and fires
-// best-effort. Sink lifecycle events (start, done) bracket the call so
-// callers don't have to.
-func RunNotifyStep(ctx context.Context, sink EventSink, deps NotifyDeps, disc *state.Disc) {
+// RunNotifyStep emits the canonical notify step as a UI marker. The
+// actual notification is sent at the job's finalise point (jobs package),
+// where the full job context (output size, timing, step notes) and both
+// the success AND failure paths are available — see jobs/notify.go and
+// pipelines.BuildSuccessNotification. Keeping the step here preserves the
+// "Notify" phase in the pipeline stepper.
+func RunNotifyStep(_ context.Context, sink EventSink) {
 	sink.OnStepStart(state.StepNotify)
-	defer sink.OnStepDone(state.StepNotify, nil)
-
-	if deps.Tools == nil {
-		return
-	}
-	apprise, ok := deps.Tools.Get("apprise")
-	if !ok {
-		return
-	}
-	var urls []string
-	if deps.URLsForTrigger != nil {
-		urls = deps.URLsForTrigger(ctx, "done")
-	}
-	title := fmt.Sprintf("DiscEcho: %s", disc.Title)
-	body := fmt.Sprintf("Ripped to %s", deps.LibraryRoot)
-	argv := tools.BuildAppriseArgs(title, body, "", urls)
-	_ = apprise.Run(ctx, argv, nil, "", NewStepSink(sink, state.StepNotify))
+	sink.OnStepDone(state.StepNotify, nil)
 }
 
 // EjectDeps groups everything RunEjectStep needs out of a handler's

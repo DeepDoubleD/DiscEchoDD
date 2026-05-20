@@ -26,8 +26,11 @@ func (h *Handlers) GetSettings(w http.ResponseWriter, r *http.Request) {
 //
 // Editable keys (and their value types):
 //
-//	retention.forever  bool
-//	retention.days     int >= 1 (when retention.forever is false)
+//	retention.forever        bool (master override)
+//	retention.success.days   int >= 0 (0 = no age limit)
+//	retention.success.count  int >= 0 (0 = no count limit)
+//	retention.failed.days    int >= 0
+//	retention.failed.count   int >= 0
 //	library.movies     absolute filesystem path
 //	library.tv         absolute filesystem path
 //	library.music      absolute filesystem path
@@ -37,9 +40,10 @@ func (h *Handlers) GetSettings(w http.ResponseWriter, r *http.Request) {
 //	                   library.{movies,tv,music,games,data} as
 //	                   <value>/<media>. Removed in a follow-up release.
 //
-// Unknown keys → 422. Cross-key rule: if retention.forever is false,
-// retention.days must be present in the PATCH (or already stored)
-// and >= 1.
+// Unknown keys → 422. Cross-key rule: if retention.forever is set false,
+// at least one per-outcome retention knob (days or count, in either
+// bucket) must be >= 1 after merging the PATCH over the stored values —
+// otherwise nothing would ever be pruned and the toggle is meaningless.
 func (h *Handlers) PutSettings(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
@@ -49,23 +53,27 @@ func (h *Handlers) PutSettings(w http.ResponseWriter, r *http.Request) {
 
 	encoded, errs := validateSettingsPatch(patch)
 
-	// Cross-key retention check: only when forever is explicitly false.
+	// Cross-key retention check: only when forever is explicitly disabled.
 	if forever, present := patch["retention.forever"]; present {
 		if b, ok := forever.(bool); ok && !b {
-			daysVal, daysPresent := patch["retention.days"]
-			if !daysPresent {
-				existing, _ := h.Store.GetSetting(r.Context(), "retention.days")
-				n, _ := strconv.Atoi(existing)
-				if n < 1 {
-					errs = append(errs, ValidationError{
-						Field: "retention.days",
-						Msg:   "must be >= 1 when forever is false",
-					})
+			anyActive := false
+			for _, k := range []string{
+				"retention.success.days", "retention.success.count",
+				"retention.failed.days", "retention.failed.count",
+			} {
+				v, ok := encoded[k] // prefer the (validated) PATCH value
+				if !ok {
+					v, _ = h.Store.GetSetting(r.Context(), k)
 				}
-			} else if d, ok := daysVal.(float64); !ok || int(d) < 1 {
+				if n, _ := strconv.Atoi(v); n >= 1 {
+					anyActive = true
+					break
+				}
+			}
+			if !anyActive {
 				errs = append(errs, ValidationError{
-					Field: "retention.days",
-					Msg:   "must be >= 1 when forever is false",
+					Field: "retention.forever",
+					Msg:   "set at least one retention limit (days or count) before turning off keep-forever",
 				})
 			}
 		}
@@ -119,23 +127,16 @@ var allowedSettings = map[string]func(any) (string, error){
 		}
 		return strconv.FormatBool(b), nil
 	},
-	"retention.days": func(v any) (string, error) {
-		f, ok := v.(float64)
-		if !ok {
-			return "", fmt.Errorf("must be integer")
-		}
-		n := int(f)
-		if n < 0 {
-			return "", fmt.Errorf("must be >= 0")
-		}
-		return strconv.Itoa(n), nil
-	},
-	"library.path":   absolutePathValidator,
-	"library.movies": absolutePathValidator,
-	"library.tv":     absolutePathValidator,
-	"library.music":  absolutePathValidator,
-	"library.games":  absolutePathValidator,
-	"library.data":   absolutePathValidator,
+	"retention.success.days":  intRangeValidator(0, 36500),
+	"retention.success.count": intRangeValidator(0, 1_000_000),
+	"retention.failed.days":   intRangeValidator(0, 36500),
+	"retention.failed.count":  intRangeValidator(0, 1_000_000),
+	"library.path":            absolutePathValidator,
+	"library.movies":          absolutePathValidator,
+	"library.tv":              absolutePathValidator,
+	"library.music":           absolutePathValidator,
+	"library.games":           absolutePathValidator,
+	"library.data":            absolutePathValidator,
 	"operation.mode": func(v any) (string, error) {
 		s, ok := v.(string)
 		if !ok {

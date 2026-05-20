@@ -11,6 +11,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
+	"github.com/jumpingmushroom/DiscEcho/daemon/tools"
 )
 
 // ComputeConfig wires the global transcode-queue worker pool.
@@ -25,6 +26,12 @@ type ComputeConfig struct {
 	// compute.concurrent_encodes default and is the safest starting
 	// posture on shared hosts).
 	Concurrency int
+
+	// Tools + URLsForTrigger drive the rip-completion notification sent
+	// when a transcode child reaches its terminal state (the true
+	// user-facing completion for splittable handlers). Nil → no-op.
+	Tools          *tools.Registry
+	URLsForTrigger func(ctx context.Context, trigger string) []string
 }
 
 // maxComputeWorkers caps the worker-pool size. The actual number of
@@ -201,7 +208,7 @@ func (c *Compute) Cancel(jobID string) error {
 	cancel, ok := c.cancels[jobID]
 	c.mu.Unlock()
 	if !ok {
-		if err := c.cfg.Store.UpdateJobState(context.Background(), jobID, state.JobStateCancelled, ""); err != nil {
+		if err := c.cfg.Store.CancelJobIfActive(context.Background(), jobID); err != nil {
 			return fmt.Errorf("compute cancel: %w", err)
 		}
 		return nil
@@ -319,6 +326,10 @@ func (c *Compute) runOne(jobID string) {
 		errMsg = runErr.Error()
 	}
 	c.finalise(jobID, job.SpoolPath, final, errMsg)
+
+	// The transcode child finishing is the user-facing completion for a
+	// splittable rip: notify on success or failure (cancelled → no-op inside).
+	sendTerminalNotification(c.cfg.Tools, c.cfg.URLsForTrigger, c.cfg.Store, jobID, disc, prof, final)
 }
 
 // finalise writes the terminal job state and, on success, removes the

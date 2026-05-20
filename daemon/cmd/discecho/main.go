@@ -412,11 +412,13 @@ func main() {
 	}
 	encConc := readIntSetting(store, "compute.concurrent_encodes", 1)
 	compute := jobs.NewCompute(jobs.ComputeConfig{
-		Store:       store,
-		Broadcaster: bc,
-		Pipelines:   pipeReg,
-		Spool:       spoolStore,
-		Concurrency: encConc,
+		Store:          store,
+		Broadcaster:    bc,
+		Pipelines:      pipeReg,
+		Spool:          spoolStore,
+		Concurrency:    encConc,
+		Tools:          toolReg,
+		URLsForTrigger: urlsForTrigger,
 	})
 	defer compute.Close()
 
@@ -432,6 +434,8 @@ func main() {
 		CapBytesFunc: func() int64 {
 			return int64(readIntSetting(store, "spool.cap_bytes", 100*1024*1024*1024))
 		},
+		Tools:          toolReg,
+		URLsForTrigger: urlsForTrigger,
 	})
 	defer orch.Close()
 

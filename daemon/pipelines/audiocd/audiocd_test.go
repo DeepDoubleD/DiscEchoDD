@@ -240,9 +240,8 @@ func TestAudioCD_Run_FullPipeline(t *testing.T) {
 		t.Errorf("want 2 FLACs in library, got %d (%v)", len(matches), matches)
 	}
 
-	if len(apprise.Calls()) != 1 {
-		t.Errorf("apprise calls: %d", len(apprise.Calls()))
-	}
+	// The notify step now only emits its UI marker (StepNotify, asserted in
+	// the sequence above); the apprise send moved to the job finalise point.
 	if len(eject.Calls()) != 1 {
 		t.Errorf("eject calls: %d", len(eject.Calls()))
 	}

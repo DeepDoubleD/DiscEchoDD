@@ -24,6 +24,17 @@
   let localJob: Job | undefined = undefined;
   let loading = false;
   let loadError: string | null = null;
+  // The id that localJob/loadError belong to. On SPA navigation between two
+  // terminal jobs (neither in $jobs), id changes but the fallback state would
+  // otherwise stick — leaving the page showing the previous job under the new
+  // URL. Drop it when the route moves to a different job.
+  let loadedId: string | undefined = undefined;
+  $: if (id !== loadedId) {
+    localJob = undefined;
+    loadError = null;
+    loading = false;
+    loadedId = id;
+  }
 
   $: liveJob = $jobs.find((j) => j.id === id);
   $: job = liveJob ?? localJob;
@@ -88,11 +99,13 @@
     loadError = null;
     try {
       const res = await fetchJob(jobID);
+      if (jobID !== id) return; // navigated away mid-flight; drop stale result
       localJob = res.job;
     } catch (e) {
+      if (jobID !== id) return;
       loadError = (e as Error).message;
     } finally {
-      loading = false;
+      if (jobID === id) loading = false;
     }
   }
 

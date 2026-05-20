@@ -191,4 +191,47 @@ describe('ProfileEditor', () => {
     expect(draft.name).toBe('BD-1080p (copy)');
     expect(draft.engine).toBe('MakeMKV+HandBrake');
   });
+
+  describe('disc-type requirements callout', () => {
+    const uhd: Profile = {
+      ...bd,
+      id: 'p-uhd',
+      disc_type: 'UHD',
+      name: 'UHD-Remux',
+      engine: 'MakeMKV',
+      video_codec: 'copy',
+    };
+    const xbox: Profile = {
+      ...seed,
+      id: 'p-xbox',
+      disc_type: 'XBOX',
+      name: 'Xbox-ISO',
+      engine: 'redumper',
+      container: 'ISO',
+      format: 'ISO',
+    };
+
+    it('shows the UHD hardware/setup requirements with links', () => {
+      const { getByText, container } = render(ProfileEditor, { profile: uhd, creating: false });
+      expect(getByText(/Requires special hardware/i)).toBeInTheDocument();
+      expect(container.textContent).toMatch(/LibreDrive/);
+      expect(container.textContent).toMatch(/KEYDB\.cfg/);
+      const libre = container.querySelector('a[href*="t=19634"]') as HTMLAnchorElement;
+      expect(libre).not.toBeNull();
+      expect(libre.target).toBe('_blank');
+    });
+
+    it('shows the Xbox Kreon requirement with kreon.dev link', () => {
+      const { getByText, container } = render(ProfileEditor, { profile: xbox, creating: false });
+      expect(getByText(/Requires special drive firmware/i)).toBeInTheDocument();
+      expect(container.textContent).toMatch(/Kreon/);
+      expect(container.querySelector('a[href="https://kreon.dev"]')).not.toBeNull();
+    });
+
+    it('shows no requirements callout for an audio CD profile', () => {
+      const { queryByText } = render(ProfileEditor, { profile: seed, creating: false });
+      expect(queryByText(/Requires special/i)).toBeNull();
+      expect(queryByText(/Requires MakeMKV/i)).toBeNull();
+    });
+  });
 });

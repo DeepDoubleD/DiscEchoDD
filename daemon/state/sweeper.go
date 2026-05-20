@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"time"
 )
 
@@ -43,6 +44,7 @@ func (s *Sweeper) run(ctx context.Context) {
 }
 
 // Tick runs one sweep iteration. Exported so tests can drive it directly.
+// A no-op when retention.forever is set or no per-outcome knob is active.
 func (s *Sweeper) Tick(ctx context.Context) {
 	logger := s.Logger
 	if logger == nil {
@@ -54,18 +56,37 @@ func (s *Sweeper) Tick(ctx context.Context) {
 		return
 	}
 
-	days, _ := s.Settings.GetInt(ctx, "retention.days")
-	if days <= 0 {
+	policy := s.policy(ctx)
+	if !policy.active() {
 		return
 	}
 
-	cutoff := s.Now().Add(-time.Duration(days) * 24 * time.Hour)
-	n, err := s.Store.PruneHistoryBefore(ctx, cutoff)
+	now := s.Now()
+	res, err := s.Store.PruneHistory(ctx, policy, now)
 	if err != nil {
 		logger.Error("retention sweep failed", "err", err)
 		return
 	}
-	logger.Info("retention sweep", "deleted_jobs", n, "cutoff", cutoff)
+	s.recordRun(ctx, now, res.Total())
+	logger.Info("retention sweep",
+		"deleted_success", res.SuccessDeleted,
+		"deleted_failed", res.FailedDeleted,
+		"deleted_discs", res.DiscsDeleted)
+}
+
+// policy reads the four per-outcome retention knobs from settings.
+func (s *Sweeper) policy(ctx context.Context) RetentionPolicy {
+	sd, _ := s.Settings.GetInt(ctx, "retention.success.days")
+	sc, _ := s.Settings.GetInt(ctx, "retention.success.count")
+	fd, _ := s.Settings.GetInt(ctx, "retention.failed.days")
+	fc, _ := s.Settings.GetInt(ctx, "retention.failed.count")
+	return RetentionPolicy{SuccessDays: sd, SuccessCount: sc, FailedDays: fd, FailedCount: fc}
+}
+
+// recordRun persists the last-run timestamp and entry count for the UI.
+func (s *Sweeper) recordRun(ctx context.Context, now time.Time, deleted int) {
+	_ = s.Store.SetSetting(ctx, "retention.last_run_at", now.UTC().Format(time.RFC3339Nano))
+	_ = s.Store.SetSetting(ctx, "retention.last_run_count", strconv.Itoa(deleted))
 }
 
 // NextThreeAM returns the next 03:00 in now's location, strictly after now.

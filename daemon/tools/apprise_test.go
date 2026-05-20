@@ -47,6 +47,46 @@ func TestApprise_BuildArgs_SeparatorBeforeURLs(t *testing.T) {
 	}
 }
 
+func TestApprise_BuildRichArgs_MarkdownAndAttach(t *testing.T) {
+	args, err := tools.BuildAppriseRichArgs("Done", "**body**", "", []string{"ntfys://x"},
+		[]string{"https://img/poster.jpg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	want := "-t Done -b **body** -i markdown --attach https://img/poster.jpg -- ntfys://x"
+	if got != want {
+		t.Errorf("args mismatch:\nwant %s\ngot  %s", want, got)
+	}
+}
+
+func TestApprise_BuildRichArgs_NoAttachments(t *testing.T) {
+	args, err := tools.BuildAppriseRichArgs("t", "b", "tag1", []string{"ntfys://x"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-i markdown") {
+		t.Errorf("missing markdown flag: %v", args)
+	}
+	if strings.Contains(joined, "--attach") {
+		t.Errorf("should have no --attach: %v", args)
+	}
+	// `--` must precede urls.
+	if !strings.HasSuffix(joined, "-- ntfys://x") {
+		t.Errorf("urls should follow -- : %v", args)
+	}
+}
+
+func TestApprise_BuildRichArgs_RejectsDashURL(t *testing.T) {
+	if _, err := tools.BuildAppriseRichArgs("t", "b", "", []string{"-x"}, nil); err == nil {
+		t.Error("expected error for url starting with -")
+	}
+	if _, err := tools.BuildAppriseRichArgs("t", "b", "", []string{"ntfys://x"}, []string{"--config"}); err == nil {
+		t.Error("expected error for attachment starting with -")
+	}
+}
+
 func TestApprise_DryRun_RejectsDashURL(t *testing.T) {
 	a := tools.NewApprise("/usr/bin/true")
 	err := a.DryRun(context.Background(), "--config=/etc/passwd")

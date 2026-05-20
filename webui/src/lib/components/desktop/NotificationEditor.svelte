@@ -185,8 +185,13 @@
         <textarea
           bind:value={working.url}
           rows="2"
+          placeholder="discord://webhook_id/webhook_token"
           class="w-full rounded-md border border-border bg-surface-2 px-2 py-1.5 font-mono text-[12px] text-text"
         ></textarea>
+        <p class="mt-1 text-[11px] text-text-3">
+          An Apprise service URL — e.g. <code>ntfy://ntfy.sh/your-topic</code> or
+          <code>tgram://bottoken/ChatID</code>.
+        </p>
       {:else}
         <div class="flex items-center gap-2">
           <span

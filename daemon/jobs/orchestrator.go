@@ -12,6 +12,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
+	"github.com/jumpingmushroom/DiscEcho/daemon/tools"
 )
 
 // OrchestratorConfig configures NewOrchestrator.
@@ -35,6 +36,10 @@ type OrchestratorConfig struct {
 	Compute      *Compute
 	Spool        *spool.Spool
 	CapBytesFunc func() int64
+	// Tools + URLsForTrigger drive rip-completion notifications sent at
+	// finalise. Nil tools / nil func / no subscribed URLs → no-op.
+	Tools          *tools.Registry
+	URLsForTrigger func(ctx context.Context, trigger string) []string
 }
 
 // Orchestrator owns job lifecycle: queueing, per-drive serialization,
@@ -199,7 +204,7 @@ func (o *Orchestrator) Cancel(jobID string) error {
 	if o.cfg.Compute != nil && o.cfg.Compute.Owns(jobID) {
 		return o.cfg.Compute.Cancel(jobID)
 	}
-	if err := o.cfg.Store.UpdateJobState(context.Background(), jobID, state.JobStateCancelled, ""); err != nil {
+	if err := o.cfg.Store.CancelJobIfActive(context.Background(), jobID); err != nil {
 		return fmt.Errorf("cancel: %w", err)
 	}
 	return nil
@@ -370,6 +375,11 @@ func (o *Orchestrator) runJob(jobID string) {
 	// (default): splittable path when wired, else the monolithic Run
 	// fallback.
 	var runErr error
+	// wentSplit: the rip went down the splittable path, which enqueued a
+	// transcode child. The child's completion (Compute.finalise) is the
+	// user-facing "done", so this rip-half job must NOT send a success
+	// notification — only a failure (the child never runs if the rip failed).
+	wentSplit := false
 	switch job.Kind {
 	case state.JobKindScan:
 		scanner, ok := handler.(pipelines.TitleScanner)
@@ -380,6 +390,7 @@ func (o *Orchestrator) runJob(jobID string) {
 		}
 	default:
 		if splittable, ok := handler.(pipelines.SplittableHandler); ok && o.cfg.Compute != nil && o.cfg.Spool != nil {
+			wentSplit = true
 			runErr = o.runSplittable(ctx, splittable, drv, disc, prof, job, sink)
 		} else {
 			runErr = handler.Run(ctx, drv, disc, prof, sink)
@@ -416,6 +427,16 @@ func (o *Orchestrator) runJob(jobID string) {
 		o.cfg.Broadcaster.Publish(state.Event{Name: "job.failed", Payload: map[string]any{"job_id": jobID, "state": "cancelled"}})
 	case state.JobStateFailed:
 		o.cfg.Broadcaster.Publish(state.Event{Name: "job.failed", Payload: map[string]any{"job_id": jobID, "error": errMsg}})
+	}
+
+	// Notifications. Scans never notify. A splittable rip's success is
+	// announced by its transcode child (Compute.finalise), so we suppress the
+	// success notification here when wentSplit; failures always notify (the
+	// child never runs after a rip-half failure). Cancelled → no notify.
+	if job.Kind != state.JobKindScan {
+		if final == state.JobStateFailed || (final == state.JobStateDone && !wentSplit) {
+			sendTerminalNotification(o.cfg.Tools, o.cfg.URLsForTrigger, o.cfg.Store, jobID, disc, prof, final)
+		}
 	}
 }
 

@@ -1276,6 +1276,24 @@ func (s *Store) UpdateJobState(ctx context.Context, id string, st JobState, errM
 	return nil
 }
 
+// CancelJobIfActive flips a job to cancelled only when it is not already
+// in a terminal state. The cancel-fallback paths (Orchestrator.Cancel /
+// Compute.Cancel) reach a bare UpdateJobState write when the in-memory
+// cancels map has no entry — which is exactly the window where a worker
+// has just finished and written done/failed but its map entry is gone.
+// An unconditional write there clobbers the terminal state, so a
+// completed rip would show as cancelled. Guarding on the state column
+// makes the late Stop a no-op. A missing job is likewise a no-op:
+// cancelling something that no longer exists is benign.
+func (s *Store) CancelJobIfActive(ctx context.Context, id string) error {
+	_, err := s.db.Conn().ExecContext(ctx, `
+		UPDATE jobs SET state = ?, finished_at = ?
+		WHERE id = ?
+		  AND state NOT IN ('done','failed','cancelled','interrupted')`,
+		string(JobStateCancelled), timestamp(time.Now()), id)
+	return err
+}
+
 // UpdateJobProgress writes the volatile progress fields. Cheap; called
 // by the orchestrator at most once per second per job.
 func (s *Store) UpdateJobProgress(ctx context.Context, id string, activeStep StepID,
@@ -2461,38 +2479,181 @@ func (s *Store) discsByIDs(ctx context.Context, ids []string) (map[string]Disc, 
 	return out, rows.Err()
 }
 
-// PruneHistoryBefore deletes jobs in {done, failed, cancelled} whose
-// finished_at is before cutoff. Returns the number of jobs deleted.
-// FK cascades remove job_steps and log_lines automatically; orphan
-// discs are pruned in the same transaction.
-func (s *Store) PruneHistoryBefore(ctx context.Context, cutoff time.Time) (int, error) {
+// Retention buckets group terminal jobs by outcome. A successful rip is
+// state 'done'; everything else terminal counts as a failure for retention
+// purposes. Both require a non-NULL finished_at.
+var (
+	retentionSuccessStates = []string{"done"}
+	retentionFailedStates  = []string{"failed", "cancelled", "interrupted"}
+)
+
+// RetentionPolicy is the per-outcome retention configuration. For each
+// bucket, Days caps age (delete entries older than N days) and Count caps
+// quantity (keep only the N most recent). 0 means "no limit" for that knob;
+// both may be set, in which case an entry is pruned if it trips either.
+type RetentionPolicy struct {
+	SuccessDays  int
+	SuccessCount int
+	FailedDays   int
+	FailedCount  int
+}
+
+// active reports whether any knob would prune something.
+func (p RetentionPolicy) active() bool {
+	return p.SuccessDays > 0 || p.SuccessCount > 0 || p.FailedDays > 0 || p.FailedCount > 0
+}
+
+// RetentionResult reports how much a prune removed (or would remove).
+type RetentionResult struct {
+	SuccessDeleted int
+	FailedDeleted  int
+	DiscsDeleted   int
+}
+
+// Total is the number of history (job) entries removed across buckets.
+func (r RetentionResult) Total() int { return r.SuccessDeleted + r.FailedDeleted }
+
+// retentionWhere builds the WHERE body selecting the jobs to prune for one
+// bucket, plus its bind args. Returns ("", nil) when the bucket has no active
+// limit. The state list is composed of constant literals (no injection). The
+// age and count arms are OR'd: an entry is selected if it is older than the
+// cutoff OR it falls outside the newest Count of the bucket.
+func retentionWhere(states []string, days, count int, now time.Time) (string, []any) {
+	inList := "'" + strings.Join(states, "','") + "'"
+	var arms []string
+	var args []any
+	if days > 0 {
+		cutoff := now.Add(-time.Duration(days) * 24 * time.Hour)
+		arms = append(arms, "finished_at < ?")
+		args = append(args, cutoff.UTC().Format(time.RFC3339Nano))
+	}
+	if count > 0 {
+		arms = append(arms,
+			"id NOT IN (SELECT id FROM jobs WHERE state IN ("+inList+
+				") AND finished_at IS NOT NULL ORDER BY finished_at DESC, id DESC LIMIT ?)")
+		args = append(args, count)
+	}
+	if len(arms) == 0 {
+		return "", nil
+	}
+	return "state IN (" + inList + ") AND finished_at IS NOT NULL AND (" +
+		strings.Join(arms, " OR ") + ")", args
+}
+
+// retentionOrphanDiscSQL drops discs left with no job after a prune, but
+// keeps a drive's most-recent disc (the proxy for "still physically
+// inserted") so the awaiting-decision card doesn't point at a deleted row.
+// Verbatim guard from ClearHistory / DeleteJobAndOrphans — the old
+// PruneHistoryBefore omitted it (latent bug).
+const retentionOrphanDiscSQL = `
+	DELETE FROM discs
+	WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.disc_id = discs.id)
+	  AND (
+	    discs.drive_id IS NULL OR discs.drive_id = ''
+	    OR EXISTS (
+	      SELECT 1 FROM discs d2
+	      WHERE d2.drive_id = discs.drive_id
+	        AND d2.created_at > discs.created_at
+	    )
+	  )`
+
+// PruneHistory deletes terminal jobs that exceed the policy's per-outcome
+// age/count limits, then drops the discs left orphaned (guarded). FK cascades
+// remove job_steps and log_lines. Files on disk are never touched. One tx.
+func (s *Store) PruneHistory(ctx context.Context, p RetentionPolicy, now time.Time) (RetentionResult, error) {
+	var res RetentionResult
+	if !p.active() {
+		return res, nil
+	}
 	tx, err := s.db.Conn().BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin: %w", err)
+		return res, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.ExecContext(ctx, `
-		DELETE FROM jobs
-		WHERE state IN ('done','failed','cancelled','interrupted')
-		  AND finished_at IS NOT NULL
-		  AND finished_at < ?`, cutoff.UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return 0, fmt.Errorf("delete jobs: %w", err)
+	buckets := []struct {
+		states []string
+		days   int
+		count  int
+		out    *int
+	}{
+		{retentionSuccessStates, p.SuccessDays, p.SuccessCount, &res.SuccessDeleted},
+		{retentionFailedStates, p.FailedDays, p.FailedCount, &res.FailedDeleted},
 	}
-	deleted, _ := res.RowsAffected()
+	for _, b := range buckets {
+		where, args := retentionWhere(b.states, b.days, b.count, now)
+		if where == "" {
+			continue
+		}
+		r, err := tx.ExecContext(ctx, "DELETE FROM jobs WHERE "+where, args...)
+		if err != nil {
+			return res, fmt.Errorf("delete jobs: %w", err)
+		}
+		n, _ := r.RowsAffected()
+		*b.out = int(n)
+	}
 
-	// Drop discs that are no longer referenced by any job.
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM discs
-		WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.disc_id = discs.id)`); err != nil {
-		return 0, fmt.Errorf("delete orphan discs: %w", err)
+	r, err := tx.ExecContext(ctx, retentionOrphanDiscSQL)
+	if err != nil {
+		return res, fmt.Errorf("delete orphan discs: %w", err)
 	}
+	n, _ := r.RowsAffected()
+	res.DiscsDeleted = int(n)
 
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
+		return res, fmt.Errorf("commit: %w", err)
 	}
-	return int(deleted), nil
+	return res, nil
+}
+
+// CountWouldPrune reports how many job entries each bucket would lose under
+// the policy, without deleting anything. DiscsDeleted is not computed (a
+// dry-run can't cheaply predict which discs become fully orphaned); callers
+// use the job counts for the UI preview.
+func (s *Store) CountWouldPrune(ctx context.Context, p RetentionPolicy, now time.Time) (RetentionResult, error) {
+	var res RetentionResult
+	buckets := []struct {
+		states []string
+		days   int
+		count  int
+		out    *int
+	}{
+		{retentionSuccessStates, p.SuccessDays, p.SuccessCount, &res.SuccessDeleted},
+		{retentionFailedStates, p.FailedDays, p.FailedCount, &res.FailedDeleted},
+	}
+	for _, b := range buckets {
+		where, args := retentionWhere(b.states, b.days, b.count, now)
+		if where == "" {
+			continue
+		}
+		var n int
+		if err := s.db.Conn().QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM jobs WHERE "+where, args...).Scan(&n); err != nil {
+			return res, fmt.Errorf("count would-prune: %w", err)
+		}
+		*b.out = n
+	}
+	return res, nil
+}
+
+// HistoryBucketTotals returns the count of terminal job entries in each
+// bucket (the denominator for the retention preview).
+func (s *Store) HistoryBucketTotals(ctx context.Context) (success, failed int, err error) {
+	for _, b := range []struct {
+		states []string
+		out    *int
+	}{
+		{retentionSuccessStates, &success},
+		{retentionFailedStates, &failed},
+	} {
+		inList := "'" + strings.Join(b.states, "','") + "'"
+		if err = s.db.Conn().QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM jobs WHERE state IN ("+inList+
+				") AND finished_at IS NOT NULL").Scan(b.out); err != nil {
+			return 0, 0, fmt.Errorf("count bucket totals: %w", err)
+		}
+	}
+	return success, failed, nil
 }
 
 // DeleteJobAndOrphans removes one job (and its FK-cascaded step + log

@@ -26,7 +26,18 @@
 
   const libraryPath = derived(settings, ($s) => ($s['library.path'] ?? '—') as string);
   const retainForever = derived(settings, ($s) => $s['retention.forever'] === 'true');
-  const retentionDays = derived(settings, ($s) => ($s['retention.days'] ?? '?') as string);
+  // Concise per-bucket summary, e.g. "Success: keep · Failed: 14d / 50".
+  const retentionSummaryLine = derived(settings, ($s) => {
+    const fmt = (days: string | undefined, count: string | undefined): string => {
+      const parts: string[] = [];
+      if (days && +days > 0) parts.push(`${days}d`);
+      if (count && +count > 0) parts.push(`${count} max`);
+      return parts.length ? parts.join(' / ') : 'keep';
+    };
+    const success = fmt($s['retention.success.days'], $s['retention.success.count']);
+    const failed = fmt($s['retention.failed.days'], $s['retention.failed.count']);
+    return `Success: ${success} · Failed: ${failed}`;
+  });
   const opMode = derived(settings, ($s) =>
     $s['operation.mode'] === 'manual' ? 'manual' : 'batch',
   );
@@ -35,7 +46,7 @@
   );
 
   $: enabledNotifs = $notifications.filter((n) => n.enabled).length;
-  $: retentionSummary = $retainForever ? 'Keep forever' : `Delete after ${$retentionDays} days`;
+  $: retentionSummary = $retainForever ? 'Keep forever' : $retentionSummaryLine;
   $: ripSummary =
     $opMode === 'manual'
       ? 'Manual · no auto-rip or eject'

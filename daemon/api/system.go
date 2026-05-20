@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -54,6 +53,29 @@ type IntegrationsInfo struct {
 	LibraryRoots   map[string]string      `json:"library_roots,omitempty"`
 	Items          []IntegrationStatus    `json:"items,omitempty"`
 	BootCodeCounts map[state.DiscType]int `json:"boot_code_counts,omitempty"`
+	GameDiscs      *GameDiscsInfo         `json:"game_discs,omitempty"`
+}
+
+// GameDiscsInfo is the per-system identification-coverage breakdown shown in
+// the Settings → API keys & connections panel. Game-disc identification uses
+// two sources: built-in boot-code maps (pre-rip naming) and operator-supplied
+// Redump .dat files (post-rip MD5 verification). Status reflects dat coverage
+// so the tile doesn't look fully configured when dats are missing.
+type GameDiscsInfo struct {
+	RedumperStatus string           `json:"redumper_status"` // connected | not configured | error: …
+	RedumperBin    string           `json:"redumper_bin"`
+	DatDir         string           `json:"dat_dir"`
+	Status         string           `json:"status"` // connected | partial | error: …
+	Systems        []GameDiscSystem `json:"systems"`
+}
+
+// GameDiscSystem is one row of the game-disc coverage table.
+type GameDiscSystem struct {
+	System        state.DiscType `json:"system"`
+	Label         string         `json:"label"`
+	BootCode      string         `json:"boot_code"` // ok | missing | na
+	BootCodeCount int            `json:"boot_code_count"`
+	RedumpDat     string         `json:"redump_dat"` // loaded | missing
 }
 
 // IntegrationStatus is a single row in the connections list. Status
@@ -155,6 +177,7 @@ func (h *Handlers) GetSystemIntegrations(w http.ResponseWriter, r *http.Request)
 	if h.BootCodeIndex != nil {
 		info.BootCodeCounts = h.BootCodeIndex.Counts()
 	}
+	info.GameDiscs = h.buildGameDiscsInfo()
 	info.Items = h.buildIntegrationItems(r.Context(), info)
 	writeJSON(w, http.StatusOK, info)
 }
@@ -169,12 +192,6 @@ func (h *Handlers) buildIntegrationItems(ctx context.Context, info IntegrationsI
 			Hint:   "audio CD metadata + AccurateRip",
 			Status: "connected",
 			Detail: info.MusicBrainz.BaseURL,
-		},
-		{
-			Name:     "Game discs",
-			Hint:     "auto-id by boot code; manual search via IGDB (configure under API keys & connections)",
-			Status:   gameDiscsStatus(h),
-			SubItems: gameDiscsSubItems(h),
 		},
 		{
 			Name:   "Apprise",
@@ -227,42 +244,70 @@ func redumpDatInventory(rootDir string) map[state.DiscType]int {
 	return out
 }
 
-func gameDiscsStatus(h *Handlers) string {
-	if h.Settings != nil {
-		if _, err := exec.LookPath(h.Settings.RedumperBin); err != nil {
-			return "error: redumper not on PATH"
-		}
-	}
-	if h.BootCodeIndex == nil || len(h.BootCodeIndex.Counts()) == 0 {
-		return "partial: no boot-code maps loaded"
-	}
-	return "connected"
+// gameDiscSystems is the fixed display order + labels for the coverage table.
+var gameDiscSystems = []struct {
+	sys   state.DiscType
+	label string
+}{
+	{state.DiscTypePSX, "PlayStation"},
+	{state.DiscTypePS2, "PlayStation 2"},
+	{state.DiscTypeSAT, "Saturn"},
+	{state.DiscTypeDC, "Dreamcast"},
+	{state.DiscTypeXBOX, "Xbox"},
 }
 
-func gameDiscsSubItems(h *Handlers) []SubItem {
-	out := []SubItem{}
+// buildGameDiscsInfo assembles the per-system identification-coverage view:
+// built-in boot-code maps (pre-rip) + on-disk Redump dat presence (post-rip
+// verify). On-disk presence is what's reported — dats load at boot, so a file
+// added afterward needs a restart (the UI says so).
+func (h *Handlers) buildGameDiscsInfo() *GameDiscsInfo {
+	info := &GameDiscsInfo{}
+	var inv map[state.DiscType]int
 	if h.Settings != nil {
-		out = append(out, SubItem{
-			Label:  "redumper binary",
-			Status: redumpStatus(h.Settings),
-			Detail: h.Settings.RedumperBin,
-		})
-		inv := redumpDatInventory(h.Settings.RedumpDataDir)
-		out = append(out, SubItem{
-			Label:  "Redump dat-files",
-			Status: combinedStatus(inv),
-			Detail: formatInventory(inv),
-		})
+		info.RedumperStatus = redumpStatus(h.Settings)
+		info.RedumperBin = h.Settings.RedumperBin
+		info.DatDir = h.Settings.RedumpDataDir
+		inv = redumpDatInventory(h.Settings.RedumpDataDir)
 	}
+	var counts map[state.DiscType]int
 	if h.BootCodeIndex != nil {
-		counts := h.BootCodeIndex.Counts()
-		out = append(out, SubItem{
-			Label:  "Boot-code maps",
-			Status: combinedStatus(counts),
-			Detail: formatInventory(counts),
-		})
+		counts = h.BootCodeIndex.Counts()
 	}
-	return out
+
+	for _, gs := range gameDiscSystems {
+		row := GameDiscSystem{System: gs.sys, Label: gs.label}
+		// Boot-code: Xbox is empty by design (publisher codes, not XBE IDs).
+		switch {
+		case gs.sys == state.DiscTypeXBOX:
+			row.BootCode = "na"
+		case counts[gs.sys] > 0:
+			row.BootCode = "ok"
+			row.BootCodeCount = counts[gs.sys]
+		default:
+			row.BootCode = "missing"
+		}
+		if inv[gs.sys] > 0 {
+			row.RedumpDat = "loaded"
+		} else {
+			row.RedumpDat = "missing"
+		}
+		info.Systems = append(info.Systems, row)
+	}
+
+	// Top-level status reflects Redump dat coverage so the tile stops looking
+	// fully configured when dats are missing (pre-rip boot-code ID still works).
+	switch {
+	case info.RedumperStatus != "" && strings.HasPrefix(info.RedumperStatus, "error:"):
+		info.Status = info.RedumperStatus
+	default:
+		info.Status = combinedStatus(inv) // ok → connected, else partial/missing
+		if info.Status == "ok" {
+			info.Status = "connected"
+		} else {
+			info.Status = "partial"
+		}
+	}
+	return info
 }
 
 func combinedStatus(counts map[state.DiscType]int) string {
@@ -283,20 +328,6 @@ func combinedStatus(counts map[state.DiscType]int) string {
 	default:
 		return "missing"
 	}
-}
-
-func formatInventory(counts map[state.DiscType]int) string {
-	order := []state.DiscType{state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT, state.DiscTypeDC, state.DiscTypeXBOX}
-	parts := make([]string, 0, len(order))
-	for _, sys := range order {
-		n := counts[sys]
-		mark := "✓"
-		if n == 0 {
-			mark = "✗"
-		}
-		parts = append(parts, fmt.Sprintf("%s %s (%d)", sys, mark, n))
-	}
-	return strings.Join(parts, " · ")
 }
 
 func gpuStatus(available bool) string {

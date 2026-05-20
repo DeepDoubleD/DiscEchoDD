@@ -87,6 +87,9 @@ func NewRouter(h *Handlers, static http.Handler) http.Handler {
 			authed.Get("/settings", h.GetSettings)
 			authed.Put("/settings", h.PutSettings)
 
+			authed.Get("/retention/status", h.GetRetentionStatus)
+			authed.Post("/retention/run", h.RunRetention)
+
 			authed.Get("/integrations", h.ListIntegrations)
 			authed.Get("/integrations/{name}", h.GetIntegration)
 			authed.Put("/integrations/{name}", h.PutIntegration)

@@ -139,7 +139,10 @@ export interface Disc {
   metadata_provider?: string;
   metadata_id?: string;
   metadata_json?: string; // raw JSON blob with per-disc-type extended fields
-  candidates: Candidate[];
+  // null on the wire when the disc has no stored candidates (Go nil slice
+  // marshals to JSON null), e.g. a game/data disc detected but not yet
+  // identified. Always optional-chain before indexing.
+  candidates: Candidate[] | null;
   created_at: string;
   // Aggregate state computed daemon-side from the disc's job history.
   // Optional during deploy window when daemon is upgraded but UI cached.
@@ -221,6 +224,24 @@ export interface SnapshotPayload {
   profiles: Profile[];
   settings: Record<string, string>;
   stats?: Stats;
+}
+
+// RetentionStatus is the GET /api/retention/status response — history totals,
+// what the (saved or previewed) policy would prune, and last/next-run info.
+export interface RetentionStatus {
+  forever: boolean;
+  policy: {
+    success_days: number;
+    success_count: number;
+    failed_days: number;
+    failed_count: number;
+  };
+  success_total: number;
+  failed_total: number;
+  would_delete: { success: number; failed: number; total: number };
+  last_run_at?: string;
+  last_run_count: number;
+  next_run_at: string;
 }
 
 export interface ActiveJobsStat {

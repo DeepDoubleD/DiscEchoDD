@@ -13,6 +13,7 @@
   import FormRow from './FormRow.svelte';
   import PathField from './PathField.svelte';
   import ApiRow from './ApiRow.svelte';
+  import GameDiscsCard from './GameDiscsCard.svelte';
   import IntegrationEditor, { type FieldSpec } from './IntegrationEditor.svelte';
 
   type VersionInfo = { version?: string; commit?: string; build_date?: string };
@@ -54,6 +55,22 @@
     sub_items?: SubItem[];
   };
 
+  type GameDiscSystem = {
+    system: string;
+    label: string;
+    boot_code: string; // ok | missing | na
+    boot_code_count: number;
+    redump_dat: string; // loaded | missing
+  };
+
+  type GameDiscsInfo = {
+    redumper_status: string;
+    redumper_bin: string;
+    dat_dir: string;
+    status: string; // connected | partial | error: …
+    systems: GameDiscSystem[];
+  };
+
   type IntegrationsInfo = {
     tmdb: { configured: boolean; language: string };
     musicbrainz: { base_url: string; user_agent: string };
@@ -61,6 +78,7 @@
     library_roots?: Record<string, string>;
     items?: IntegrationStatus[];
     boot_code_counts?: Record<string, number>;
+    game_discs?: GameDiscsInfo;
   };
 
   type MediaRoot = 'movies' | 'tv' | 'music' | 'games' | 'data';
@@ -610,6 +628,13 @@
       {/each}
     {/if}
   </FormSection>
+
+  {#if integrations?.game_discs}
+    <GameDiscsCard
+      info={integrations.game_discs}
+      igdbConfigured={$integrationsStore.igdb?.configured ?? false}
+    />
+  {/if}
 
   <FormSection title="Host">
     {#if host}

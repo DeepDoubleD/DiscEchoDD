@@ -10,8 +10,11 @@ import (
 )
 
 type fakeReader struct {
-	forever bool
-	days    int
+	forever      bool
+	successDays  int
+	successCount int
+	failedDays   int
+	failedCount  int
 }
 
 func (f *fakeReader) GetBool(_ context.Context, key string) (bool, error) {
@@ -22,8 +25,15 @@ func (f *fakeReader) GetBool(_ context.Context, key string) (bool, error) {
 }
 
 func (f *fakeReader) GetInt(_ context.Context, key string) (int, error) {
-	if key == "retention.days" {
-		return f.days, nil
+	switch key {
+	case "retention.success.days":
+		return f.successDays, nil
+	case "retention.success.count":
+		return f.successCount, nil
+	case "retention.failed.days":
+		return f.failedDays, nil
+	case "retention.failed.count":
+		return f.failedCount, nil
 	}
 	return 0, nil
 }
@@ -39,34 +49,28 @@ func TestSweeper_Tick_NoOpWhenForever(t *testing.T) {
 	sw.Tick(context.Background())
 }
 
-func TestSweeper_Tick_NoOpWhenDaysZero(t *testing.T) {
+func TestSweeper_Tick_NoOpWhenAllZero(t *testing.T) {
 	s := openStore(t)
 	sw := &state.Sweeper{
 		Store:    s,
-		Settings: &fakeReader{forever: false, days: 0},
+		Settings: &fakeReader{forever: false}, // all knobs zero
 		Now:      time.Now,
 		Logger:   slog.Default(),
 	}
 	sw.Tick(context.Background())
 }
 
-func TestSweeper_Tick_DeletesOldJobs(t *testing.T) {
+func TestSweeper_Tick_DeletesOldJobs_AndRecordsRun(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 
 	drv := newDrive(t, s, "/dev/sr0")
 	prof := newProfile(t, s, "p", state.DiscTypeAudioCD)
-	disc := newDisc(t, s, drv)
-	old := newJob(t, s, drv, prof, disc)
-
-	if err := s.UpdateJobState(ctx, old.ID, state.JobStateDone, ""); err != nil {
-		t.Fatalf("UpdateJobState: %v", err)
-	}
-	backdateJobFinishedAt(t, s, old.ID, time.Now().AddDate(0, 0, -100))
+	old, _ := doneJob(t, s, drv, prof, 100)
 
 	sw := &state.Sweeper{
 		Store:    s,
-		Settings: &fakeReader{forever: false, days: 30},
+		Settings: &fakeReader{forever: false, successDays: 30},
 		Now:      time.Now,
 		Logger:   slog.Default(),
 	}
@@ -74,6 +78,13 @@ func TestSweeper_Tick_DeletesOldJobs(t *testing.T) {
 
 	if _, err := s.GetJob(ctx, old.ID); err == nil {
 		t.Fatal("old job should be deleted")
+	}
+	// The run is recorded for the UI's last-run line.
+	if v, _ := s.GetSetting(ctx, "retention.last_run_at"); v == "" {
+		t.Error("retention.last_run_at should be set after a sweep")
+	}
+	if n, _ := s.GetInt(ctx, "retention.last_run_count"); n != 1 {
+		t.Errorf("retention.last_run_count: want 1, got %d", n)
 	}
 }
 

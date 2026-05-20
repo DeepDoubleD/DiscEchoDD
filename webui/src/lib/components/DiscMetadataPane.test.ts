@@ -90,6 +90,25 @@ describe('DiscMetadataPane', () => {
     expect(getByText('Final Fantasy VII')).toBeInTheDocument();
   });
 
+  it('renders a game disc whose candidates are null without crashing', () => {
+    // The daemon marshals an empty candidate slice to JSON null, so a
+    // detected-but-unidentified game/data disc arrives with candidates:null.
+    // Indexing candidates[0] without optional-chaining used to throw and
+    // white-screen the pane.
+    const disc = {
+      id: 'g2',
+      type: 'PS2',
+      title: 'Gran Turismo 4',
+      candidates: null,
+      created_at: '2026-05-13T12:00:00Z',
+      metadata_json: JSON.stringify({ system: 'Sony PlayStation 2' }),
+    } as unknown as Disc;
+    const { getAllByText } = render(DiscMetadataPane, { disc });
+    // System renders in both the sub-line and the Overview grid; its
+    // presence proves the game branch ran past the candidates access.
+    expect(getAllByText('Sony PlayStation 2').length).toBeGreaterThanOrEqual(1);
+  });
+
   it('renders unidentified placeholder when metadata is empty', () => {
     const disc: Disc = {
       id: 'd3',

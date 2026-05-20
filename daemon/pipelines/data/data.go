@@ -241,11 +241,7 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 	}
 	sink.OnStepDone(state.StepMove, map[string]any{"path": dst})
 
-	pipelines.RunNotifyStep(ctx, sink, pipelines.NotifyDeps{
-		Tools:          h.deps.Tools,
-		URLsForTrigger: h.deps.URLsForTrigger,
-		LibraryRoot:    h.deps.LibraryRoot,
-	}, disc)
+	pipelines.RunNotifyStep(ctx, sink)
 
 	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
 		Tools:       h.deps.Tools,

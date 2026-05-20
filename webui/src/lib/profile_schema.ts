@@ -368,6 +368,74 @@ function gameVars(): OutputVar[] {
   ];
 }
 
+// DISC_TYPE_REQUIREMENTS surfaces the hardware/setup prerequisites for the
+// disc types that can fail (or never detect a disc) without them. Display-only
+// webui copy — like DISC_TYPE_DEFAULTS / OUTPUT_VARS_BY_DISC_TYPE it has no Go
+// mirror. Only the constrained types have an entry; everything else (audio,
+// games, data) needs no special setup and renders nothing.
+export interface DiscTypeRequirement {
+  // 'warn' (amber) = won't work without it; 'info' (accent) = softer "configure X".
+  tone: 'warn' | 'info';
+  title: string;
+  // Bullet lines. **double-asterisk** spans render bold (see ProfileEditor).
+  items: string[];
+  links?: { label: string; href: string }[];
+}
+
+const MAKEMKV_KEY_LINK = {
+  label: 'Get a MakeMKV key',
+  href: 'https://forum.makemkv.com/forum/viewtopic.php?t=1053',
+};
+
+export const DISC_TYPE_REQUIREMENTS: Record<string, DiscTypeRequirement | undefined> = {
+  XBOX: {
+    tone: 'warn',
+    title: 'Requires special drive firmware',
+    items: [
+      'Original Xbox discs only — Xbox 360 (XGD2/3) is out of scope.',
+      "Needs an optical drive flashed with **Kreon** firmware. XGD media is unreadable on stock drives — the disc won't be detected at all.",
+    ],
+    links: [{ label: 'Kreon firmware', href: 'https://kreon.dev' }],
+  },
+  UHD: {
+    tone: 'warn',
+    title: 'Requires special hardware & setup',
+    items: [
+      "A UHD-friendly Blu-ray drive with **LibreDrive**-compatible firmware — stock UHD drives can't be read for ripping.",
+      '**MakeMKV** configured with a valid key (Settings → Integrations → MakeMKV).',
+      "An **AACS2** `KEYDB.cfg` key file on the host — DiscEcho doesn't ship one; without it, UHD jobs fail at the identify step.",
+    ],
+    links: [
+      {
+        label: 'LibreDrive drive list',
+        href: 'https://forum.makemkv.com/forum/viewtopic.php?f=16&t=19634',
+      },
+      MAKEMKV_KEY_LINK,
+    ],
+  },
+  BDMV: {
+    tone: 'info',
+    title: 'Requires MakeMKV',
+    items: [
+      'Blu-ray ripping uses MakeMKV — configure a valid key (Settings → Integrations → MakeMKV).',
+    ],
+    links: [MAKEMKV_KEY_LINK],
+  },
+  DVD: {
+    tone: 'info',
+    title: 'MakeMKV may be required',
+    items: [
+      'The **MakeMKV** and **MakeMKV+HandBrake** engines need a valid MakeMKV key (Settings → Integrations → MakeMKV).',
+      'The **HandBrake** engine rips via dvdbackup and needs no key.',
+    ],
+    links: [MAKEMKV_KEY_LINK],
+  },
+};
+
+export function requirementFor(discType: string): DiscTypeRequirement | undefined {
+  return DISC_TYPE_REQUIREMENTS[discType];
+}
+
 export function engineNames(): string[] {
   return Object.keys(ENGINES);
 }

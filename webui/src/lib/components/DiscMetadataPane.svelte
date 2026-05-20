@@ -111,7 +111,7 @@
           {:else if kind === 'audio'}
             {topCandidateArtist(disc)}{disc.year ? ` · ${disc.year}` : ''}
           {:else if kind === 'game'}
-            {gameMeta.system ?? disc.type}{disc.candidates[0]?.region
+            {gameMeta.system ?? disc.type}{disc.candidates?.[0]?.region
               ? ` · ${disc.candidates[0].region}`
               : ''}
           {:else if kind === 'data'}
@@ -178,7 +178,7 @@
               <dt class="text-[10px] uppercase tracking-[0.12em] text-text-3">System</dt>
               <dd>{gameMeta.system}</dd>
             {/if}
-            {#if disc.candidates[0]?.region}
+            {#if disc.candidates?.[0]?.region}
               <dt class="text-[10px] uppercase tracking-[0.12em] text-text-3">Region</dt>
               <dd>{disc.candidates[0].region}</dd>
             {/if}

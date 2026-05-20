@@ -664,11 +664,7 @@ func (h *Handler) runTranscodeHandBrake(ctx context.Context, result pipelines.Ri
 	}
 	sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
 
-	pipelines.RunNotifyStep(ctx, sink, pipelines.NotifyDeps{
-		Tools:          h.deps.Tools,
-		URLsForTrigger: h.deps.URLsForTrigger,
-		LibraryRoot:    h.deps.LibraryRoot,
-	}, disc)
+	pipelines.RunNotifyStep(ctx, sink)
 	return nil
 }
 
@@ -729,11 +725,7 @@ func (h *Handler) runTranscodeMakeMKV(ctx context.Context, result pipelines.RipR
 		sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
 	}
 
-	pipelines.RunNotifyStep(ctx, sink, pipelines.NotifyDeps{
-		Tools:          h.deps.Tools,
-		URLsForTrigger: h.deps.URLsForTrigger,
-		LibraryRoot:    h.deps.LibraryRoot,
-	}, disc)
+	pipelines.RunNotifyStep(ctx, sink)
 	return nil
 }
 

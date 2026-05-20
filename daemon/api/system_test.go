@@ -10,6 +10,7 @@ import (
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/api"
 	"github.com/jumpingmushroom/DiscEcho/daemon/settings"
+	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
 
 func TestGetSystemHost_OK(t *testing.T) {
@@ -114,10 +115,11 @@ func TestGetSystemIntegrations_ItemsList(t *testing.T) {
 	}
 	var info api.IntegrationsInfo
 	_ = json.Unmarshal(w.Body.Bytes(), &info)
-	if len(info.Items) != 4 {
-		t.Fatalf("Items len = %d, want 4", len(info.Items))
+	if len(info.Items) != 3 {
+		t.Fatalf("Items len = %d, want 3", len(info.Items))
 	}
-	want := []string{"MusicBrainz", "Game discs", "Apprise", "GPU transcoding"}
+	// Game discs is no longer a flat item — it has its own GameDiscs block.
+	want := []string{"MusicBrainz", "Apprise", "GPU transcoding"}
 	for i, name := range want {
 		if info.Items[i].Name != name {
 			t.Errorf("Items[%d].Name = %q, want %q", i, info.Items[i].Name, name)
@@ -127,13 +129,13 @@ func TestGetSystemIntegrations_ItemsList(t *testing.T) {
 	if info.Items[0].Status != "connected" {
 		t.Errorf("MusicBrainz status = %q, want connected", info.Items[0].Status)
 	}
-	// Bogus redumper bin → error surfaced in Game discs tile.
-	if !strings.HasPrefix(info.Items[1].Status, "error:") {
-		t.Errorf("Game discs status = %q, want error: prefix", info.Items[1].Status)
+	// Bogus redumper bin → error surfaced in the Game discs block.
+	if info.GameDiscs == nil || !strings.HasPrefix(info.GameDiscs.Status, "error:") {
+		t.Errorf("GameDiscs status = %+v, want error: prefix", info.GameDiscs)
 	}
 	// Apprise: no URLs configured (empty notifications list).
-	if info.Items[2].Status != "no URLs configured" {
-		t.Errorf("Apprise status = %q, want no URLs configured", info.Items[2].Status)
+	if info.Items[1].Status != "no URLs configured" {
+		t.Errorf("Apprise status = %q, want no URLs configured", info.Items[1].Status)
 	}
 }
 
@@ -284,7 +286,7 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 		MusicBrainzBaseURL:   "https://musicbrainz.org",
 		MusicBrainzUserAgent: "DiscEcho/test",
 		AppriseBin:           "apprise",
-		RedumperBin:          "/nonexistent/redumper",
+		RedumperBin:          "sh", // on PATH so status reflects dat coverage, not a binary error
 		RedumpDataDir:        t.TempDir(),
 	}
 
@@ -299,21 +301,34 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	game := findIntegrationItem(info.Items, "Game discs")
-	if game == nil {
-		t.Fatal("no 'Game discs' tile in integration items")
+	gd := info.GameDiscs
+	if gd == nil {
+		t.Fatal("no GameDiscs block in integrations response")
 	}
-
-	// IGDB sub-item removed — IGDB is now owned by /api/integrations.
-	for _, sub := range game.SubItems {
-		if sub.Label == "IGDB" {
-			t.Errorf("unexpected IGDB sub-item in Game discs tile; it moved to /api/integrations")
+	// Game discs is no longer a flat ApiRow item.
+	if findIntegrationItem(info.Items, "Game discs") != nil {
+		t.Error("Game discs should not be a flat item anymore")
+	}
+	// Empty dat dir → every Redump dat missing → partial.
+	if gd.Status != "partial" {
+		t.Errorf("GameDiscs status = %q, want partial (empty dat dir)", gd.Status)
+	}
+	if len(gd.Systems) != 5 {
+		t.Fatalf("GameDiscs systems = %d, want 5", len(gd.Systems))
+	}
+	byName := map[state.DiscType]api.GameDiscSystem{}
+	for _, s := range gd.Systems {
+		byName[s.System] = s
+		if s.RedumpDat != "missing" {
+			t.Errorf("%s redump_dat = %q, want missing", s.System, s.RedumpDat)
 		}
 	}
-
-	// Hint must direct users to the new endpoint.
-	if !strings.Contains(game.Hint, "IGDB") {
-		t.Errorf("Game discs hint = %q, want it to mention IGDB", game.Hint)
+	// Xbox boot-code is empty by design → "na".
+	if byName[state.DiscTypeXBOX].BootCode != "na" {
+		t.Errorf("Xbox boot_code = %q, want na", byName[state.DiscTypeXBOX].BootCode)
+	}
+	if gd.DatDir == "" {
+		t.Error("GameDiscs dat_dir should be set")
 	}
 }
 

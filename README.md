@@ -196,6 +196,12 @@ and merges every dat-file into one in-memory index. Dat files placed
 directly under `${DISCECHO_DATA}/redump/` (without a subdirectory)
 are not loaded; move them into the right per-system subfolder.
 
+**Settings → API keys & connections → Game disc identification** shows a
+per-system table of which boot-code maps and Redump dats are present vs
+missing, plus the dats directory. Because dats load at startup, a file
+added while the daemon is running shows as present but needs a restart to
+take effect.
+
 #### Optional: IGDB for manual search of unidentified discs
 
 If a disc is not in any embedded database (later releases, regional
@@ -279,6 +285,36 @@ requesting NVENC use the hardware encoder. When `not configured`,
 NVENC profiles silently fall back to the matching software encoder
 (`x264` / `x265` / `x265_10bit` for BDMV) with a `WARN` line in the
 job log.
+
+### History retention
+
+**Settings → History retention** controls how long completed-rip history
+records are kept (it never touches your ripped files). By default everything
+is kept forever. Turn that off to set independent limits for **successful**
+rips and **failed / cancelled** rips — each with an optional max age in days
+and/or an optional cap on how many of the newest entries to keep (set either,
+both, or neither per outcome). With "keep forever" off and no further changes,
+the defaults keep successful rips and prune failures after 14 days.
+
+A background sweep runs daily at 03:00 (daemon-local) and on startup; the page
+shows a live preview of what the current policy would remove, the last/next run
+times, and a **Run cleanup now** button that applies the saved policy
+immediately.
+
+### Notifications
+
+DiscEcho sends notifications through [Apprise](https://github.com/caronc/apprise),
+which fans 100+ services out from a single URL. Add a notification under
+**Settings → Notifications** and paste an Apprise service URL (e.g.
+`discord://…`, `ntfy://…`, `tgram://…` — see the
+[supported services](https://appriseit.com/services/)). Per-notification
+**Triggers** select which events fire:
+
+- `done` — a rich, media-aware "ripped" message (movie / TV / audio / game /
+  data) with duration, size, counts, codec, and cover/poster art when available.
+- `failed` — a failure alert with the failed step and error.
+
+Apprise failures never fail a rip — the bits are already in the library.
 
 ## Dev setup
 
