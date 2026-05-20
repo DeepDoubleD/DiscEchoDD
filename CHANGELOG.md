@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Obsolete planning docs (`ROADMAP.md`, `OPEN_QUESTIONS.md`, `ARCHITECTURE.md`)
   and the unused `config/` → `/etc/discecho` mount.
 
+### Fixed
+- History rows no longer clip their Re-rip / Stop action button off the right
+  edge on narrow phone screens; long titles now truncate instead.
+
 ## [0.30.2] - 2026-05-20
 
 ### Fixed

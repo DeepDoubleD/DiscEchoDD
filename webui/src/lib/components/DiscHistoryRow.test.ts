@@ -94,4 +94,15 @@ describe('DiscHistoryRow', () => {
     await fireEvent.click(getByTestId('disc-history-action'));
     expect(cancelSpy).toHaveBeenCalledWith('t1');
   });
+
+  it('keeps the truncation chain so the action button is never pushed off-screen', () => {
+    const { getByTestId } = render(DiscHistoryRow, { props: { row: baseRow('done') } });
+    // Body must be allowed to shrink within the outer flex row.
+    expect(getByTestId('disc-history-body')).toHaveClass('min-w-0');
+    // Title must be the flexible, truncating element.
+    const title = getByTestId('disc-history-title');
+    expect(title).toHaveClass('min-w-0');
+    expect(title).toHaveClass('flex-1');
+    expect(title).toHaveClass('truncate');
+  });
 });

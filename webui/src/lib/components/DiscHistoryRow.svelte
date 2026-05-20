@@ -79,19 +79,26 @@
     <button
       data-testid="disc-history-body"
       type="button"
-      class="flex flex-1 items-center gap-3 text-left"
+      class="flex min-w-0 flex-1 items-center gap-3 text-left"
       on:click={onBody}
     >
       <div class="h-[72px] w-[52px] flex-shrink-0 overflow-hidden rounded">
         <DiscArt disc={row.disc} size={52} ratio="portrait" />
       </div>
       <div class="min-w-0 flex-1">
-        <div class="mb-1 flex items-center gap-2">
-          <DiscTypeBadge type={row.disc.type} />
-          <span class="truncate text-[13px] font-semibold text-text">
+        <div class="mb-1 flex min-w-0 items-center gap-2">
+          <span class="flex-shrink-0">
+            <DiscTypeBadge type={row.disc.type} />
+          </span>
+          <span
+            data-testid="disc-history-title"
+            class="min-w-0 flex-1 truncate text-[13px] font-semibold text-text"
+          >
             {row.disc.title || row.disc.id.slice(0, 8)}
           </span>
-          <LifecyclePill {state} />
+          <span class="flex-shrink-0">
+            <LifecyclePill {state} />
+          </span>
         </div>
         <div class="truncate text-[11px] text-text-3">{metaLine}</div>
       </div>
