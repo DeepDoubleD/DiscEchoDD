@@ -12,6 +12,7 @@ const partialInfo: GameDiscsInfo = {
     {
       system: 'PSX',
       label: 'PlayStation',
+      subdir: 'psx',
       boot_code: 'ok',
       boot_code_count: 11402,
       redump_dat: 'loaded',
@@ -19,6 +20,7 @@ const partialInfo: GameDiscsInfo = {
     {
       system: 'PS2',
       label: 'PlayStation 2',
+      subdir: 'ps2',
       boot_code: 'ok',
       boot_code_count: 10876,
       redump_dat: 'missing',
@@ -26,6 +28,7 @@ const partialInfo: GameDiscsInfo = {
     {
       system: 'SAT',
       label: 'Saturn',
+      subdir: 'saturn',
       boot_code: 'ok',
       boot_code_count: 1204,
       redump_dat: 'missing',
@@ -33,11 +36,19 @@ const partialInfo: GameDiscsInfo = {
     {
       system: 'DC',
       label: 'Dreamcast',
+      subdir: 'dc',
       boot_code: 'ok',
       boot_code_count: 612,
       redump_dat: 'missing',
     },
-    { system: 'XBOX', label: 'Xbox', boot_code: 'na', boot_code_count: 0, redump_dat: 'missing' },
+    {
+      system: 'XBOX',
+      label: 'Xbox',
+      subdir: 'xbox',
+      boot_code: 'na',
+      boot_code_count: 0,
+      redump_dat: 'missing',
+    },
   ],
 };
 
@@ -52,6 +63,16 @@ describe('GameDiscsCard', () => {
     // At least one dat loaded (PSX) and several missing.
     expect(container.textContent).toMatch(/✓ loaded/);
     expect(container.textContent).toMatch(/✗ missing/);
+  });
+
+  it('shows the real Redump folder name per system (not the friendly label)', () => {
+    const { container } = render(GameDiscsCard, { info: partialInfo });
+    // The cases the user hit: PlayStation → psx/, Dreamcast → dc/.
+    for (const folder of ['psx/', 'ps2/', 'saturn/', 'dc/', 'xbox/']) {
+      expect(container.textContent).toContain(folder);
+    }
+    // The misleading placeholder must be gone.
+    expect(container.textContent).not.toContain('<system>');
   });
 
   it('shows the partial badge and the dats directory + redump link', () => {

@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- The Game-disc identification panel (Settings → API keys & connections) now shows each system's actual Redump folder name — PlayStation → `psx`, PlayStation 2 → `ps2`, Saturn → `saturn`, Dreamcast → `dc`, Xbox → `xbox` — next to its row, instead of an ambiguous `<system>` placeholder in the instructions. Previously you couldn't tell that e.g. "Dreamcast" dats go in the `dc/` folder.
+
 ## [0.30.1] - 2026-05-20
 
 ### Fixed

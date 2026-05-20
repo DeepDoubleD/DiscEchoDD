@@ -58,6 +58,7 @@
   type GameDiscSystem = {
     system: string;
     label: string;
+    subdir: string;
     boot_code: string; // ok | missing | na
     boot_code_count: number;
     redump_dat: string; // loaded | missing

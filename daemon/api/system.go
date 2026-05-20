@@ -73,6 +73,7 @@ type GameDiscsInfo struct {
 type GameDiscSystem struct {
 	System        state.DiscType `json:"system"`
 	Label         string         `json:"label"`
+	Subdir        string         `json:"subdir"`    // Redump folder name under DatDir (e.g. "psx", "dc")
 	BootCode      string         `json:"boot_code"` // ok | missing | na
 	BootCodeCount int            `json:"boot_code_count"`
 	RedumpDat     string         `json:"redump_dat"` // loaded | missing
@@ -219,41 +220,32 @@ func redumpStatus(s *settings.Settings) string {
 	return "connected"
 }
 
+// gameDiscSystems is the single source of truth for the coverage table:
+// display order, human label, and the on-disk Redump subdirectory name. The
+// subdir is both globbed by redumpDatInventory and shown in the UI so the
+// folder a user must create can never diverge from the folder we look in.
+var gameDiscSystems = []struct {
+	sys    state.DiscType
+	label  string
+	subdir string
+}{
+	{state.DiscTypePSX, "PlayStation", "psx"},
+	{state.DiscTypePS2, "PlayStation 2", "ps2"},
+	{state.DiscTypeSAT, "Saturn", "saturn"},
+	{state.DiscTypeDC, "Dreamcast", "dc"},
+	{state.DiscTypeXBOX, "Xbox", "xbox"},
+}
+
 // redumpDatInventory returns the per-system count of *.dat files under
 // the Redump root directory. Used by the Settings → System tile to
 // show which Redump dats are loaded vs missing.
 func redumpDatInventory(rootDir string) map[state.DiscType]int {
-	out := map[state.DiscType]int{
-		state.DiscTypePSX:  0,
-		state.DiscTypePS2:  0,
-		state.DiscTypeSAT:  0,
-		state.DiscTypeDC:   0,
-		state.DiscTypeXBOX: 0,
-	}
-	subdirs := map[state.DiscType]string{
-		state.DiscTypePSX:  "psx",
-		state.DiscTypePS2:  "ps2",
-		state.DiscTypeSAT:  "saturn",
-		state.DiscTypeDC:   "dc",
-		state.DiscTypeXBOX: "xbox",
-	}
-	for sys, sub := range subdirs {
-		matches, _ := filepath.Glob(filepath.Join(rootDir, sub, "*.dat"))
-		out[sys] = len(matches)
+	out := make(map[state.DiscType]int, len(gameDiscSystems))
+	for _, gs := range gameDiscSystems {
+		matches, _ := filepath.Glob(filepath.Join(rootDir, gs.subdir, "*.dat"))
+		out[gs.sys] = len(matches)
 	}
 	return out
-}
-
-// gameDiscSystems is the fixed display order + labels for the coverage table.
-var gameDiscSystems = []struct {
-	sys   state.DiscType
-	label string
-}{
-	{state.DiscTypePSX, "PlayStation"},
-	{state.DiscTypePS2, "PlayStation 2"},
-	{state.DiscTypeSAT, "Saturn"},
-	{state.DiscTypeDC, "Dreamcast"},
-	{state.DiscTypeXBOX, "Xbox"},
 }
 
 // buildGameDiscsInfo assembles the per-system identification-coverage view:
@@ -275,7 +267,7 @@ func (h *Handlers) buildGameDiscsInfo() *GameDiscsInfo {
 	}
 
 	for _, gs := range gameDiscSystems {
-		row := GameDiscSystem{System: gs.sys, Label: gs.label}
+		row := GameDiscSystem{System: gs.sys, Label: gs.label, Subdir: gs.subdir}
 		// Boot-code: Xbox is empty by design (publisher codes, not XBE IDs).
 		switch {
 		case gs.sys == state.DiscTypeXBOX:

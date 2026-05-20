@@ -2,6 +2,7 @@
   export type GameDiscSystem = {
     system: string;
     label: string;
+    subdir: string; // Redump folder name under dat_dir, e.g. "psx", "dc"
     boot_code: string; // ok | missing | na
     boot_code_count: number;
     redump_dat: string; // loaded | missing
@@ -67,7 +68,10 @@
         class="grid items-center gap-3 border-b border-border px-3 py-2 text-[12px] last:border-b-0"
         style="grid-template-columns: 1fr auto auto"
       >
-        <div class="text-text">{s.label}</div>
+        <div class="min-w-0 text-text">
+          {s.label}
+          <span class="ml-1.5 font-mono text-[11px] text-text-3">{s.subdir}/</span>
+        </div>
         <div class="w-28 text-right">
           {#if s.boot_code === 'ok'}
             <span class="text-accent">✓ built-in</span>
@@ -93,10 +97,10 @@
       <div class="text-error">redumper: {info.redumper_status.slice('error:'.length).trim()}</div>
     {/if}
     <div>
-      Drop Redump <code class="rounded bg-surface-2 px-1 font-mono">.dat</code> files in
-      <code class="rounded bg-surface-2 px-1 font-mono text-text-2"
-        >{info.dat_dir || '—'}/&lt;system&gt;/</code
-      >, then restart to load them.
+      Drop each system's Redump <code class="rounded bg-surface-2 px-1 font-mono">.dat</code> into
+      its folder (shown above) under
+      <code class="rounded bg-surface-2 px-1 font-mono text-text-2">{info.dat_dir || '—'}/</code>,
+      then restart to load them.
     </div>
     <div>
       <a

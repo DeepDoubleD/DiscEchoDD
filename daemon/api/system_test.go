@@ -327,6 +327,16 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	if byName[state.DiscTypeXBOX].BootCode != "na" {
 		t.Errorf("Xbox boot_code = %q, want na", byName[state.DiscTypeXBOX].BootCode)
 	}
+	// Each row carries its real Redump folder name (the user-facing fix:
+	// "PlayStation" lives in psx/, "Dreamcast" in dc/).
+	for sys, want := range map[state.DiscType]string{
+		state.DiscTypePSX: "psx", state.DiscTypePS2: "ps2", state.DiscTypeSAT: "saturn",
+		state.DiscTypeDC: "dc", state.DiscTypeXBOX: "xbox",
+	} {
+		if byName[sys].Subdir != want {
+			t.Errorf("%s subdir = %q, want %q", sys, byName[sys].Subdir, want)
+		}
+	}
 	if gd.DatDir == "" {
 		t.Error("GameDiscs dat_dir should be set")
 	}
