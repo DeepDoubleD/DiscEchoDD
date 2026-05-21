@@ -137,6 +137,27 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 	if err := seedXboxProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed Xbox profile: %w", err)
 	}
+	if err := seedSegaCDProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed SegaCD profile: %w", err)
+	}
+	if err := seed3DOProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed 3DO profile: %w", err)
+	}
+	if err := seedPCFXProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed PCFX profile: %w", err)
+	}
+	if err := seedJaguarCDProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed JaguarCD profile: %w", err)
+	}
+	if err := seedCDiProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed CDi profile: %w", err)
+	}
+	if err := seedPCECDProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed PCEngineCD profile: %w", err)
+	}
+	if err := seedNeoCDProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed NeoGeoCD profile: %w", err)
+	}
 	if err := seedDataProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed Data profile: %w", err)
 	}
@@ -291,6 +312,13 @@ const (
 	dcProfileName                    = "DC-CHD"
 	xboxProfileName                  = "XBOX-ISO"
 	dataProfileName                  = "Data-ISO"
+	segaCDProfileName                = "SegaCD-CHD"
+	threeDOProfileName               = "3DO-CHD"
+	pcfxProfileName                  = "PCFX-CHD"
+	jaguarCDProfileName              = "JaguarCD-CHD"
+	cdiProfileName                   = "CDi-CHD"
+	pceCDProfileName                 = "PCEngineCD-CHD"
+	neoCDProfileName                 = "NeoGeoCD-CHD"
 )
 
 func seedDVDProfiles(ctx context.Context, store *state.Store) error {
@@ -848,6 +876,209 @@ func seedDataProfile(ctx context.Context, store *state.Store) error {
 		OutputPathTemplate: `{{.Title}}/{{.Title}}.iso`,
 		Enabled:            true,
 		StepCount:          6,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedSegaCDProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeSegaCD)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == segaCDProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypeSegaCD,
+		Name:               segaCDProfileName,
+		Engine:             "redumper+chdman",
+		Format:             "CHD",
+		Preset:             "",
+		Container:          "CHD",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		Enabled:            true,
+		StepCount:          7,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seed3DOProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscType3DO)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == threeDOProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscType3DO,
+		Name:               threeDOProfileName,
+		Engine:             "redumper+chdman",
+		Format:             "CHD",
+		Preset:             "",
+		Container:          "CHD",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		Enabled:            true,
+		StepCount:          7,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedPCFXProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypePCFX)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == pcfxProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypePCFX,
+		Name:               pcfxProfileName,
+		Engine:             "redumper+chdman",
+		Format:             "CHD",
+		Preset:             "",
+		Container:          "CHD",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		Enabled:            true,
+		StepCount:          7,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedJaguarCDProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeJaguarCD)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == jaguarCDProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypeJaguarCD,
+		Name:               jaguarCDProfileName,
+		Engine:             "redumper+chdman",
+		Format:             "CHD",
+		Preset:             "",
+		Container:          "CHD",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		Enabled:            true,
+		StepCount:          7,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedCDiProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeCDi)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == cdiProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypeCDi,
+		Name:               cdiProfileName,
+		Engine:             "redumper+chdman",
+		Format:             "CHD",
+		Preset:             "",
+		Container:          "CHD",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		Enabled:            true,
+		StepCount:          7,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedPCECDProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypePCECD)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == pceCDProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypePCECD,
+		Name:               pceCDProfileName,
+		Engine:             "redumper+chdman",
+		Format:             "CHD",
+		Preset:             "",
+		Container:          "CHD",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		Enabled:            true,
+		StepCount:          7,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedNeoCDProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeNeoCD)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == neoCDProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypeNeoCD,
+		Name:               neoCDProfileName,
+		Engine:             "redumper+chdman",
+		Format:             "CHD",
+		Preset:             "",
+		Container:          "CHD",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		Enabled:            true,
+		StepCount:          7,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	})
