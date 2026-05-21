@@ -5,6 +5,7 @@
     startDisc,
     scanDisc,
     discs,
+    jobs,
     manualIdentify,
     pendingDiscID,
     skipDisc,
@@ -105,12 +106,29 @@
       : isGameDisc
         ? 'Search IGDB'
         : 'Search TMDB';
+  // A disc whose previous rip ended in a terminal failure must NOT be
+  // auto-ripped again: AwaitingDecisionList keeps the card visible for
+  // these states (retry intent), but batch auto-confirm would otherwise
+  // re-rip on its 8 s countdown — an unreadable/scratched disc then loops
+  // forever (fail → card returns → auto-rip → fail → …). The same disc
+  // can still be retried manually via the Start button. Mirrors the
+  // terminal-failure set AwaitingDecisionList uses to keep the card.
+  // A scan job is not a rip and never counts.
+  $: priorFailedRip = $jobs.some(
+    (j) =>
+      j.disc_id === liveDisc.id &&
+      (j.kind ?? 'rip') !== 'scan' &&
+      (j.state === 'failed' || j.state === 'cancelled' || j.state === 'interrupted'),
+  );
+
   // Auto-confirm fires in batch mode for two cases:
   //   1. A high-confidence candidate (Redump 100, BootCodeIndex 90, MB ≥50).
   //   2. A DATA disc — title is the ISO9660 volume label, which the user
   //      chose when burning. Skip if they want to bail.
+  // …but never for a disc that already failed a rip (loop guard above).
   $: autoConfirmAllowed =
     $operationMode === 'batch' &&
+    !priorFailedRip &&
     (topConfidence >= AUTO_CONFIRM_MIN_CONFIDENCE || liveDisc.type === 'DATA');
 
   function profileForCandidate(c: Candidate): string {
@@ -338,6 +356,8 @@
           </div>
         {:else if autoConfirmAllowed && cancelled && candidates.length > 0}
           <div class="mt-1 text-[11px] text-text-3">Pick a title to rip</div>
+        {:else if priorFailedRip && candidates.length > 0}
+          <div class="mt-1 text-[11px] text-warn">Previous rip failed · pick a title to retry</div>
         {:else if $operationMode === 'manual' && candidates.length > 0}
           <div class="mt-1 text-[11px] text-text-3">Manual mode · pick a title to rip</div>
         {:else if candidates.length > 0}

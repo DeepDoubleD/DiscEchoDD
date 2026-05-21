@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- A disc whose rip failed is no longer auto-ripped again in batch mode. The
+  awaiting-decision card stays visible after a failed/cancelled/interrupted rip
+  (so it can be retried), but the batch auto-confirm countdown would re-rip it —
+  an unreadable or scratched disc then looped forever (fail → notify → auto-rip
+  → fail → …). Auto-rip is now suppressed once a disc has a terminal-failed rip;
+  the disc can still be retried manually from the card.
+
 ## [0.30.5] - 2026-05-21
 
 ### Fixed

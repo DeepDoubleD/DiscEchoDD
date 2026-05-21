@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import AwaitingDecisionCard from './AwaitingDecisionCard.svelte';
-import { profiles, settings, bootCodeCounts } from '$lib/store';
-import type { Disc, Profile } from '$lib/wire';
+import { profiles, settings, bootCodeCounts, jobs } from '$lib/store';
+import type { Disc, Profile, Job } from '$lib/wire';
 
 const dvdProfile: Profile = {
   id: 'p-dvd',
@@ -51,6 +51,7 @@ describe('AwaitingDecisionCard', () => {
   beforeEach(() => {
     profiles.set([dvdProfile]);
     settings.set({ 'operation.mode': 'batch' });
+    jobs.set([]);
     fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -64,6 +65,7 @@ describe('AwaitingDecisionCard', () => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     settings.set({});
+    jobs.set([]);
   });
 
   it('renders the candidate list and counts the matches', () => {
@@ -74,6 +76,47 @@ describe('AwaitingDecisionCard', () => {
   });
 
   it('auto-rips when top confidence ≥ 50', async () => {
+    render(AwaitingDecisionCard, { disc: highConfDisc });
+    await tick();
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/discs/disc-1/start',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('does not auto-rip a disc whose previous rip failed (breaks the retry loop)', async () => {
+    const failedRip: Job = {
+      id: 'job-failed',
+      disc_id: highConfDisc.id,
+      profile_id: 'p-dvd',
+      kind: 'rip',
+      state: 'failed',
+      progress: 0,
+      created_at: '2026-05-12T08:05:00Z',
+    };
+    jobs.set([failedRip]);
+    const { getByText, queryByText } = render(AwaitingDecisionCard, { disc: highConfDisc });
+    await tick();
+    // No countdown, and a hint that a manual decision is required.
+    expect(queryByText(/Auto-rip in/)).toBeNull();
+    expect(getByText(/Previous rip failed · pick a title to retry/)).toBeInTheDocument();
+    // The auto-confirm timer must never fire startDisc for this disc.
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('a scan job for the disc does not suppress auto-rip', async () => {
+    const scanJob: Job = {
+      id: 'job-scan',
+      disc_id: highConfDisc.id,
+      profile_id: 'p-dvd',
+      kind: 'scan',
+      state: 'failed',
+      progress: 0,
+      created_at: '2026-05-12T08:05:00Z',
+    };
+    jobs.set([scanJob]);
     render(AwaitingDecisionCard, { disc: highConfDisc });
     await tick();
     await vi.advanceTimersByTimeAsync(8000);
