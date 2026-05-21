@@ -149,16 +149,23 @@ var engineSchemas = map[string]EngineSchema{
 // from this map imposes no engine constraint (defensive — every type the
 // editor offers is listed here).
 var DiscTypeEngines = map[state.DiscType][]string{
-	state.DiscTypeAudioCD: {"whipper"},
-	state.DiscTypeDVD:     {"MakeMKV+HandBrake", "MakeMKV", "HandBrake"},
-	state.DiscTypeBDMV:    {"MakeMKV+HandBrake", "MakeMKV"},
-	state.DiscTypeUHD:     {"MakeMKV", "MakeMKV+HandBrake"},
-	state.DiscTypePSX:     {"redumper+chdman"},
-	state.DiscTypePS2:     {"redumper+chdman"},
-	state.DiscTypeSAT:     {"redumper+chdman"},
-	state.DiscTypeDC:      {"redumper+chdman"},
-	state.DiscTypeXBOX:    {"redumper"},
-	state.DiscTypeData:    {"ddrescue"},
+	state.DiscTypeAudioCD:  {"whipper"},
+	state.DiscTypeDVD:      {"MakeMKV+HandBrake", "MakeMKV", "HandBrake"},
+	state.DiscTypeBDMV:     {"MakeMKV+HandBrake", "MakeMKV"},
+	state.DiscTypeUHD:      {"MakeMKV", "MakeMKV+HandBrake"},
+	state.DiscTypePSX:      {"redumper+chdman"},
+	state.DiscTypePS2:      {"redumper+chdman"},
+	state.DiscTypeSAT:      {"redumper+chdman"},
+	state.DiscTypeDC:       {"redumper+chdman"},
+	state.DiscTypeXBOX:     {"redumper"},
+	state.DiscTypeSegaCD:   {"redumper+chdman"},
+	state.DiscType3DO:      {"redumper+chdman"},
+	state.DiscTypePCFX:     {"redumper+chdman"},
+	state.DiscTypeJaguarCD: {"redumper+chdman"},
+	state.DiscTypeCDi:      {"redumper+chdman"},
+	state.DiscTypePCECD:    {"redumper+chdman"},
+	state.DiscTypeNeoCD:    {"redumper+chdman"},
+	state.DiscTypeData:     {"ddrescue"},
 }
 
 // QualityTier is a resolved (constant-quality RF, encoder speed-preset)

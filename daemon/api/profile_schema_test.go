@@ -483,3 +483,32 @@ func TestValidateProfile_DDRescueRejectsOptions(t *testing.T) {
 		t.Fatal("expected validation errors for unknown option")
 	}
 }
+
+func TestDiscTypeEngines_NewCDConsoles(t *testing.T) {
+	newTypes := []state.DiscType{
+		state.DiscTypeSegaCD,
+		state.DiscType3DO,
+		state.DiscTypePCFX,
+		state.DiscTypeJaguarCD,
+		state.DiscTypeCDi,
+		state.DiscTypePCECD,
+		state.DiscTypeNeoCD,
+	}
+	for _, dt := range newTypes {
+		engines, ok := api.DiscTypeEngines[dt]
+		if !ok {
+			t.Errorf("DiscTypeEngines missing entry for %q", dt)
+			continue
+		}
+		found := false
+		for _, e := range engines {
+			if e == "redumper+chdman" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("DiscTypeEngines[%q] = %v, want entry containing \"redumper+chdman\"", dt, engines)
+		}
+	}
+}
