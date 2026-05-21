@@ -252,6 +252,28 @@ func (s *Store) ClaimDriveForIdentify(ctx context.Context, id string) (bool, err
 	return n > 0, nil
 }
 
+// ReleaseDriveFromIdentify transitions a drive out of the `identifying`
+// state set by ClaimDriveForIdentify, but only while it is still
+// identifying. Returns true if the row moved.
+//
+// The CAS matters because the discFlow identify pass and the orchestrator's
+// rip run concurrently and both write drive state. A spurious udev uevent can
+// claim the drive for identify, the user then starts a rip (orchestrator flips
+// the drive to `ripping`), and the finishing identify pass would otherwise
+// stomp `ripping` back to `idle` — the "drive shows IDLE with Eject/Re-identify
+// offered mid-rip" desync. Scoping the release to `state = 'identifying'` makes
+// it a no-op once another flow owns the drive.
+func (s *Store) ReleaseDriveFromIdentify(ctx context.Context, id string, to DriveState) (bool, error) {
+	res, err := s.db.Conn().ExecContext(ctx,
+		`UPDATE drives SET state = ? WHERE id = ? AND state = 'identifying'`,
+		string(to), id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 func scanDrive(r rowScanner) (*Drive, error) {
 	var d Drive
 	var state, lastSeenStr string

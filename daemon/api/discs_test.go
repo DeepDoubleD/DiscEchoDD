@@ -835,6 +835,64 @@ func TestStartDisc_IGDBCandidate_PersistsIGDBIDAsMetadataID(t *testing.T) {
 	}
 }
 
+// TestStartDisc_BootCodeCandidate_PreservesMetadataID is the regression for
+// the game-disc duplicate-row + lost-boot-code bug. A Redump/DuckStation
+// candidate carries no MBID/TMDBID/IGDBID — its stable ID is the boot code
+// already on disc.MetadataID. StartDisc's candidate-promote switch must
+// preserve it, not clobber it to "". A nulled metadata_id breaks the
+// (drive_id, metadata_id) dedup (a spurious udev re-identify then spawns a
+// duplicate disc row whose card appears after Start) and silently disables the
+// post-rip Redump MD5 verify.
+func TestStartDisc_BootCodeCandidate_PreservesMetadataID(t *testing.T) {
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubDiscHandlerForType{dt: state.DiscTypePSX})
+	h := apitestServerWithOrch(t, reg)
+	drv := seedDrive(t, h)
+	prof := seedProfile(t, h)
+
+	disc := &state.Disc{
+		Type: state.DiscTypePSX, DriveID: drv.ID, Title: "Gran Turismo",
+		MetadataProvider: "DuckStation gamedb.yaml", MetadataID: "SCES_009.84",
+		Candidates: []state.Candidate{
+			{Source: "DuckStation gamedb.yaml", Title: "Gran Turismo", Year: 1998, Region: "Europe", Confidence: 90},
+		},
+	}
+	if err := h.Store.CreateDisc(context.Background(), disc); err != nil {
+		t.Fatal(err)
+	}
+
+	r := chi.NewRouter()
+	r.Post("/api/discs/{id}/start", h.StartDisc)
+	body := bytes.NewBufferString(`{"profile_id":"` + prof.ID + `","candidate_index":0}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/discs/"+disc.ID+"/start", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	updated, err := h.Store.GetDisc(context.Background(), disc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.MetadataID != "SCES_009.84" {
+		t.Errorf("MetadataID = %q, want SCES_009.84 (boot code must survive candidate promote)", updated.MetadataID)
+	}
+
+	// Drain the orchestrator's stub job so cleanup doesn't race.
+	var j state.Job
+	_ = json.Unmarshal(rr.Body.Bytes(), &j)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		gj, err := h.Store.GetJob(context.Background(), j.ID)
+		if err == nil && (gj.State == state.JobStateDone || gj.State == state.JobStateFailed) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestIdentifyDisc_GameDiscDispatchesToIGDB(t *testing.T) {
 	h := apitestServer(t)
 	drv := seedDrive(t, h)

@@ -179,6 +179,58 @@ func TestStore_Drive_ClaimForIdentify(t *testing.T) {
 	}
 }
 
+// ReleaseDriveFromIdentify must only transition a drive that is still
+// `identifying`. This is the guard against the "drive shows IDLE mid-rip"
+// bug: a spurious udev uevent claims the drive for identify, the user starts
+// a rip (orchestrator flips the drive to `ripping`), and the finishing
+// identify pass must NOT stomp `ripping` back to `idle`.
+func TestStore_Drive_ReleaseFromIdentify(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+
+	d := &state.Drive{
+		DevPath: "/dev/sr0", Model: "X", Bus: "Y",
+		State: state.DriveStateIdle, LastSeenAt: time.Now(),
+	}
+	if err := s.UpsertDrive(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+
+	// Claim, then release back to idle: the normal identify-done path.
+	if ok, err := s.ClaimDriveForIdentify(ctx, d.ID); err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	released, err := s.ReleaseDriveFromIdentify(ctx, d.ID, state.DriveStateIdle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !released {
+		t.Error("release from identifying→idle must report released")
+	}
+	if got, _ := s.GetDrive(ctx, d.ID); got.State != state.DriveStateIdle {
+		t.Errorf("state = %q, want idle", got.State)
+	}
+
+	// Claim again, but a rip starts before identify finishes: the drive is
+	// now `ripping`. Releasing must be a no-op and must NOT stomp `ripping`.
+	if ok, err := s.ClaimDriveForIdentify(ctx, d.ID); err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	if err := s.UpdateDriveState(ctx, d.ID, state.DriveStateRipping); err != nil {
+		t.Fatal(err)
+	}
+	released, err = s.ReleaseDriveFromIdentify(ctx, d.ID, state.DriveStateIdle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if released {
+		t.Error("release must not transition a drive that is no longer identifying")
+	}
+	if got, _ := s.GetDrive(ctx, d.ID); got.State != state.DriveStateRipping {
+		t.Errorf("state = %q, want ripping (release must not stomp a live rip)", got.State)
+	}
+}
+
 func TestStore_Drive_GetNotFound(t *testing.T) {
 	s := openStore(t)
 	_, err := s.GetDrive(context.Background(), "nope")

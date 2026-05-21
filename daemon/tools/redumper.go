@@ -31,6 +31,35 @@ func RedumperOutputExt(mode string) string {
 	return ".iso"
 }
 
+const (
+	// redumperRetries is the per-sector read-retry budget. The default is
+	// 0 — any SCSI / C2 read error makes redumper refuse to split, aborting
+	// near 100%. 50 retries recovers most surface scratches without dragging
+	// out a clean disc (where the first read succeeds and the budget is never
+	// spent). Bounded against runaways by redumperWatch below.
+	redumperRetries = 50
+
+	// redumperStallTimeout aborts a rip that makes no forward progress (the
+	// percent never increases) for this long — a hung redumper or a drive
+	// that spun down would otherwise hold the optical drive indefinitely.
+	// Generous so a slow-but-advancing REFINE pass on a scratched disc is
+	// never killed.
+	redumperStallTimeout = 20 * time.Minute
+
+	// redumperMaxAudioBoundaryRetries aborts when redumper logs this many
+	// "unexpected read type on retry" lines. On some drives the data/audio
+	// track boundary of a mixed-mode disc reports the wrong sector read type
+	// on every retry, so REFINE burns the full retry budget per sector and
+	// crawls (observed: 7% in 10h, ETA ~132h, on an ASUS SDRW-08D2S-U). The
+	// disc is not rippable on this drive; fail fast with a remediation tip
+	// rather than holding the drive for days.
+	redumperMaxAudioBoundaryRetries = 256
+
+	// redumperWatchInterval is how often the watchdog re-evaluates the abort
+	// conditions. Cheap; the checks are a mutex + a couple of comparisons.
+	redumperWatchInterval = 30 * time.Second
+)
+
 // NewRedumper returns a Redumper. Empty bin defaults to "redumper".
 func NewRedumper(bin string) *Redumper {
 	if bin == "" {
@@ -75,14 +104,18 @@ func (r *Redumper) Rip(ctx context.Context, devPath, outDir, name, mode string, 
 		"--drive", devPath,
 		"--image-path", outDir,
 		"--image-name", name,
-		// Default is 0 — any SCSI / C2 read error makes redumper refuse
-		// to split, aborting the rip near 100%. 50 retries per problem
-		// sector recovers most surface scratches without dragging out
-		// the rip on a clean disc (where the first read succeeds and
-		// the retry budget is never spent).
-		"--retries=50",
+		fmt.Sprintf("--retries=%d", redumperRetries),
 	}
-	cmd := exec.CommandContext(ctx, r.bin, args...)
+
+	// Derive a cancelable context so the watchdog can kill a runaway rip
+	// (audio-boundary thrash / stall) independently of the caller's ctx.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	watch := newRedumperWatch(redumperNow())
+	ws := redumperWatchSink{Sink: sink, watch: watch}
+
+	cmd := exec.CommandContext(runCtx, r.bin, args...)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -96,13 +129,134 @@ func (r *Redumper) Rip(ctx context.Context, devPath, outDir, name, mode string, 
 		return fmt.Errorf("redumper start: %w", err)
 	}
 
+	watchdogDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(redumperWatchInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watchdogDone:
+				return
+			case <-ticker.C:
+				if reason := watch.abortReason(redumperNow()); reason != "" {
+					watch.trip(reason)
+					cancel() // kills redumper via runCtx
+					return
+				}
+			}
+		}
+	}()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); ParseRedumperProgress(stdout, sink) }()
-	go func() { defer wg.Done(); ParseRedumperProgress(stderr, sink) }()
+	go func() { defer wg.Done(); ParseRedumperProgress(stdout, ws) }()
+	go func() { defer wg.Done(); ParseRedumperProgress(stderr, ws) }()
 	wg.Wait()
+	close(watchdogDone)
 
-	return cmd.Wait()
+	waitErr := cmd.Wait()
+	// A watchdog trip kills the process, so cmd.Wait reports a generic
+	// "signal: killed". Surface the actionable reason instead.
+	if reason := watch.trippedReason(); reason != "" {
+		return fmt.Errorf("redumper aborted: %s", reason)
+	}
+	return waitErr
+}
+
+// redumperWatch bounds a redumper rip that would otherwise hold the optical
+// drive indefinitely. Two independent triggers, both evaluated off the output
+// stream so there's no reliance on subprocess timing:
+//
+//   - audio-boundary thrash: redumper logs "unexpected read type on retry" for
+//     every retry of a sector whose read type the drive misreports at a
+//     mixed-mode disc's data/audio boundary. Past audioRetryLimit the disc is
+//     not rippable on this drive.
+//   - stall: the percent never advances for stallTimeout (hung redumper /
+//     spun-down drive).
+//
+// Decision methods take an explicit `now` so tests drive them with a fixed
+// clock rather than wall-clock sleeps.
+type redumperWatch struct {
+	audioRetryLimit int
+	stallTimeout    time.Duration
+
+	mu             sync.Mutex
+	audioRetries   int
+	lastPct        float64
+	lastProgressAt time.Time
+	tripped        string
+}
+
+var redumperUnexpectedReadTypeRE = regexp.MustCompile(`unexpected read type on retry`)
+
+func newRedumperWatch(now time.Time) *redumperWatch {
+	return &redumperWatch{
+		audioRetryLimit: redumperMaxAudioBoundaryRetries,
+		stallTimeout:    redumperStallTimeout,
+		lastProgressAt:  now,
+	}
+}
+
+// noteLog counts the audio-boundary thrash marker in a forwarded log line.
+func (w *redumperWatch) noteLog(line string) {
+	if redumperUnexpectedReadTypeRE.MatchString(line) {
+		w.mu.Lock()
+		w.audioRetries++
+		w.mu.Unlock()
+	}
+}
+
+// noteProgress resets the stall timer on forward (increasing-percent) progress.
+func (w *redumperWatch) noteProgress(pct float64, now time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if pct > w.lastPct {
+		w.lastPct = pct
+		w.lastProgressAt = now
+	}
+}
+
+// abortReason returns a non-empty remediation tip when the rip should be
+// killed, else "".
+func (w *redumperWatch) abortReason(now time.Time) string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.audioRetries >= w.audioRetryLimit {
+		return "disc unreadable on this drive: redumper cannot resolve the data/audio track boundary (mixed-mode disc). Try a different optical drive or clean the disc."
+	}
+	if now.Sub(w.lastProgressAt) >= w.stallTimeout {
+		return fmt.Sprintf("rip stalled: no progress for %s. The drive may have spun down or the disc may be unreadable.", w.stallTimeout)
+	}
+	return ""
+}
+
+func (w *redumperWatch) trip(reason string) {
+	w.mu.Lock()
+	w.tripped = reason
+	w.mu.Unlock()
+}
+
+func (w *redumperWatch) trippedReason() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.tripped
+}
+
+// redumperWatchSink tees the parser's events into a redumperWatch, forwarding
+// everything to the real sink unchanged.
+type redumperWatchSink struct {
+	Sink
+	watch *redumperWatch
+}
+
+func (s redumperWatchSink) Progress(pct float64, speed string, etaSeconds int) {
+	s.watch.noteProgress(pct, redumperNow())
+	s.Sink.Progress(pct, speed, etaSeconds)
+}
+
+func (s redumperWatchSink) Log(level state.LogLevel, format string, args ...any) {
+	s.watch.noteLog(fmt.Sprintf(format, args...))
+	s.Sink.Log(level, format, args...)
 }
 
 // redumperDiscType maps the daemon's pipeline-side mode string to

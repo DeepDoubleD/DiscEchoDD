@@ -21,6 +21,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 - History rows no longer clip their Re-rip / Stop action button off the right
   edge on narrow phone screens; long titles now truncate instead.
+- Starting a game-disc rip (PlayStation / PS2 / Saturn / Dreamcast / Xbox) no
+  longer wipes the disc's boot code. Picking a Redump/DuckStation candidate
+  cleared `metadata_id`, which spawned a duplicate disc row on the next drive
+  event (its "awaiting decision" card appearing *after* you'd hit Start) and
+  silently disabled the post-rip Redump checksum verification.
+- The drive card no longer shows IDLE — with Eject / Re-identify offered — while
+  a rip is actually running. A spurious media-change event re-identifying the
+  disc mid-rip could reset the drive's displayed state to idle; the dashboard
+  now keeps showing the rip in progress.
+- redumper rips are now bounded: a rip that stalls (no progress for 20 minutes)
+  or that hits a disc whose data/audio track boundary is unreadable on the
+  current drive (a "mixed-mode" disc that would otherwise grind for days) is
+  stopped with a clear message suggesting a different drive or cleaning the
+  disc, instead of holding the drive indefinitely.
 
 ## [0.30.2] - 2026-05-20
 

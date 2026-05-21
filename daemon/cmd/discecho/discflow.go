@@ -170,11 +170,19 @@ func (df *discFlow) handle(ev drive.Uevent) {
 	// any work, so flip it back to idle. Leaving it in `identifying`
 	// makes the dashboard lie ("Identifying disc…") and blocks future
 	// uevents from being processed cleanly.
-	df.releaseDriveState(drv.ID, state.DriveStateIdle)
-	df.bc.Publish(state.Event{
-		Name:    "drive.changed",
-		Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
-	})
+	//
+	// Only publish the idle transition if we actually released the drive
+	// from `identifying`. A rip started on this disc mid-identify (the user
+	// clicks Start while a spurious udev uevent is still re-identifying)
+	// flips the drive to `ripping` via the orchestrator; the CAS release is
+	// then a no-op and we must not announce `idle`, or the dashboard shows
+	// the drive idle with Eject/Re-identify offered while a rip runs.
+	if df.releaseDriveState(drv.ID, state.DriveStateIdle) {
+		df.bc.Publish(state.Event{
+			Name:    "drive.changed",
+			Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
+		})
+	}
 }
 
 // persistDisc inserts a new disc row, or — when the drive already has a
@@ -264,19 +272,24 @@ func (df *discFlow) recordDriveError(driveID, errMsg string) {
 }
 
 // releaseDriveState writes the drive's terminal state for this handle()
-// invocation using a fresh background context. The identify ctx
-// (df.identifyDur, 30s) is cancelled the moment classify or identify
-// times out, and ExecContext on the original ctx then returns
-// context.Canceled before the SQL runs — silently leaving the drive
-// stuck in `identifying` and locking the daemon out of every later
-// uevent on that drive. Always use a clean context for the cleanup
-// write, and surface failures via the log instead of discarding them.
-func (df *discFlow) releaseDriveState(driveID string, st state.DriveState) {
+// invocation using a fresh background context, and reports whether the
+// transition actually happened. The identify ctx (df.identifyDur, 30s) is
+// cancelled the moment classify or identify times out, and ExecContext on the
+// original ctx then returns context.Canceled before the SQL runs — silently
+// leaving the drive stuck in `identifying` and locking the daemon out of every
+// later uevent on that drive. Always use a clean context for the cleanup write.
+//
+// The write is a CAS scoped to `state = 'identifying'`: if a rip started on
+// this disc mid-identify (orchestrator set `ripping`), the release is a no-op
+// and returns false so the caller skips announcing a stale `idle`/`error`.
+func (df *discFlow) releaseDriveState(driveID string, st state.DriveState) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := df.store.UpdateDriveState(ctx, driveID, st); err != nil {
+	released, err := df.store.ReleaseDriveFromIdentify(ctx, driveID, st)
+	if err != nil {
 		slog.Warn("disc-flow: release drive state", "err", err, "drive_id", driveID, "target_state", st)
 	}
+	return released
 }
 
 func (df *discFlow) findDriveByDevPath(ctx context.Context, dev string) (*state.Drive, error) {

@@ -92,6 +92,14 @@ func (h *Handlers) StartDisc(w http.ResponseWriter, r *http.Request) {
 			metaID = strconv.Itoa(c.TMDBID)
 		case c.IGDBID > 0:
 			metaID = strconv.Itoa(c.IGDBID)
+		default:
+			// Redump / DuckStation / BootCodeIndex candidates carry no
+			// MBID/TMDBID/IGDBID — the disc's stable ID is the boot code
+			// already on disc.MetadataID. Preserve it; clobbering to ""
+			// breaks (drive_id, metadata_id) dedup (a spurious udev
+			// re-identify then spawns a duplicate disc row) and disables the
+			// post-rip Redump MD5 verify.
+			metaID = disc.MetadataID
 		}
 		// Persist the chosen identity. The orchestrator re-reads the
 		// disc row inside Submit, so without this the user choice is
