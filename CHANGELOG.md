@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Game discs (PlayStation / PS2 / Saturn / Dreamcast / Xbox) identified by
+  datfiles/gamedb are now enriched from IGDB when it's configured: box art plus
+  summary, genres, platforms, and release year are fetched in the background
+  and appear on the disc card and metadata pane shortly after identify. The
+  match is platform-filtered and title-similarity-gated, and never overrides an
+  exact gamedb cover or changes the disc's identity.
+
 ## [0.30.3] - 2026-05-21
 
 ### Added
