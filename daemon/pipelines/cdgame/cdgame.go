@@ -1,8 +1,8 @@
 // Package cdgame implements pipelines.Handler + SplittableHandler for the
-// family of CD-based game discs that rip to a single .bin/.cue via redumper
-// and compress to .chd via chdman: PlayStation 1, PlayStation 2, Sega Saturn,
-// and (in a later milestone) the Tier-1 CD consoles. The only per-system
-// difference is identification, injected as an Identifier.
+// family of disc-based game consoles that rip via redumper (CD → .bin/.cue,
+// DVD → .iso) and compress to .chd via chdman: PlayStation 1, PlayStation 2,
+// Sega Saturn, and (in a later milestone) other CD/DVD consoles. The only
+// per-system difference is identification, injected as an Identifier.
 //
 // Pipeline shape (7 active steps; transcode skipped):
 //
