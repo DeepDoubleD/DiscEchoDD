@@ -241,6 +241,9 @@ var gameDiscSystems = []struct {
 	{state.DiscTypeCDi, "Philips CD-i", "cdi"},
 	{state.DiscTypePCECD, "PC Engine CD", "pc-engine-cd"},
 	{state.DiscTypeNeoCD, "Neo Geo CD", "neo-geo-cd"},
+	{state.DiscTypeCD32, "Amiga CD32", "cd32"},
+	{state.DiscTypeFMTowns, "FM Towns", "fm-towns"},
+	{state.DiscTypePippin, "Bandai Pippin", "pippin"},
 }
 
 // redumpDatInventory returns the per-system count of *.dat files under
@@ -285,7 +288,10 @@ func (h *Handlers) buildGameDiscsInfo() *GameDiscsInfo {
 			gs.sys == state.DiscTypeJaguarCD ||
 			gs.sys == state.DiscTypeCDi ||
 			gs.sys == state.DiscTypePCECD ||
-			gs.sys == state.DiscTypeNeoCD:
+			gs.sys == state.DiscTypeNeoCD ||
+			gs.sys == state.DiscTypeCD32 ||
+			gs.sys == state.DiscTypeFMTowns ||
+			gs.sys == state.DiscTypePippin:
 			row.BootCode = "na"
 		case counts[gs.sys] > 0:
 			row.BootCode = "ok"

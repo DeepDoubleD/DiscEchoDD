@@ -313,8 +313,8 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	if gd.Status != "partial" {
 		t.Errorf("GameDiscs status = %q, want partial (empty dat dir)", gd.Status)
 	}
-	if len(gd.Systems) != 12 {
-		t.Fatalf("GameDiscs systems = %d, want 12", len(gd.Systems))
+	if len(gd.Systems) != 15 {
+		t.Fatalf("GameDiscs systems = %d, want 15", len(gd.Systems))
 	}
 	byName := map[state.DiscType]api.GameDiscSystem{}
 	for _, s := range gd.Systems {
@@ -323,12 +323,13 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 			t.Errorf("%s redump_dat = %q, want missing", s.System, s.RedumpDat)
 		}
 	}
-	// Xbox and the Tier-1 CD consoles have no boot-code index → "na".
+	// Xbox and the CD-only consoles have no boot-code index → "na".
 	for _, sys := range []state.DiscType{
 		state.DiscTypeXBOX,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
 		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
 		state.DiscTypeNeoCD,
+		state.DiscTypeCD32, state.DiscTypeFMTowns, state.DiscTypePippin,
 	} {
 		if byName[sys].BootCode != "na" {
 			t.Errorf("%s boot_code = %q, want na", sys, byName[sys].BootCode)
@@ -342,6 +343,7 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 		state.DiscTypeSegaCD: "sega-cd", state.DiscType3DO: "3do", state.DiscTypePCFX: "pc-fx",
 		state.DiscTypeJaguarCD: "jaguar-cd", state.DiscTypeCDi: "cdi",
 		state.DiscTypePCECD: "pc-engine-cd", state.DiscTypeNeoCD: "neo-geo-cd",
+		state.DiscTypeCD32: "cd32", state.DiscTypeFMTowns: "fm-towns", state.DiscTypePippin: "pippin",
 	} {
 		if byName[sys].Subdir != want {
 			t.Errorf("%s subdir = %q, want %q", sys, byName[sys].Subdir, want)

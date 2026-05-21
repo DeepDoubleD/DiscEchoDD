@@ -396,6 +396,9 @@ func main() {
 		{state.DiscTypeCDi, "cdi"},
 		{state.DiscTypePCECD, "pcecd"},
 		{state.DiscTypeNeoCD, "neocd"},
+		{state.DiscTypeCD32, "cd32"},
+		{state.DiscTypeFMTowns, "fmtowns"},
+		{state.DiscTypePippin, "pippin"},
 	} {
 		pipeReg.Register(cdgame.New(cdgame.Deps{
 			DiscType:        cd.dt,

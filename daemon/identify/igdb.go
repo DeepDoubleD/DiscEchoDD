@@ -66,6 +66,9 @@ var igdbPlatformID = map[state.DiscType]int{
 	state.DiscTypeCDi:      117,
 	state.DiscTypePCECD:    150,
 	state.DiscTypeNeoCD:    136,
+	state.DiscTypeCD32:     114,
+	state.DiscTypeFMTowns:  118,
+	state.DiscTypePippin:   476,
 }
 
 // NewIGDBClient constructs an IGDBClient. Empty credentials produce a
