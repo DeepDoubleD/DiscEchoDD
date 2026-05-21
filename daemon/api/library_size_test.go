@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/settings"
 )
@@ -90,9 +91,21 @@ func TestLibrarySizer_RecalcConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	// Force a synchronous walk so the snapshot is populated deterministically.
-	ls.walk()
-	sizes, measuredAt, _ := ls.Snapshot()
+	// At least one of the burst walks runs to completion (the rest no-op
+	// behind the `measuring` guard, which is the behaviour under test). Wait
+	// for it to land rather than forcing a synchronous walk — a forced walk
+	// would itself no-op while a burst walk is still in flight, leaving
+	// measuredAt zero and flaking the assertion below.
+	deadline := time.Now().Add(2 * time.Second)
+	var sizes []LibrarySize
+	var measuredAt time.Time
+	for time.Now().Before(deadline) {
+		sizes, measuredAt, _ = ls.Snapshot()
+		if !measuredAt.IsZero() {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if measuredAt.IsZero() {
 		t.Fatal("expected measuredAt to be set after walk")
 	}
