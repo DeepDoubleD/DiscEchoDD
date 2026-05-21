@@ -682,12 +682,155 @@ func (h *Handlers) forceReidentify(w http.ResponseWriter, r *http.Request, disc 
 
 	// Merge fresh fields into the existing disc row.
 	if fresh != nil {
+		if fresh.Type != "" && fresh.Type != disc.Type {
+			if err := h.Store.UpdateDiscType(ctx, disc.ID, fresh.Type); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
 		disc.Type = fresh.Type
 		disc.Title = fresh.Title
 		disc.Year = fresh.Year
 		disc.MetadataProvider = fresh.MetadataProvider
 		disc.MetadataID = fresh.MetadataID
 	}
+	disc.Candidates = cands
+	if err := h.Store.UpdateDiscMetadata(ctx, disc.ID, disc.Title, disc.Year, disc.MetadataProvider, disc.MetadataID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.Store.UpdateDiscCandidates(ctx, disc.ID, cands); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if h.Broadcaster != nil {
+		h.Broadcaster.Publish(state.Event{
+			Name:    "disc.identified",
+			Payload: map[string]any{"disc": disc, "candidates": cands},
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"disc": disc, "candidates": cands})
+}
+
+type setDiscTypeRequest struct {
+	Type string `json:"type"`
+}
+
+// validOverrideTarget reports whether dt is a legal manual-override target:
+// a disc type with a registered pipeline handler, excluding AUDIO_CD (whose
+// identify/rip path is TOC + MusicBrainz + whipper, not a drive-probe the
+// override flow can drive).
+func (h *Handlers) validOverrideTarget(dt state.DiscType) bool {
+	if dt == "" || dt == state.DiscTypeAudioCD {
+		return false
+	}
+	if h.Pipelines == nil {
+		return false
+	}
+	_, ok := h.Pipelines.Get(dt)
+	return ok
+}
+
+// SetDiscType manually overrides a disc's classified type (the
+// weak-signature safety net) and re-runs identify for the chosen type when
+// the disc is still in its drive. POST /api/discs/{id}/type {"type":"PSX"}.
+func (h *Handlers) SetDiscType(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+	disc, err := h.Store.GetDisc(ctx, id)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "disc not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var req setDiscTypeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	target := state.DiscType(strings.TrimSpace(req.Type))
+	if target == disc.Type {
+		writeError(w, http.StatusUnprocessableEntity, "disc is already type "+string(target))
+		return
+	}
+	if !h.validOverrideTarget(target) {
+		writeError(w, http.StatusUnprocessableEntity, "cannot override to type "+req.Type)
+		return
+	}
+
+	// Persist the type first — authoritative even if re-identify can't run.
+	if err := h.Store.UpdateDiscType(ctx, disc.ID, target); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	disc.Type = target
+
+	// Type-only fallback when there's no drive to probe.
+	if disc.DriveID == "" {
+		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
+		return
+	}
+	drv, err := h.Store.GetDrive(ctx, disc.DriveID)
+	if err != nil || drv.DevPath == "" {
+		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
+		return
+	}
+	busy, err := h.Store.HasActiveJobOnDrive(ctx, drv.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if busy {
+		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
+		return
+	}
+	claimed, err := h.Store.ClaimDriveForIdentify(ctx, drv.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !claimed {
+		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
+		return
+	}
+	defer func() {
+		if uerr := h.Store.UpdateDriveState(context.Background(), drv.ID, state.DriveStateIdle); uerr != nil {
+			slog.Warn("set-disc-type: release drive state", "err", uerr, "drive_id", drv.ID)
+		}
+	}()
+
+	handler, ok := h.Pipelines.Get(target)
+	if !ok {
+		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
+		return
+	}
+	fresh, cands, ierr := handler.Identify(ctx, drv)
+	switch {
+	case errors.Is(ierr, pipelines.ErrNoCandidates):
+		if cands == nil {
+			cands = []state.Candidate{}
+		}
+	case ierr != nil:
+		slog.Warn("set-disc-type: identify failed; keeping type only", "err", ierr, "type", target)
+		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
+		return
+	}
+	if fresh != nil {
+		disc.Title = fresh.Title
+		disc.Year = fresh.Year
+		disc.MetadataProvider = fresh.MetadataProvider
+		disc.MetadataID = fresh.MetadataID
+	}
+	h.finishTypeOverride(w, ctx, disc, cands)
+}
+
+// finishTypeOverride persists metadata + candidates, publishes
+// disc.identified, and writes the JSON response. disc.Type is already saved.
+func (h *Handlers) finishTypeOverride(w http.ResponseWriter, ctx context.Context, disc *state.Disc, cands []state.Candidate) {
 	disc.Candidates = cands
 	if err := h.Store.UpdateDiscMetadata(ctx, disc.ID, disc.Title, disc.Year, disc.MetadataProvider, disc.MetadataID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

@@ -963,6 +963,129 @@ func TestIdentifyDisc_GameDiscNoIGDB503(t *testing.T) {
 	}
 }
 
+// TestSetDiscType_NoDrive verifies that when a disc has no associated drive
+// (e.g. it was ejected), SetDiscType still persists the new type and returns
+// 200 with an empty candidates list.
+func TestSetDiscType_NoDrive(t *testing.T) {
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubDiscHandlerForType{dt: state.DiscTypeDVD})
+	h := apitestServer(t)
+	h.Pipelines = reg
+
+	// Disc with no drive — DriveID left empty.
+	disc := &state.Disc{Type: state.DiscTypeData, Title: "No Drive Disc"}
+	if err := h.Store.CreateDisc(context.Background(), disc); err != nil {
+		t.Fatal(err)
+	}
+
+	r := chi.NewRouter()
+	r.Post("/api/discs/{id}/type", h.SetDiscType)
+	body := bytes.NewReader(mustJSON(t, map[string]any{"type": "DVD"}))
+	req := httptest.NewRequest(http.MethodPost, "/api/discs/"+disc.ID+"/type", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Disc       state.Disc        `json:"disc"`
+		Candidates []state.Candidate `json:"candidates"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Disc.Type != state.DiscTypeDVD {
+		t.Errorf("response disc.type = %q, want DVD", resp.Disc.Type)
+	}
+	if resp.Candidates == nil {
+		t.Errorf("candidates should be empty slice, got nil")
+	}
+
+	// Verify persisted in DB.
+	got, err := h.Store.GetDisc(context.Background(), disc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != state.DiscTypeDVD {
+		t.Errorf("db disc.type = %q, want DVD", got.Type)
+	}
+}
+
+// TestSetDiscType_RejectsAudioCD verifies that AUDIO_CD is not a valid
+// override target — its identify path is TOC + MusicBrainz, not a
+// drive-probe the override flow drives.
+func TestSetDiscType_RejectsAudioCD(t *testing.T) {
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubDiscHandlerForType{dt: state.DiscTypeDVD})
+	h := apitestServer(t)
+	h.Pipelines = reg
+
+	drv := seedDrive(t, h)
+	disc := seedDiscOfType(t, h, drv.ID, state.DiscTypeDVD)
+
+	r := chi.NewRouter()
+	r.Post("/api/discs/{id}/type", h.SetDiscType)
+	body := bytes.NewReader(mustJSON(t, map[string]any{"type": "AUDIO_CD"}))
+	req := httptest.NewRequest(http.MethodPost, "/api/discs/"+disc.ID+"/type", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d body=%s, want 422", w.Code, w.Body.String())
+	}
+}
+
+// TestSetDiscType_RejectsUnknownType verifies that a type not registered in
+// the pipeline registry (and not a known override target) returns 422.
+func TestSetDiscType_RejectsUnknownType(t *testing.T) {
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubDiscHandlerForType{dt: state.DiscTypeDVD})
+	h := apitestServer(t)
+	h.Pipelines = reg
+
+	drv := seedDrive(t, h)
+	disc := seedDiscOfType(t, h, drv.ID, state.DiscTypeDVD)
+
+	r := chi.NewRouter()
+	r.Post("/api/discs/{id}/type", h.SetDiscType)
+	body := bytes.NewReader(mustJSON(t, map[string]any{"type": "NONSENSE"}))
+	req := httptest.NewRequest(http.MethodPost, "/api/discs/"+disc.ID+"/type", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d body=%s, want 422", w.Code, w.Body.String())
+	}
+}
+
+// TestSetDiscType_RejectsSameType verifies that sending the type the disc
+// already has returns 422 (nothing to override).
+func TestSetDiscType_RejectsSameType(t *testing.T) {
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubDiscHandlerForType{dt: state.DiscTypeDVD})
+	h := apitestServer(t)
+	h.Pipelines = reg
+
+	drv := seedDrive(t, h)
+	disc := seedDiscOfType(t, h, drv.ID, state.DiscTypeDVD)
+
+	r := chi.NewRouter()
+	r.Post("/api/discs/{id}/type", h.SetDiscType)
+	body := bytes.NewReader(mustJSON(t, map[string]any{"type": "DVD"}))
+	req := httptest.NewRequest(http.MethodPost, "/api/discs/"+disc.ID+"/type", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d body=%s, want 422", w.Code, w.Body.String())
+	}
+}
+
 func TestListDiscHistory_ReturnsDiscRows(t *testing.T) {
 	h := apitestServer(t)
 	drv := seedDrive(t, h)
