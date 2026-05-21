@@ -38,7 +38,20 @@
   $: candidates = liveDisc.candidates ?? [];
   $: topConfidence = candidates[0]?.confidence ?? 0;
   $: selectedCandidate = candidates[selectedIndex] ?? candidates[0];
-  $: isGameDisc = ['PSX', 'PS2', 'SAT', 'DC', 'XBOX'].includes(liveDisc.type);
+  $: isGameDisc = [
+    'PSX',
+    'PS2',
+    'SAT',
+    'DC',
+    'XBOX',
+    'SEGACD',
+    '3DO',
+    'PCFX',
+    'JAGCD',
+    'CDI',
+    'PCECD',
+    'NEOCD',
+  ].includes(liveDisc.type);
   // BDMV/UHD/DVD are the only disc types whose handlers implement
   // TitleScanner. Hide the Pick titles… affordance for everything else
   // so audio CDs / game discs / DATA discs don't show a button that
@@ -336,6 +349,13 @@
     { value: 'SAT', label: 'Sega Saturn' },
     { value: 'DC', label: 'Dreamcast' },
     { value: 'XBOX', label: 'Xbox' },
+    { value: 'SEGACD', label: 'Sega CD' },
+    { value: '3DO', label: '3DO' },
+    { value: 'PCFX', label: 'PC-FX' },
+    { value: 'JAGCD', label: 'Atari Jaguar CD' },
+    { value: 'CDI', label: 'Philips CD-i' },
+    { value: 'PCECD', label: 'PC Engine CD' },
+    { value: 'NEOCD', label: 'Neo Geo CD' },
     { value: 'DVD', label: 'DVD-Video' },
     { value: 'BDMV', label: 'Blu-ray' },
     { value: 'UHD', label: 'UHD Blu-ray' },
