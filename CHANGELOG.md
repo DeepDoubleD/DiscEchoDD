@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.30.3] - 2026-05-21
+
 ### Added
 - DiscEcho is now released under the MIT License (`LICENSE`).
 - GitHub issue templates for bug reports and feature requests.
