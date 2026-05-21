@@ -53,7 +53,10 @@ func BuildSuccessNotification(disc *state.Disc, job *state.Job, prof *state.Prof
 		b.line("Saved to", saved)
 
 	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT,
-		state.DiscTypeDC, state.DiscTypeXBOX:
+		state.DiscTypeDC, state.DiscTypeXBOX,
+		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
+		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
+		state.DiscTypeNeoCD:
 		b.headline(titleYear(mdEscape(disc.Title), disc.Year), "ripped successfully")
 		b.line("System", firstNonEmpty(metaStr(meta, "system"), discTypeLabel(disc.Type)))
 		b.line("Region", candidateRegion(disc))
@@ -165,6 +168,20 @@ func discTypeLabel(t state.DiscType) string {
 		return "Dreamcast"
 	case state.DiscTypeXBOX:
 		return "Xbox"
+	case state.DiscTypeSegaCD:
+		return "Sega CD"
+	case state.DiscType3DO:
+		return "3DO"
+	case state.DiscTypePCFX:
+		return "PC-FX"
+	case state.DiscTypeJaguarCD:
+		return "Atari Jaguar CD"
+	case state.DiscTypeCDi:
+		return "Philips CD-i"
+	case state.DiscTypePCECD:
+		return "PC Engine CD"
+	case state.DiscTypeNeoCD:
+		return "Neo Geo CD"
 	case state.DiscTypeData:
 		return "Data disc"
 	default:
@@ -308,7 +325,10 @@ func pickAttachment(disc *state.Disc, meta map[string]any) []string {
 			}
 		}
 	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT,
-		state.DiscTypeDC, state.DiscTypeXBOX:
+		state.DiscTypeDC, state.DiscTypeXBOX,
+		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
+		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
+		state.DiscTypeNeoCD:
 		url = metaStr(meta, "cover_url")
 	default:
 		url = metaStr(meta, "poster_url")

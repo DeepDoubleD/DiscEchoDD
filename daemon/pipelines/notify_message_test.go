@@ -131,6 +131,66 @@ func TestBuildSuccess_MarkdownEscapeAndNoMeta(t *testing.T) {
 	}
 }
 
+func TestDiscTypeLabel_Tier1CDConsoles(t *testing.T) {
+	cases := []struct {
+		dt   state.DiscType
+		want string
+	}{
+		{state.DiscTypeSegaCD, "Sega CD"},
+		{state.DiscType3DO, "3DO"},
+		{state.DiscTypePCFX, "PC-FX"},
+		{state.DiscTypeJaguarCD, "Atari Jaguar CD"},
+		{state.DiscTypeCDi, "Philips CD-i"},
+		{state.DiscTypePCECD, "PC Engine CD"},
+		{state.DiscTypeNeoCD, "Neo Geo CD"},
+	}
+	for _, tc := range cases {
+		if got := discTypeLabel(tc.dt); got != tc.want {
+			t.Errorf("discTypeLabel(%q) = %q, want %q", tc.dt, got, tc.want)
+		}
+	}
+}
+
+func TestBuildSuccess_Game_SegaCD(t *testing.T) {
+	disc := &state.Disc{
+		Type: state.DiscTypeSegaCD, Title: "Sonic CD", Year: 1993,
+		Candidates:   []state.Candidate{{Region: "JPN"}},
+		MetadataJSON: `{"cover_url":"https://img/sonic.jpg"}`,
+	}
+	prof := &state.Profile{Engine: "redumper+chdman", Container: "CHD"}
+	job := jobWithMove(500_000_000, []string{"/library/games/Sonic CD.chd"}, nil)
+
+	msg := BuildSuccessNotification(disc, job, prof)
+	for _, want := range []string{"Sonic CD (1993)", "Region:** JPN", "Format:** CHD"} {
+		if !strings.Contains(msg.Body, want) {
+			t.Errorf("body missing %q\n%s", want, msg.Body)
+		}
+	}
+	// must NOT fall through to the movie/default path
+	if strings.Contains(msg.Body, "Director:") || strings.Contains(msg.Body, "Files:") {
+		t.Errorf("SegaCD disc rendered as movie:\n%s", msg.Body)
+	}
+	if len(msg.Attachments) != 1 || msg.Attachments[0] != "https://img/sonic.jpg" {
+		t.Errorf("cover attachment: %v", msg.Attachments)
+	}
+}
+
+func TestPickAttachment_Tier1CDConsoles_UseCoverURL(t *testing.T) {
+	newTypes := []state.DiscType{
+		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
+		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
+		state.DiscTypeNeoCD,
+	}
+	meta := map[string]any{"cover_url": "https://img/cover.jpg", "poster_url": "https://img/poster.jpg"}
+	for _, dt := range newTypes {
+		disc := &state.Disc{Type: dt}
+		got := pickAttachment(disc, meta)
+		if len(got) != 1 || got[0] != "https://img/cover.jpg" {
+			t.Errorf("pickAttachment(%q) = %v, want cover_url", dt, got)
+		}
+	}
+}
+
 func TestBuildFailure(t *testing.T) {
 	disc := &state.Disc{Type: state.DiscTypeDVD, Title: "Some Movie", Year: 2001}
 	prof := &state.Profile{Engine: "MakeMKV", Container: "MKV"}
