@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// titleSimilarity returns a 0..1 Jaccard similarity between two title
+// TitleSimilarity returns a 0..1 Jaccard similarity between two title
 // strings, computed over their lowercased word tokens. Used to rank
 // TMDB search results by how well each candidate's title actually
 // matches the disc-label-derived query, instead of letting TMDB's
@@ -16,7 +16,7 @@ import (
 // Tokenisation: split on non-alphanumeric runes, lowercase, strip
 // empties. Digit tokens 1..10 are folded to their English word form
 // ("3" ↔ "three") so a "Volume 3" / "Volume Three" pair matches.
-func titleSimilarity(query, title string) float64 {
+func TitleSimilarity(query, title string) float64 {
 	a := tokenSet(tokenise(query))
 	b := tokenSet(tokenise(title))
 	if len(a) == 0 && len(b) == 0 {

@@ -27,9 +27,9 @@ func TestTitleSimilarity_JackassVolume3Label(t *testing.T) {
 		{"The Making of 'Jackass 3D'", 1.0 / 7.0},
 	}
 	for _, tc := range cases {
-		got := titleSimilarity(q, tc.title)
+		got := TitleSimilarity(q, tc.title)
 		if math.Abs(got-tc.want) > 1e-9 {
-			t.Errorf("titleSimilarity(%q, %q) = %v; want %v", q, tc.title, got, tc.want)
+			t.Errorf("TitleSimilarity(%q, %q) = %v; want %v", q, tc.title, got, tc.want)
 		}
 	}
 }
@@ -43,9 +43,9 @@ func TestTitleSimilarity_JackassVolume3Label(t *testing.T) {
 // tie in favour of the wrong title.
 func TestTitleSimilarity_Jackass3Label(t *testing.T) {
 	q := "Jackass 3"
-	if got := titleSimilarity(q, "Jackass 3.5"); got >= titleSimilarity(q, "Jackass Volume Three") {
+	if got := TitleSimilarity(q, "Jackass 3.5"); got >= TitleSimilarity(q, "Jackass Volume Three") {
 		t.Errorf("Jackass 3.5 should NOT outscore Jackass Volume Three for query %q: 3.5=%v, Volume Three=%v",
-			q, got, titleSimilarity(q, "Jackass Volume Three"))
+			q, got, TitleSimilarity(q, "Jackass Volume Three"))
 	}
 }
 
@@ -78,35 +78,35 @@ func titlesOf(cs []state.Candidate) []string {
 
 func TestTitleSimilarity_Symmetric(t *testing.T) {
 	a, b := "Arrival", "Arrival 2016"
-	if titleSimilarity(a, b) != titleSimilarity(b, a) {
+	if TitleSimilarity(a, b) != TitleSimilarity(b, a) {
 		t.Errorf("similarity is not symmetric: %v vs %v",
-			titleSimilarity(a, b), titleSimilarity(b, a))
+			TitleSimilarity(a, b), TitleSimilarity(b, a))
 	}
 }
 
 func TestTitleSimilarity_DigitWordEquivalence(t *testing.T) {
-	if got := titleSimilarity("Volume 3", "Volume Three"); got != 1.0 {
+	if got := TitleSimilarity("Volume 3", "Volume Three"); got != 1.0 {
 		t.Errorf("3↔three should match: got %v", got)
 	}
-	if got := titleSimilarity("Top 10 Hits", "Top Ten Hits"); got != 1.0 {
+	if got := TitleSimilarity("Top 10 Hits", "Top Ten Hits"); got != 1.0 {
 		t.Errorf("10↔ten should match: got %v", got)
 	}
 }
 
 func TestTitleSimilarity_EmptyInputs(t *testing.T) {
-	if got := titleSimilarity("", ""); got != 1.0 {
+	if got := TitleSimilarity("", ""); got != 1.0 {
 		t.Errorf("both empty: want 1.0, got %v", got)
 	}
-	if got := titleSimilarity("", "anything"); got != 0.0 {
+	if got := TitleSimilarity("", "anything"); got != 0.0 {
 		t.Errorf("one empty: want 0.0, got %v", got)
 	}
-	if got := titleSimilarity("anything", ""); got != 0.0 {
+	if got := TitleSimilarity("anything", ""); got != 0.0 {
 		t.Errorf("other empty: want 0.0, got %v", got)
 	}
 }
 
 func TestTitleSimilarity_CaseAndPunctuationInvariant(t *testing.T) {
-	if got := titleSimilarity("THE MATRIX", "the.matrix"); got != 1.0 {
+	if got := TitleSimilarity("THE MATRIX", "the.matrix"); got != 1.0 {
 		t.Errorf("case + punctuation: want 1.0, got %v", got)
 	}
 }

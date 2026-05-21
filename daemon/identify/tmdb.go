@@ -413,8 +413,8 @@ func (c *tmdbClient) SearchBoth(ctx context.Context, query string) ([]state.Cand
 	// favour of irrelevant-but-popular titles.
 	sort.SliceStable(out, func(i, j int) bool {
 		if query != "" {
-			si := titleSimilarity(query, out[i].Title)
-			sj := titleSimilarity(query, out[j].Title)
+			si := TitleSimilarity(query, out[i].Title)
+			sj := TitleSimilarity(query, out[j].Title)
 			if si != sj {
 				return si > sj
 			}
@@ -460,8 +460,8 @@ func rankConfidence(rank int) int {
 func applyRankConfidence(cands []state.Candidate, query string) {
 	sort.SliceStable(cands, func(i, j int) bool {
 		if query != "" {
-			si := titleSimilarity(query, cands[i].Title)
-			sj := titleSimilarity(query, cands[j].Title)
+			si := TitleSimilarity(query, cands[i].Title)
+			sj := TitleSimilarity(query, cands[j].Title)
 			if si != sj {
 				return si > sj
 			}
