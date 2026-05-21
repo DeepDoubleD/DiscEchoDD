@@ -90,6 +90,27 @@ describe('DiscMetadataPane', () => {
     expect(getByText('Final Fantasy VII')).toBeInTheDocument();
   });
 
+  it('shows IGDB summary, genres and release year for a game disc', () => {
+    const disc: Disc = {
+      id: 'g3',
+      type: 'PSX',
+      title: 'Gran Turismo',
+      candidates: [],
+      created_at: '2026-05-13T12:00:00Z',
+      metadata_json: JSON.stringify({
+        system: 'Sony PlayStation',
+        serial: 'SCES_009.84',
+        summary: 'A racing sim.',
+        genres: ['Racing', 'Simulator'],
+        release_year: 1997,
+      }),
+    };
+    const { getByText } = render(DiscMetadataPane, { disc });
+    expect(getByText('A racing sim.')).toBeInTheDocument();
+    expect(getByText('Racing · Simulator')).toBeInTheDocument();
+    expect(getByText('1997')).toBeInTheDocument();
+  });
+
   it('renders a game disc whose candidates are null without crashing', () => {
     // The daemon marshals an empty candidate slice to JSON null, so a
     // detected-but-unidentified game/data disc arrives with candidates:null.

@@ -25,6 +25,10 @@
     system?: string;
     serial?: string;
     redump_md5?: string;
+    summary?: string;
+    genres?: string[];
+    platforms?: string[];
+    release_year?: number;
   };
 
   function parseJSON<T>(s: string | undefined): T {
@@ -173,7 +177,10 @@
             {/if}
           </dl>
         {:else if kind === 'game'}
-          <dl class="grid gap-x-3 gap-y-1.5" style="grid-template-columns: auto 1fr">
+          {#if gameMeta.summary}
+            <p class="italic text-text-2">{gameMeta.summary}</p>
+          {/if}
+          <dl class="mt-3 grid gap-x-3 gap-y-1.5" style="grid-template-columns: auto 1fr">
             {#if gameMeta.system}
               <dt class="text-[10px] uppercase tracking-[0.12em] text-text-3">System</dt>
               <dd>{gameMeta.system}</dd>
@@ -181,6 +188,14 @@
             {#if disc.candidates?.[0]?.region}
               <dt class="text-[10px] uppercase tracking-[0.12em] text-text-3">Region</dt>
               <dd>{disc.candidates[0].region}</dd>
+            {/if}
+            {#if gameMeta.release_year}
+              <dt class="text-[10px] uppercase tracking-[0.12em] text-text-3">Released</dt>
+              <dd>{gameMeta.release_year}</dd>
+            {/if}
+            {#if gameMeta.genres?.length}
+              <dt class="text-[10px] uppercase tracking-[0.12em] text-text-3">Genres</dt>
+              <dd>{gameMeta.genres.join(' · ')}</dd>
             {/if}
             {#if gameMeta.serial}
               <dt class="text-[10px] uppercase tracking-[0.12em] text-text-3">Serial</dt>
