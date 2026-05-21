@@ -56,3 +56,47 @@ func TestHandler_Identify_PropagatesErrNoCandidates(t *testing.T) {
 		t.Fatalf("Identify() err = %v, want ErrNoCandidates", err)
 	}
 }
+
+func TestHandler_Plan_TranscodeSkipped(t *testing.T) {
+	plan := cdgame.New(cdgame.Deps{DiscType: state.DiscTypePSX}).Plan(&state.Disc{}, &state.Profile{})
+	if len(plan) != len(state.CanonicalSteps()) {
+		t.Fatalf("Plan len = %d, want %d", len(plan), len(state.CanonicalSteps()))
+	}
+	var sawTranscodeSkipped bool
+	for _, p := range plan {
+		if p.ID == state.StepTranscode {
+			sawTranscodeSkipped = p.Skip
+		}
+	}
+	if !sawTranscodeSkipped {
+		t.Fatalf("expected transcode step to be skipped")
+	}
+}
+
+func TestHandler_PlanRip_TranscodeHalfSkipped(t *testing.T) {
+	plan := cdgame.New(cdgame.Deps{DiscType: state.DiscTypePSX}).PlanRip(&state.Disc{}, &state.Profile{})
+	skip := map[state.StepID]bool{}
+	for _, p := range plan {
+		skip[p.ID] = p.Skip
+	}
+	for _, sid := range []state.StepID{state.StepTranscode, state.StepCompress, state.StepMove, state.StepNotify} {
+		if !skip[sid] {
+			t.Fatalf("PlanRip: expected %s skipped in rip-half", sid)
+		}
+	}
+	if skip[state.StepRip] {
+		t.Fatalf("PlanRip: rip step must not be skipped")
+	}
+}
+
+func TestHandler_PlanTranscode_TranscodeStepSkipped(t *testing.T) {
+	plan := cdgame.New(cdgame.Deps{DiscType: state.DiscTypePSX}).PlanTranscode(&state.Disc{}, &state.Profile{})
+	if len(plan) != len(state.CanonicalTranscodeSteps()) {
+		t.Fatalf("PlanTranscode len = %d, want %d", len(plan), len(state.CanonicalTranscodeSteps()))
+	}
+	for _, p := range plan {
+		if p.ID == state.StepTranscode && !p.Skip {
+			t.Fatalf("PlanTranscode: transcode step must be skipped")
+		}
+	}
+}

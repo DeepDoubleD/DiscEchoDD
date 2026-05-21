@@ -71,3 +71,40 @@ func (h *Handler) DiscType() state.DiscType { return h.deps.DiscType }
 func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, []state.Candidate, error) {
 	return h.deps.Identifier.Identify(ctx, drv)
 }
+
+// Plan returns the 7-active-step plan; transcode is skipped. Used by the
+// monolithic Run fallback.
+func (h *Handler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
+	skipped := map[state.StepID]bool{state.StepTranscode: true}
+	out := make([]pipelines.StepPlan, 0, len(state.CanonicalSteps()))
+	for _, sid := range state.CanonicalSteps() {
+		out = append(out, pipelines.StepPlan{ID: sid, Skip: skipped[sid]})
+	}
+	return out
+}
+
+// PlanRip — rip-half: detect, identify, rip, eject active; transcode-half
+// marked Skip.
+func (h *Handler) PlanRip(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
+	transcodeHalf := map[state.StepID]bool{
+		state.StepTranscode: true,
+		state.StepCompress:  true,
+		state.StepMove:      true,
+		state.StepNotify:    true,
+	}
+	out := make([]pipelines.StepPlan, 0, 8)
+	for _, sid := range state.CanonicalSteps() {
+		out = append(out, pipelines.StepPlan{ID: sid, Skip: transcodeHalf[sid]})
+	}
+	return out
+}
+
+// PlanTranscode — transcode-half: CD-game discs have no transcode (skip),
+// runs compress (chdman), move, notify.
+func (h *Handler) PlanTranscode(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
+	out := make([]pipelines.StepPlan, 0, 4)
+	for _, sid := range state.CanonicalTranscodeSteps() {
+		out = append(out, pipelines.StepPlan{ID: sid, Skip: sid == state.StepTranscode})
+	}
+	return out
+}
