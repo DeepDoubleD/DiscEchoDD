@@ -38,6 +38,7 @@ type discFlow struct {
 	classifier  identify.Classifier
 	pipelines   *pipelines.Registry
 	identifyDur time.Duration
+	igdb        identify.IGDBClient
 }
 
 // HandleManual fires the same disc-flow as a real udev uevent for the
@@ -165,6 +166,9 @@ func (df *discFlow) handle(ev drive.Uevent) {
 		Name:    "disc.identified",
 		Payload: map[string]any{"disc": disc, "candidates": candidates},
 	})
+	// Best-effort async IGDB enrichment (cover + summary/genres/year). The
+	// card is already published; this pushes a disc.changed when it lands.
+	go df.enrichGameDiscFromIGDB(disc.ID, disc.Type, disc.Title)
 	// Identify is done. The disc is now waiting for the user to pick a
 	// candidate and start a job; the drive itself is no longer doing
 	// any work, so flip it back to idle. Leaving it in `identifying`

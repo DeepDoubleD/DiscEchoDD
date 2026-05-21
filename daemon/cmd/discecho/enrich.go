@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
+	"time"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
@@ -11,6 +14,10 @@ import (
 // as the same game only when its title clears this Jaccard similarity against
 // the dat/bootcode-identified title. A wrong cover is worse than none.
 const igdbMinSimilarity = 0.6
+
+// igdbEnrichTimeout bounds the background enrichment round-trip (Twitch OAuth
+// + IGDB search + details).
+const igdbEnrichTimeout = 15 * time.Second
 
 // gameDiscForIGDB reports whether the disc type is a game type IGDB enriches.
 func gameDiscForIGDB(t state.DiscType) bool {
@@ -80,4 +87,55 @@ func mergeGameMetadata(existingJSON string, d *identify.IGDBGameDetails) (string
 		return existingJSON, false, err
 	}
 	return string(body), true, nil
+}
+
+// enrichGameDiscFromIGDB augments an already-identified game disc with IGDB
+// cover art + rich metadata (summary, genres, platforms, release year) when
+// IGDB is configured. Best-effort and asynchronous: identify has already
+// published the disc card, so a failure here just leaves the card with its
+// dat/bootcode metadata. Never touches identity (metadata_id/title/candidates);
+// it re-reads and merges metadata_json so a concurrent Start isn't stomped.
+func (df *discFlow) enrichGameDiscFromIGDB(discID string, dt state.DiscType, title string) {
+	if df.igdb == nil || !df.igdb.Configured() || title == "" || !gameDiscForIGDB(dt) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), igdbEnrichTimeout)
+	defer cancel()
+
+	cands, err := df.igdb.SearchGames(ctx, title, dt)
+	if err != nil {
+		slog.Warn("igdb enrich: search", "err", err, "title", title)
+		return
+	}
+	match, ok := bestIGDBMatch(cands, title)
+	if !ok {
+		return
+	}
+	details, err := df.igdb.GameDetails(ctx, match.IGDBID)
+	if err != nil {
+		slog.Warn("igdb enrich: details", "err", err, "igdb_id", match.IGDBID)
+		return
+	}
+	disc, err := df.store.GetDisc(ctx, discID)
+	if err != nil {
+		slog.Warn("igdb enrich: get disc", "err", err, "disc_id", discID)
+		return
+	}
+	merged, changed, err := mergeGameMetadata(disc.MetadataJSON, details)
+	if err != nil {
+		slog.Warn("igdb enrich: merge", "err", err, "disc_id", discID)
+		return
+	}
+	if !changed {
+		return
+	}
+	if err := df.store.UpdateDiscMetadataBlob(ctx, discID, merged); err != nil {
+		slog.Warn("igdb enrich: persist", "err", err, "disc_id", discID)
+		return
+	}
+	df.bc.Publish(state.Event{
+		Name:    "disc.changed",
+		Payload: map[string]any{"id": discID, "metadata_json": merged},
+	})
+	slog.Info("igdb enrich: applied", "disc_id", discID, "igdb_id", match.IGDBID)
 }

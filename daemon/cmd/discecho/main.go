@@ -497,6 +497,7 @@ func main() {
 		bc:         bc,
 		classifier: classifier,
 		pipelines:  pipeReg,
+		igdb:       igdbClient,
 		// 120s is enough for cd-info + fs.List + sysCNF.Probe on a slow
 		// drive where each probe individually takes 20-25s (observed on
 		// the ASUS SDRW-08D2S-U with a chilled PSX disc). 30s was too

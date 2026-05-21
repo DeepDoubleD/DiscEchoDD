@@ -1,12 +1,118 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
+
+type stubIGDBEnrich struct {
+	cands      []state.Candidate
+	details    *identify.IGDBGameDetails
+	configured bool
+}
+
+func (s *stubIGDBEnrich) SearchGames(context.Context, string, state.DiscType) ([]state.Candidate, error) {
+	return s.cands, nil
+}
+func (s *stubIGDBEnrich) GameDetails(context.Context, int) (*identify.IGDBGameDetails, error) {
+	return s.details, nil
+}
+func (s *stubIGDBEnrich) Configured() bool                { return s.configured }
+func (s *stubIGDBEnrich) Reconfigure(identify.IGDBConfig) {}
+
+func newEnrichTestStore(t *testing.T) *state.Store {
+	t.Helper()
+	dir := t.TempDir()
+	db, err := state.Open(filepath.Join(dir, "t.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return state.NewStore(db)
+}
+
+func TestEnrichGameDiscFromIGDB_AppliesCoverAndMetadata(t *testing.T) {
+	store := newEnrichTestStore(t)
+	ctx := context.Background()
+	drv := &state.Drive{DevPath: "/dev/sr0", Model: "X", Bus: "Y", State: state.DriveStateIdle, LastSeenAt: time.Now()}
+	if err := store.UpsertDrive(ctx, drv); err != nil {
+		t.Fatal(err)
+	}
+	disc := &state.Disc{
+		Type: state.DiscTypePSX, DriveID: drv.ID, Title: "Gran Turismo",
+		MetadataProvider: "DuckStation gamedb.yaml", MetadataID: "SCES_009.84",
+		MetadataJSON: `{"system":"Sony PlayStation","serial":"SCES_009.84"}`,
+	}
+	if err := store.CreateDisc(ctx, disc); err != nil {
+		t.Fatal(err)
+	}
+
+	df := &discFlow{
+		store: store,
+		bc:    state.NewBroadcaster(),
+		igdb: &stubIGDBEnrich{
+			configured: true,
+			cands:      []state.Candidate{{Source: "IGDB", Title: "Gran Turismo", IGDBID: 999}},
+			details: &identify.IGDBGameDetails{
+				ID: 999, Name: "Gran Turismo", Year: 1997,
+				CoverURL:  "https://images.igdb.com/cover.jpg",
+				Summary:   "A racing sim.",
+				Genres:    []string{"Racing", "Simulator"},
+				Platforms: []string{"PlayStation"},
+			},
+		},
+	}
+
+	df.enrichGameDiscFromIGDB(disc.ID, disc.Type, disc.Title)
+
+	got, err := store.GetDisc(ctx, disc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MetadataID != "SCES_009.84" {
+		t.Errorf("metadata_id changed to %q (identity must be untouched)", got.MetadataID)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got.MetadataJSON), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["cover_url"] != "https://images.igdb.com/cover.jpg" {
+		t.Errorf("cover_url = %v", m["cover_url"])
+	}
+	if m["summary"] != "A racing sim." {
+		t.Errorf("summary = %v", m["summary"])
+	}
+	if m["serial"] != "SCES_009.84" {
+		t.Errorf("serial lost: %v", m["serial"])
+	}
+}
+
+func TestEnrichGameDiscFromIGDB_NotConfigured_NoOp(t *testing.T) {
+	store := newEnrichTestStore(t)
+	ctx := context.Background()
+	drv := &state.Drive{DevPath: "/dev/sr0", Model: "X", Bus: "Y", State: state.DriveStateIdle, LastSeenAt: time.Now()}
+	if err := store.UpsertDrive(ctx, drv); err != nil {
+		t.Fatal(err)
+	}
+	disc := &state.Disc{Type: state.DiscTypePSX, DriveID: drv.ID, Title: "Gran Turismo", MetadataJSON: `{"serial":"X"}`}
+	if err := store.CreateDisc(ctx, disc); err != nil {
+		t.Fatal(err)
+	}
+
+	df := &discFlow{store: store, bc: state.NewBroadcaster(), igdb: &stubIGDBEnrich{configured: false}}
+	df.enrichGameDiscFromIGDB(disc.ID, disc.Type, disc.Title)
+
+	got, _ := store.GetDisc(ctx, disc.ID)
+	if got.MetadataJSON != `{"serial":"X"}` {
+		t.Errorf("metadata_json changed despite unconfigured IGDB: %q", got.MetadataJSON)
+	}
+}
 
 func TestBestIGDBMatch_AcceptsAboveThreshold(t *testing.T) {
 	cands := []state.Candidate{
