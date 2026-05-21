@@ -59,6 +59,12 @@ type Deps struct {
 	// RipFormatCD (bin+cue) when zero.
 	RipFormat RipFormat
 
+	// PostRipIdentify makes RunTranscode identify the disc post-rip via a
+	// Redump MD5 dat lookup (filling title/year) instead of boot-code
+	// MD5-verify. For CD consoles with no pre-rip boot code (Sega CD, 3DO,
+	// PC-FX, ...); psx/ps2/saturn leave this false.
+	PostRipIdentify bool
+
 	Redumper RedumperRipper
 	CHDMan   CHDManCompressor
 	RedumpDB *identify.RedumpDB // post-rip MD5 verify (boot-code keyed)
@@ -211,17 +217,10 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 	}
 
 	sink.OnStepStart(state.StepCompress)
-	if h.deps.RedumpDB != nil && disc.MetadataID != "" {
-		if entry := h.deps.RedumpDB.LookupByBootCode(disc.MetadataID); entry != nil && entry.MD5 != "" {
-			got, err := pipelines.MD5File(md5TargetPath)
-			if err != nil {
-				slog.Warn("cdgame: md5 verify failed (couldn't hash)", "type", h.deps.DiscType, "err", err)
-			} else if got != entry.MD5 {
-				slog.Warn("cdgame: md5 mismatch", "type", h.deps.DiscType, "want", entry.MD5, "got", got)
-			} else {
-				slog.Info("cdgame: md5 verify ok", "type", h.deps.DiscType, "md5", got)
-			}
-		}
+	if h.deps.PostRipIdentify {
+		h.md5Identify(md5TargetPath, disc)
+	} else {
+		h.md5Verify(md5TargetPath, disc)
 	}
 	chdPath := filepath.Join(result.SpoolPath, spoolName+".chd")
 	if err := h.deps.CHDMan.CreateCHD(ctx, chdInputPath, chdPath, pipelines.NewStepSink(sink, state.StepCompress)); err != nil {
@@ -257,7 +256,66 @@ func (h *Handler) createWorkDir(discID string) (string, error) {
 	return pipelines.CreateWorkDir(h.deps.WorkRoot, h.deps.WorkPrefix, discID)
 }
 
+// md5Verify checks the ripped file against the boot-code-keyed Redump dat
+// entry. Used when the disc was pre-identified by boot code (PSX, PS2,
+// Saturn). Logs only — a mismatch does not abort the pipeline.
+func (h *Handler) md5Verify(path string, disc *state.Disc) {
+	if h.deps.RedumpDB != nil && disc.MetadataID != "" {
+		if entry := h.deps.RedumpDB.LookupByBootCode(disc.MetadataID); entry != nil && entry.MD5 != "" {
+			got, err := pipelines.MD5File(path)
+			if err != nil {
+				slog.Warn("cdgame: md5 verify failed (couldn't hash)", "type", h.deps.DiscType, "err", err)
+			} else if got != entry.MD5 {
+				slog.Warn("cdgame: md5 mismatch", "type", h.deps.DiscType, "want", entry.MD5, "got", got)
+			} else {
+				slog.Info("cdgame: md5 verify ok", "type", h.deps.DiscType, "md5", got)
+			}
+		}
+	}
+}
+
+// md5Identify hashes the ripped track and looks it up in the Redump dat,
+// filling disc title/year/region in place on a hit. For CD consoles with no
+// pre-rip boot code this is the only metadata source.
+func (h *Handler) md5Identify(path string, disc *state.Disc) {
+	if h.deps.RedumpDB == nil {
+		slog.Warn("cdgame: no RedumpDB; skipping post-rip identify", "type", h.deps.DiscType)
+		return
+	}
+	got, err := pipelines.MD5File(path)
+	if err != nil {
+		slog.Warn("cdgame: md5 hash failed", "type", h.deps.DiscType, "err", err)
+		return
+	}
+	entry := h.deps.RedumpDB.LookupByMD5(got)
+	if entry == nil {
+		slog.Warn("cdgame: no Redump match", "type", h.deps.DiscType, "md5", got)
+		return
+	}
+	slog.Info("cdgame: md5 identify ok", "type", h.deps.DiscType, "title", entry.Title, "md5", got)
+	disc.Title = entry.Title
+	disc.Year = entry.Year
+	disc.MetadataProvider = "Redump"
+	disc.MetadataID = entry.BootCode
+	disc.Candidates = []state.Candidate{{
+		Source:     "Redump",
+		Title:      entry.Title,
+		Year:       entry.Year,
+		Region:     entry.Region,
+		Confidence: 100,
+	}}
+}
+
+// NoBootIdentifier is the pre-rip Identifier for CD consoles with no boot
+// code: it sets the disc type + drive and defers naming to post-rip MD5.
+type NoBootIdentifier struct{ DiscType state.DiscType }
+
+func (i NoBootIdentifier) Identify(_ context.Context, drv *state.Drive) (*state.Disc, []state.Candidate, error) {
+	return &state.Disc{Type: i.DiscType, DriveID: drv.ID}, nil, pipelines.ErrNoCandidates
+}
+
 var (
 	_ pipelines.Handler           = (*Handler)(nil)
 	_ pipelines.SplittableHandler = (*Handler)(nil)
+	_ Identifier                  = NoBootIdentifier{}
 )

@@ -2,12 +2,16 @@ package cdgame_test
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/cdgame"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/testutil"
@@ -190,5 +194,117 @@ func TestHandler_RunRip_RipFailure(t *testing.T) {
 	err := h.Run(context.Background(), &state.Drive{DevPath: "/dev/sr0"}, &state.Disc{ID: "d"}, &state.Profile{OutputPathTemplate: "{{.Title}}.chd"}, sink)
 	if err == nil || !strings.Contains(err.Error(), "disc unreadable") {
 		t.Errorf("want rip error containing \"disc unreadable\", got %v", err)
+	}
+}
+
+// makeRedumpDB writes a minimal Redump dat file containing one entry keyed by
+// the MD5 of binData and loads it into a *identify.RedumpDB. Mirrors the
+// dcDB helper in dreamcast_test.go.
+func makeRedumpDB(t *testing.T, bootCode, title, region string, year int, binData []byte) *identify.RedumpDB {
+	t.Helper()
+	sum := md5.Sum(binData)
+	md5hex := hex.EncodeToString(sum[:])
+
+	gameName := fmt.Sprintf("%s (%s) (%d)", title, region, year)
+	romName := fmt.Sprintf("%s (%s) (%d) [%s].bin", title, region, year, bootCode)
+	xml := `<?xml version="1.0"?>` + "\n" +
+		`<datafile>` + "\n" +
+		`  <game name="` + gameName + `">` + "\n" +
+		`    <description>` + gameName + `</description>` + "\n" +
+		`    <rom name="` + romName + `" md5="` + md5hex + `"/>` + "\n" +
+		`  </game>` + "\n" +
+		`</datafile>` + "\n"
+	f, err := os.CreateTemp(t.TempDir(), "redump-*.dat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(xml); err != nil {
+		t.Fatal(err)
+	}
+	name := f.Name()
+	_ = f.Close()
+	db, err := identify.LoadRedumpDB(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+// TestHandler_RunTranscode_MD5Identify verifies that when PostRipIdentify is
+// true the compress step hashes the ripped .bin, hits the Redump dat, and
+// fills disc.Title/Year/MetadataProvider/MetadataID/Candidates in place.
+func TestHandler_RunTranscode_MD5Identify(t *testing.T) {
+	// fakeRedumper writes "BINDATA" to rip.bin; MD5 = 9258e2e3e92d88a2c680770b886d1163
+	binData := []byte("BINDATA")
+	db := makeRedumpDB(t, "T-123456N", "Sonic CD", "USA", 1993, binData)
+
+	lib := t.TempDir()
+	work := t.TempDir()
+	h := cdgame.New(cdgame.Deps{
+		DiscType:        state.DiscTypePSX, // type is arbitrary for this test
+		WorkPrefix:      "cdgame",
+		PostRipIdentify: true,
+		Identifier:      stubIdentifier{disc: &state.Disc{}},
+		Redumper:        &fakeRedumper{},
+		CHDMan:          &fakeCHDMan{},
+		RedumpDB:        db,
+		LibraryRoot:     lib,
+		WorkRoot:        work,
+	})
+
+	disc := &state.Disc{ID: "disc-segacd-1", Title: "Unknown Disc", Year: 0}
+	prof := &state.Profile{OutputPathTemplate: "{{.Title}} ({{.Year}})/{{.Title}}.chd"}
+	sink := testutil.NewRecordingSink()
+
+	if err := h.Run(context.Background(), &state.Drive{DevPath: "/dev/sr0"}, disc, prof, sink); err != nil {
+		t.Fatalf("Run() err = %v", err)
+	}
+
+	if disc.Title != "Sonic CD" {
+		t.Errorf("disc.Title = %q, want %q", disc.Title, "Sonic CD")
+	}
+	if disc.Year != 1993 {
+		t.Errorf("disc.Year = %d, want 1993", disc.Year)
+	}
+	if disc.MetadataProvider != "Redump" {
+		t.Errorf("disc.MetadataProvider = %q, want Redump", disc.MetadataProvider)
+	}
+	if disc.MetadataID != "T-123456N" {
+		t.Errorf("disc.MetadataID = %q, want T-123456N", disc.MetadataID)
+	}
+	if len(disc.Candidates) == 0 || disc.Candidates[0].Source != "Redump" {
+		t.Errorf("disc.Candidates = %+v, want one Redump candidate", disc.Candidates)
+	}
+	if len(disc.Candidates) > 0 && disc.Candidates[0].Region != "USA" {
+		t.Errorf("disc.Candidates[0].Region = %q, want USA", disc.Candidates[0].Region)
+	}
+
+	// Output file should be at the path rendered with the identified title/year.
+	dst := filepath.Join(lib, "Sonic CD (1993)", "Sonic CD.chd")
+	if _, err := os.Stat(dst); err != nil {
+		t.Errorf("expected output at %s: %v", dst, err)
+	}
+}
+
+// TestNoBootIdentifier_ReturnsErrNoCandidates verifies the pre-rip identifier
+// for boot-code-less CD consoles: returns a typed disc, no candidates, and
+// ErrNoCandidates.
+func TestNoBootIdentifier_ReturnsErrNoCandidates(t *testing.T) {
+	id := cdgame.NoBootIdentifier{DiscType: state.DiscTypePSX}
+	disc, cands, err := id.Identify(context.Background(), &state.Drive{ID: "x"})
+	if !errors.Is(err, pipelines.ErrNoCandidates) {
+		t.Fatalf("err = %v, want ErrNoCandidates", err)
+	}
+	if disc == nil {
+		t.Fatal("disc is nil")
+	}
+	if disc.Type != state.DiscTypePSX {
+		t.Errorf("disc.Type = %q, want PSX", disc.Type)
+	}
+	if disc.DriveID != "x" {
+		t.Errorf("disc.DriveID = %q, want x", disc.DriveID)
+	}
+	if len(cands) != 0 {
+		t.Errorf("cands = %+v, want nil", cands)
 	}
 }
