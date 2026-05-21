@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-05-21
+
 ### Added
 - Support for 7 CD-based game consoles, ripped to CHD and identified post-rip
   against Redump dats: Sega CD, 3DO, PC-FX, Atari Jaguar CD, and Philips CD-i
