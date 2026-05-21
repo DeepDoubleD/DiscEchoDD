@@ -38,11 +38,26 @@ type Identifier interface {
 	Identify(ctx context.Context, drv *state.Drive) (*state.Disc, []state.Candidate, error)
 }
 
+// RipFormat selects the redumper mode and output file layout used by RunRip
+// and RunTranscode.  CD-format discs (PSX, Saturn) produce bin+cue; DVD-format
+// discs (PS2) produce a single iso.
+type RipFormat int
+
+const (
+	// RipFormatCD is the default; redumper "cd" mode → rip.bin + rip.cue.
+	RipFormatCD RipFormat = iota
+	// RipFormatDVD uses redumper "dvd" mode → rip.iso.
+	RipFormatDVD
+)
+
 // Deps bundles the handler's dependencies.
 type Deps struct {
 	DiscType   state.DiscType // the disc type this handler serves
 	WorkPrefix string         // work-dir prefix, e.g. "psx" / "sat" / "ps2"
 	Identifier Identifier     // per-system pre-rip identify
+	// RipFormat controls redumper mode and spool file layout; defaults to
+	// RipFormatCD (bin+cue) when zero.
+	RipFormat RipFormat
 
 	Redumper RedumperRipper
 	CHDMan   CHDManCompressor
@@ -157,12 +172,17 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("mkdir rip: %w", err)
 	}
-	if err := h.deps.Redumper.Rip(ctx, drv.DevPath, ripDir, spoolName, "cd", pipelines.NewStepSink(sink, state.StepRip)); err != nil {
+	ripMode := "cd"
+	spoolFile := spoolName + ".bin"
+	if h.deps.RipFormat == RipFormatDVD {
+		ripMode = "dvd"
+		spoolFile = spoolName + ".iso"
+	}
+	if err := h.deps.Redumper.Rip(ctx, drv.DevPath, ripDir, spoolName, ripMode, pipelines.NewStepSink(sink, state.StepRip)); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("redumper: %w", err)
 	}
-	binPath := filepath.Join(ripDir, spoolName+".bin")
-	sink.OnStepDone(state.StepRip, map[string]any{"file": binPath})
+	sink.OnStepDone(state.StepRip, map[string]any{"file": filepath.Join(ripDir, spoolFile)})
 
 	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
 		Tools:       h.deps.Tools,
@@ -177,13 +197,23 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 // atomic-move to library, notify.
 func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
 	ripDir := filepath.Join(result.SpoolPath, "rip")
-	binPath := filepath.Join(ripDir, spoolName+".bin")
-	cuePath := filepath.Join(ripDir, spoolName+".cue")
+
+	// CD format: verify bin, pass cue to chdman. DVD format: verify iso,
+	// pass iso to chdman (createdvd reads the iso directly).
+	var md5TargetPath, chdInputPath string
+	if h.deps.RipFormat == RipFormatDVD {
+		isoPath := filepath.Join(ripDir, spoolName+".iso")
+		md5TargetPath = isoPath
+		chdInputPath = isoPath
+	} else {
+		md5TargetPath = filepath.Join(ripDir, spoolName+".bin")
+		chdInputPath = filepath.Join(ripDir, spoolName+".cue")
+	}
 
 	sink.OnStepStart(state.StepCompress)
 	if h.deps.RedumpDB != nil && disc.MetadataID != "" {
 		if entry := h.deps.RedumpDB.LookupByBootCode(disc.MetadataID); entry != nil && entry.MD5 != "" {
-			got, err := pipelines.MD5File(binPath)
+			got, err := pipelines.MD5File(md5TargetPath)
 			if err != nil {
 				slog.Warn("cdgame: md5 verify failed (couldn't hash)", "type", h.deps.DiscType, "err", err)
 			} else if got != entry.MD5 {
@@ -194,7 +224,7 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 		}
 	}
 	chdPath := filepath.Join(result.SpoolPath, spoolName+".chd")
-	if err := h.deps.CHDMan.CreateCHD(ctx, cuePath, chdPath, pipelines.NewStepSink(sink, state.StepCompress)); err != nil {
+	if err := h.deps.CHDMan.CreateCHD(ctx, chdInputPath, chdPath, pipelines.NewStepSink(sink, state.StepCompress)); err != nil {
 		sink.OnStepFailed(state.StepCompress, err)
 		return fmt.Errorf("chdman: %w", err)
 	}
