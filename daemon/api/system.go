@@ -234,6 +234,13 @@ var gameDiscSystems = []struct {
 	{state.DiscTypeSAT, "Saturn", "saturn"},
 	{state.DiscTypeDC, "Dreamcast", "dc"},
 	{state.DiscTypeXBOX, "Xbox", "xbox"},
+	{state.DiscTypeSegaCD, "Sega CD", "sega-cd"},
+	{state.DiscType3DO, "3DO", "3do"},
+	{state.DiscTypePCFX, "PC-FX", "pc-fx"},
+	{state.DiscTypeJaguarCD, "Atari Jaguar CD", "jaguar-cd"},
+	{state.DiscTypeCDi, "Philips CD-i", "cdi"},
+	{state.DiscTypePCECD, "PC Engine CD", "pc-engine-cd"},
+	{state.DiscTypeNeoCD, "Neo Geo CD", "neo-geo-cd"},
 }
 
 // redumpDatInventory returns the per-system count of *.dat files under
@@ -268,9 +275,17 @@ func (h *Handlers) buildGameDiscsInfo() *GameDiscsInfo {
 
 	for _, gs := range gameDiscSystems {
 		row := GameDiscSystem{System: gs.sys, Label: gs.label, Subdir: gs.subdir}
-		// Boot-code: Xbox is empty by design (publisher codes, not XBE IDs).
+		// Boot-code: Xbox and the Tier-1 CD consoles have no boot-code index
+		// (Xbox uses publisher codes, not XBE IDs; the CD consoles are MD5-only).
 		switch {
-		case gs.sys == state.DiscTypeXBOX:
+		case gs.sys == state.DiscTypeXBOX ||
+			gs.sys == state.DiscTypeSegaCD ||
+			gs.sys == state.DiscType3DO ||
+			gs.sys == state.DiscTypePCFX ||
+			gs.sys == state.DiscTypeJaguarCD ||
+			gs.sys == state.DiscTypeCDi ||
+			gs.sys == state.DiscTypePCECD ||
+			gs.sys == state.DiscTypeNeoCD:
 			row.BootCode = "na"
 		case counts[gs.sys] > 0:
 			row.BootCode = "ok"

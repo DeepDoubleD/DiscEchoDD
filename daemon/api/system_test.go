@@ -313,8 +313,8 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	if gd.Status != "partial" {
 		t.Errorf("GameDiscs status = %q, want partial (empty dat dir)", gd.Status)
 	}
-	if len(gd.Systems) != 5 {
-		t.Fatalf("GameDiscs systems = %d, want 5", len(gd.Systems))
+	if len(gd.Systems) != 12 {
+		t.Fatalf("GameDiscs systems = %d, want 12", len(gd.Systems))
 	}
 	byName := map[state.DiscType]api.GameDiscSystem{}
 	for _, s := range gd.Systems {
@@ -323,15 +323,25 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 			t.Errorf("%s redump_dat = %q, want missing", s.System, s.RedumpDat)
 		}
 	}
-	// Xbox boot-code is empty by design → "na".
-	if byName[state.DiscTypeXBOX].BootCode != "na" {
-		t.Errorf("Xbox boot_code = %q, want na", byName[state.DiscTypeXBOX].BootCode)
+	// Xbox and the Tier-1 CD consoles have no boot-code index → "na".
+	for _, sys := range []state.DiscType{
+		state.DiscTypeXBOX,
+		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
+		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
+		state.DiscTypeNeoCD,
+	} {
+		if byName[sys].BootCode != "na" {
+			t.Errorf("%s boot_code = %q, want na", sys, byName[sys].BootCode)
+		}
 	}
 	// Each row carries its real Redump folder name (the user-facing fix:
 	// "PlayStation" lives in psx/, "Dreamcast" in dc/).
 	for sys, want := range map[state.DiscType]string{
 		state.DiscTypePSX: "psx", state.DiscTypePS2: "ps2", state.DiscTypeSAT: "saturn",
 		state.DiscTypeDC: "dc", state.DiscTypeXBOX: "xbox",
+		state.DiscTypeSegaCD: "sega-cd", state.DiscType3DO: "3do", state.DiscTypePCFX: "pc-fx",
+		state.DiscTypeJaguarCD: "jaguar-cd", state.DiscTypeCDi: "cdi",
+		state.DiscTypePCECD: "pc-engine-cd", state.DiscTypeNeoCD: "neo-geo-cd",
 	} {
 		if byName[sys].Subdir != want {
 			t.Errorf("%s subdir = %q, want %q", sys, byName[sys].Subdir, want)
