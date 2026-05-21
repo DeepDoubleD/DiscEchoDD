@@ -164,6 +164,41 @@ func TestIGDBClient_Reconfigure_ConcurrentWithSearch(t *testing.T) {
 	// No assertion on requests — the point is `go test -race` not crashing.
 }
 
+func TestIGDBClient_GameDetails_Genres(t *testing.T) {
+	apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := mustReadAll(t, r.Body)
+		if !strings.Contains(body, "genres.name") {
+			t.Errorf("GameDetails body lacks genres.name field: %s", body)
+		}
+		_, _ = w.Write([]byte(`[
+			{"id":12345,"name":"Gran Turismo","first_release_date":883612800,
+			 "summary":"A racing sim.",
+			 "cover":{"url":"//images.igdb.com/igdb/image/upload/t_thumb/abc.jpg"},
+			 "platforms":[{"name":"PlayStation"}],
+			 "genres":[{"name":"Racing"},{"name":"Simulator"}]}
+		]`))
+	}))
+	defer apiSrv.Close()
+	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "expires_in": 3600})
+	}))
+	defer tokenSrv.Close()
+
+	c := identify.NewIGDBClient(identify.IGDBConfig{
+		ClientID: "x", ClientSecret: "y",
+		BaseURL: apiSrv.URL, TokenURL: tokenSrv.URL,
+		MinInterval: time.Millisecond,
+	})
+
+	g, err := c.GameDetails(context.Background(), 12345)
+	if err != nil {
+		t.Fatalf("GameDetails: %v", err)
+	}
+	if len(g.Genres) != 2 || g.Genres[0] != "Racing" || g.Genres[1] != "Simulator" {
+		t.Errorf("Genres = %v, want [Racing Simulator]", g.Genres)
+	}
+}
+
 func mustReadAll(t *testing.T, r interface{ Read(p []byte) (int, error) }) string {
 	t.Helper()
 	var sb strings.Builder

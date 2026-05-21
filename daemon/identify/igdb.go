@@ -49,6 +49,7 @@ type IGDBGameDetails struct {
 	CoverURL  string   `json:"cover_url"`
 	Summary   string   `json:"summary"`
 	Platforms []string `json:"platforms"`
+	Genres    []string `json:"genres"`
 }
 
 // igdbPlatformID maps DiscEcho disc types to IGDB platform IDs.
@@ -208,7 +209,7 @@ func (c *igdbClient) GameDetails(ctx context.Context, igdbID int) (*IGDBGameDeta
 		return nil, fmt.Errorf("igdb: client_id or client_secret unset")
 	}
 	body := fmt.Sprintf(
-		`fields name,first_release_date,cover.url,summary,platforms.name; where id = %d;`,
+		`fields name,first_release_date,cover.url,summary,platforms.name,genres.name; where id = %d;`,
 		igdbID,
 	)
 
@@ -242,6 +243,9 @@ func (c *igdbClient) GameDetails(ctx context.Context, igdbID int) (*IGDBGameDeta
 		Platforms []struct {
 			Name string `json:"name"`
 		} `json:"platforms"`
+		Genres []struct {
+			Name string `json:"name"`
+		} `json:"genres"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("igdb: decode: %w", err)
@@ -258,6 +262,10 @@ func (c *igdbClient) GameDetails(ctx context.Context, igdbID int) (*IGDBGameDeta
 	for _, p := range g.Platforms {
 		platforms = append(platforms, p.Name)
 	}
+	genres := make([]string, 0, len(g.Genres))
+	for _, gn := range g.Genres {
+		genres = append(genres, gn.Name)
+	}
 	return &IGDBGameDetails{
 		ID:        g.ID,
 		Name:      g.Name,
@@ -265,6 +273,7 @@ func (c *igdbClient) GameDetails(ctx context.Context, igdbID int) (*IGDBGameDeta
 		CoverURL:  rewriteCoverURL(g.Cover.URL, "t_cover_big"),
 		Summary:   g.Summary,
 		Platforms: platforms,
+		Genres:    genres,
 	}, nil
 }
 
