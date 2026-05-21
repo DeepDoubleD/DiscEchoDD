@@ -775,7 +775,12 @@ func (h *Handlers) SetDiscType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	drv, err := h.Store.GetDrive(ctx, disc.DriveID)
-	if err != nil || drv.DevPath == "" {
+	if err != nil {
+		slog.Warn("set-disc-type: get drive failed; keeping type only", "err", err, "drive_id", disc.DriveID)
+		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
+		return
+	}
+	if drv.DevPath == "" {
 		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
 		return
 	}
@@ -804,6 +809,12 @@ func (h *Handlers) SetDiscType(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("set-disc-type: release drive state", "err", uerr, "drive_id", drv.ID)
 		}
 	}()
+	if h.Broadcaster != nil {
+		h.Broadcaster.Publish(state.Event{
+			Name:    "drive.changed",
+			Payload: map[string]any{"drive_id": drv.ID, "state": "identifying"},
+		})
+	}
 
 	handler, ok := h.Pipelines.Get(target)
 	if !ok {
@@ -826,6 +837,9 @@ func (h *Handlers) SetDiscType(w http.ResponseWriter, r *http.Request) {
 		disc.Year = fresh.Year
 		disc.MetadataProvider = fresh.MetadataProvider
 		disc.MetadataID = fresh.MetadataID
+	}
+	if cands == nil {
+		cands = []state.Candidate{}
 	}
 	h.finishTypeOverride(w, ctx, disc, cands)
 }
