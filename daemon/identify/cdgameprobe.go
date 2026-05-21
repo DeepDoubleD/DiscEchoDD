@@ -21,6 +21,15 @@ type cdGameMagic struct {
 // sector layout (magic at 0x10, after the 16-byte sync header).
 // PC-FX and Atari Jaguar CD use a Contains scan because exact sector offsets
 // are unverified without sample disc images.
+//
+// Known real-disc limitations to revisit when sample discs are available
+// (probers are otherwise fixture-tested only):
+//   - Jaguar CD: the boot header lives in the disc's SECOND session, not
+//     sector 0, so this matches Jaguar .bin/.iso images but will miss a
+//     physical Jaguar disc read from /dev/sr0 at offset 0. Manual override
+//     covers the miss until a session-2 seek is added.
+//   - PC-FX: "PC-FX:Hu_CD-ROM" is narrower than the bare "PC-FX" token some
+//     discs carry; broaden if real discs slip through to DATA.
 var cdGameMagicTable = []cdGameMagic{
 	{state.DiscTypeSegaCD, []byte("SEGADISCSYSTEM"), 0},
 	{state.DiscTypeSegaCD, []byte("SEGABOOTDISC"), 0},
