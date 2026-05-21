@@ -11,6 +11,7 @@
     skipDisc,
     operationMode,
     bootCodeCounts,
+    setDiscType,
   } from '$lib/store';
   import type { Disc, Candidate } from '$lib/wire';
   import DiscTypeBadge from './DiscTypeBadge.svelte';
@@ -326,6 +327,35 @@
       searchPending = false;
     }
   }
+
+  // ----- Disc-type override (DATA misclassification safety net) ---------------
+
+  const OVERRIDE_TYPES: { value: string; label: string }[] = [
+    { value: 'PSX', label: 'PlayStation' },
+    { value: 'PS2', label: 'PlayStation 2' },
+    { value: 'SAT', label: 'Sega Saturn' },
+    { value: 'DC', label: 'Dreamcast' },
+    { value: 'XBOX', label: 'Xbox' },
+    { value: 'DVD', label: 'DVD-Video' },
+    { value: 'BDMV', label: 'Blu-ray' },
+    { value: 'UHD', label: 'UHD Blu-ray' },
+  ];
+  let overrideError = '';
+  let overrideBusy = false;
+
+  async function onOverrideType(e: Event): Promise<void> {
+    const value = (e.currentTarget as HTMLSelectElement).value;
+    if (!value) return;
+    overrideBusy = true;
+    overrideError = '';
+    try {
+      await setDiscType(liveDisc.id, value);
+    } catch (err) {
+      overrideError = err instanceof Error ? err.message : 'failed to set type';
+    } finally {
+      overrideBusy = false;
+    }
+  }
 </script>
 
 <div
@@ -385,6 +415,25 @@
       {/if}
     </div>
   </div>
+
+  {#if liveDisc.type === 'DATA'}
+    <div class="mt-2 text-sm">
+      <label class="text-zinc-400" for="disc-type-override-{liveDisc.id}">Not a data disc?</label>
+      <select
+        id="disc-type-override-{liveDisc.id}"
+        data-testid="disc-type-override"
+        class="ml-2 rounded bg-zinc-800 px-2 py-1 text-text"
+        disabled={overrideBusy}
+        on:change={onOverrideType}
+      >
+        <option value="">Set type…</option>
+        {#each OVERRIDE_TYPES as t}
+          <option value={t.value}>{t.label}</option>
+        {/each}
+      </select>
+      {#if overrideError}<p class="mt-1 text-rose-400">{overrideError}</p>{/if}
+    </div>
+  {/if}
 
   {#if searching}
     <div class="space-y-3">

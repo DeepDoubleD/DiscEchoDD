@@ -4,6 +4,7 @@ import { render, fireEvent } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import AwaitingDecisionCard from './AwaitingDecisionCard.svelte';
 import { profiles, settings, bootCodeCounts, jobs } from '$lib/store';
+import * as store from '$lib/store';
 import type { Disc, Profile, Job } from '$lib/wire';
 
 const dvdProfile: Profile = {
@@ -471,5 +472,63 @@ describe('AwaitingDecisionCard Redump tip', () => {
     };
     const { queryByText } = render(AwaitingDecisionCard, { disc: ps2Disc });
     expect(queryByText(/add a Redump dat-file/i)).toBeNull();
+  });
+});
+
+// ---- disc-type override control ------------------------------------------------
+
+describe('AwaitingDecisionCard disc-type override', () => {
+  const dataDisc: Disc = {
+    id: 'disc-data',
+    drive_id: 'drv1',
+    type: 'DATA',
+    title: 'GAME_BACKUP',
+    candidates: [],
+    created_at: new Date().toISOString(),
+  };
+
+  const psxDisc: Disc = {
+    id: 'disc-psx',
+    drive_id: 'drv1',
+    type: 'PSX',
+    title: '',
+    candidates: [],
+    created_at: new Date().toISOString(),
+  };
+
+  beforeEach(() => {
+    profiles.set([dataProfile]);
+    settings.set({ 'operation.mode': 'manual' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 204, json: async () => undefined }),
+    );
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    settings.set({});
+  });
+
+  it('shows the disc-type override control when disc.type is DATA', () => {
+    const { getByTestId } = render(AwaitingDecisionCard, { disc: dataDisc });
+    expect(getByTestId('disc-type-override')).toBeInTheDocument();
+  });
+
+  it('hides the disc-type override control when disc.type is not DATA', () => {
+    const { queryByTestId } = render(AwaitingDecisionCard, { disc: psxDisc });
+    expect(queryByTestId('disc-type-override')).toBeNull();
+  });
+
+  it('choosing a type calls setDiscType with the disc id and chosen value', async () => {
+    const spy = vi.spyOn(store, 'setDiscType').mockResolvedValue(undefined);
+    const { getByTestId } = render(AwaitingDecisionCard, { disc: dataDisc });
+    const select = getByTestId('disc-type-override');
+    await fireEvent.change(select, { target: { value: 'PSX' } });
+    await tick();
+    expect(spy).toHaveBeenCalledWith('disc-data', 'PSX');
+    spy.mockRestore();
   });
 });
