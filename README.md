@@ -12,8 +12,9 @@ Supported disc types:
 
 - **DVD / Blu-ray / 4K UHD** video (MakeMKV rip → optional HandBrake re-encode)
 - **Audio CD** (whipper → FLAC, MusicBrainz-tagged, ReplayGain)
-- **Game discs** — PlayStation, PlayStation 2, Saturn, Dreamcast, Xbox
-  (redumper, Redump-verified)
+- **Game discs** — PlayStation, PlayStation 2, Saturn, Dreamcast, Xbox,
+  Sega CD, 3DO, PC-FX, Atari Jaguar CD, Philips CD-i, PC Engine CD, Neo Geo CD
+  (redumper + chdman, Redump-verified)
 
 ## Screenshots
 
@@ -108,7 +109,8 @@ pre-fills a working profile you can tweak:
 - **DVD** → `MakeMKV+HandBrake` (re-encode), `MakeMKV` (lossless
   passthrough), or `HandBrake` (dvdbackup + encode).
 - **BDMV / UHD** → `MakeMKV+HandBrake` or `MakeMKV`.
-- **PSX / PS2 / Saturn / Dreamcast** → `redumper+chdman` (CHD).
+- **PSX / PS2 / Saturn / Dreamcast / Sega CD / 3DO / PC-FX / Jaguar CD /
+  CD-i / PC Engine CD / Neo Geo CD** → `redumper+chdman` (CHD).
 - **Xbox** → `redumper` (ISO). **DATA** → `ddrescue` (ISO).
 
 **Quality** (encoding profiles only) is a tier — `Archival`, `High`,
@@ -178,7 +180,7 @@ If a UHD disc is inserted and `KEYDB.cfg` is missing, the job fails
 fast at the identify step with a clear error before any disc read.
 Regular BDMV (Blu-ray) discs do not need this file.
 
-### Game-disc setup (PSX / PS2 / Saturn / Dreamcast / Xbox)
+### Game-disc setup (PSX / PS2 / Saturn / Dreamcast / Xbox / Sega CD / 3DO / PC-FX / Jaguar CD / CD-i / PC Engine CD / Neo Geo CD)
 
 DiscEcho's game-disc pipelines use
 [redumper](https://github.com/superg/redumper) for ripping and
@@ -204,6 +206,12 @@ Xbox boot-code auto-id is not currently supported (Libretro's Xbox
 dat uses publisher codes rather than XBE title IDs); Xbox discs fall
 back to Redump MD5 verify when a dat is present, or IGDB manual search.
 
+**Sega CD, 3DO, PC-FX, Atari Jaguar CD, and Philips CD-i** are also
+auto-detected by on-disc magic signatures (no embedded title database;
+identification is post-rip via Redump dat or IGDB). **PC Engine CD and
+Neo Geo CD** are not yet auto-detected — insert one of those and select
+the disc type manually from the dashboard override before ripping.
+
 Disc detection is automatic:
 
 - PSX/PS2: classifier reads `/SYSTEM.CNF` and parses the `BOOT[2]=`
@@ -216,6 +224,15 @@ Disc detection is automatic:
 - Xbox: `/default.xbe` at the disc root + XBE certificate title ID.
   Original Xbox only — Xbox 360 (XGD2/3) requires Kreon-flashed
   drive firmware and is out of scope.
+- Sega CD: raw sector 0 magic `SEGADISCSYSTEM` or `SEGABOOTDISC`
+  (cooked or raw 2352-byte sector layout).
+- 3DO: sector 0 binary volume magic.
+- PC-FX: sector 0 substring `PC-FX:Hu_CD-ROM`.
+- Atari Jaguar CD: sector 0 substring `ATARI APPROVED DATA HEADER ATRI`.
+  Note: the Jaguar CD boot header lives in the disc's second session, so
+  physical discs may not auto-detect — use the manual override if needed.
+- Philips CD-i: ISO 9660 PVD standard-identifier `CD-I ` or system-identifier
+  containing `CD-RTOS`.
 
 #### Optional: Redump dat-files for byte-perfect verification
 
@@ -230,6 +247,13 @@ ${DISCECHO_DATA}/redump/ps2/Sony - PlayStation 2 - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/saturn/Sega - Saturn - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/dc/Sega - Dreamcast - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/xbox/Microsoft - Xbox - Datfile (*.dat)
+${DISCECHO_DATA}/redump/sega-cd/Sega - Mega-CD & Sega CD - Datfile (*.dat)
+${DISCECHO_DATA}/redump/3do/Panasonic - 3DO Interactive Multiplayer - Datfile (*.dat)
+${DISCECHO_DATA}/redump/pc-fx/NEC - PC-FX & PC-FXGA - Datfile (*.dat)
+${DISCECHO_DATA}/redump/jaguar-cd/Atari - Jaguar CD Interactive Multimedia System - Datfile (*.dat)
+${DISCECHO_DATA}/redump/cdi/Philips - CD-i - Datfile (*.dat)
+${DISCECHO_DATA}/redump/pc-engine-cd/NEC - PC Engine CD & TurboGrafx-CD - Datfile (*.dat)
+${DISCECHO_DATA}/redump/neo-geo-cd/SNK - Neo Geo CD - Datfile (*.dat)
 ```
 
 Sourced from <http://redump.org/downloads/>. Refresh manually as
