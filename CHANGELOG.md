@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.30.4] - 2026-05-21
+
 ### Added
 - Game discs (PlayStation / PS2 / Saturn / Dreamcast / Xbox) identified by
   datfiles/gamedb are now enriched from IGDB when it's configured: box art plus
