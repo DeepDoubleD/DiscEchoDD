@@ -126,6 +126,9 @@ export const DISC_TYPES: ReadonlyArray<string> = [
   'CDI',
   'PCECD',
   'NEOCD',
+  'CD32',
+  'FMTOWNS',
+  'PIPPIN',
   'DATA',
 ];
 
@@ -181,6 +184,9 @@ export const DISC_TYPE_ENGINES: Record<string, string[]> = {
   CDI: ['redumper+chdman'],
   PCECD: ['redumper+chdman'],
   NEOCD: ['redumper+chdman'],
+  CD32: ['redumper+chdman'],
+  FMTOWNS: ['redumper+chdman'],
+  PIPPIN: ['redumper+chdman'],
   DATA: ['ddrescue'],
 };
 
@@ -370,6 +376,27 @@ export const DISC_TYPE_DEFAULTS: Record<string, DiscTypeDefault> = {
     qualityPreset: '',
     outputPathTemplate: '{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd',
   },
+  CD32: {
+    engine: 'redumper+chdman',
+    container: 'CHD',
+    videoCodec: '',
+    qualityPreset: '',
+    outputPathTemplate: '{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd',
+  },
+  FMTOWNS: {
+    engine: 'redumper+chdman',
+    container: 'CHD',
+    videoCodec: '',
+    qualityPreset: '',
+    outputPathTemplate: '{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd',
+  },
+  PIPPIN: {
+    engine: 'redumper+chdman',
+    container: 'CHD',
+    videoCodec: '',
+    qualityPreset: '',
+    outputPathTemplate: '{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd',
+  },
   DATA: {
     engine: 'ddrescue',
     container: 'ISO',
@@ -416,6 +443,9 @@ export const OUTPUT_VARS_BY_DISC_TYPE: Record<string, OutputVar[]> = {
   CDI: gameVars(),
   PCECD: gameVars(),
   NEOCD: gameVars(),
+  CD32: gameVars(),
+  FMTOWNS: gameVars(),
+  PIPPIN: gameVars(),
   DATA: [{ name: 'Title', desc: 'Disc volume label' }],
 };
 

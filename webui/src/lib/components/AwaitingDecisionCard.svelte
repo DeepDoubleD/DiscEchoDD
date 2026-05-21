@@ -51,6 +51,9 @@
     'CDI',
     'PCECD',
     'NEOCD',
+    'CD32',
+    'FMTOWNS',
+    'PIPPIN',
   ].includes(liveDisc.type);
   // BDMV/UHD/DVD are the only disc types whose handlers implement
   // TitleScanner. Hide the Pick titles… affordance for everything else
@@ -356,6 +359,9 @@
     { value: 'CDI', label: 'Philips CD-i' },
     { value: 'PCECD', label: 'PC Engine CD' },
     { value: 'NEOCD', label: 'Neo Geo CD' },
+    { value: 'CD32', label: 'Amiga CD32' },
+    { value: 'FMTOWNS', label: 'FM Towns' },
+    { value: 'PIPPIN', label: 'Bandai Pippin' },
     { value: 'DVD', label: 'DVD-Video' },
     { value: 'BDMV', label: 'Blu-ray' },
     { value: 'UHD', label: 'UHD Blu-ray' },
