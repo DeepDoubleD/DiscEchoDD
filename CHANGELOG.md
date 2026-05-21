@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.30.6] - 2026-05-21
+
 ### Fixed
 - A disc whose rip failed is no longer auto-ripped again in batch mode. The
   awaiting-decision card stays visible after a failed/cancelled/interrupted rip
