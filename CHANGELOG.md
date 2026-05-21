@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Manual disc-type override: correct a misclassified disc from the dashboard
+  (e.g. a game disc detected as data). Re-identifies for the chosen type when
+  the disc is still in the drive.
+
 ## [0.30.6] - 2026-05-21
 
 ### Fixed
