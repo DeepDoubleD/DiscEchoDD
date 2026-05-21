@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.30.5] - 2026-05-21
+
 ### Fixed
 - Ejecting a disc no longer leaves the drive showing an error. The eject fires
   a media-change event that the daemon used to classify as an insertion, run
