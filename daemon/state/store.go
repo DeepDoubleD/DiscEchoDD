@@ -505,6 +505,23 @@ func (s *Store) UpdateDiscMetadata(ctx context.Context, id, title string, year i
 	return nil
 }
 
+// UpdateDiscType persists a new disc type onto an existing row. type is
+// write-once at CreateDisc otherwise; this is the one mutation path (manual
+// override + re-identify). UpdateDiscMetadata deliberately omits the type
+// column, so this is the only method that writes it post-creation.
+func (s *Store) UpdateDiscType(ctx context.Context, id string, t DiscType) error {
+	res, err := s.db.Conn().ExecContext(ctx,
+		`UPDATE discs SET type = ? WHERE id = ?`, string(t), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // UpdateDiscMetadataBlob writes the per-disc-type extended metadata
 // JSON onto an existing disc row. Used at /api/discs/{id}/start after
 // the user picks a candidate so the pane has rich data from the first

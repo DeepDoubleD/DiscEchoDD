@@ -286,6 +286,34 @@ func TestStore_GetDiscByDriveAndMetadataID(t *testing.T) {
 	})
 }
 
+func TestStore_UpdateDiscType(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	d := &state.Disc{DriveID: drv.ID, Type: state.DiscTypeData, Title: "x"}
+	if err := s.CreateDisc(ctx, d); err != nil {
+		t.Fatalf("create disc: %v", err)
+	}
+
+	if err := s.UpdateDiscType(ctx, d.ID, state.DiscTypePSX); err != nil {
+		t.Fatalf("UpdateDiscType: %v", err)
+	}
+	got, err := s.GetDisc(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetDisc: %v", err)
+	}
+	if got.Type != state.DiscTypePSX {
+		t.Fatalf("type = %q, want PSX", got.Type)
+	}
+}
+
+func TestStore_UpdateDiscType_NotFound(t *testing.T) {
+	s := openStore(t)
+	if err := s.UpdateDiscType(context.Background(), "nope", state.DiscTypePSX); !errors.Is(err, state.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 // Migration 009 also enforces a partial unique index on
 // (drive_id, toc_hash) when the toc_hash is non-empty. Two empty-toc
 // rows on the same drive are still allowed (so unidentifiable discs
