@@ -614,6 +614,16 @@ export async function reidentify(discID: string): Promise<Candidate[]> {
   return cands;
 }
 
+/**
+ * setDiscType overrides the disc type for an already-identified disc.
+ * POSTs to /api/discs/:id/type; the daemon re-identifies and publishes a
+ * disc.identified SSE event which the existing store handler applies.
+ * Throws on HTTP error so the caller can surface the failure inline.
+ */
+export async function setDiscType(id: string, type: string): Promise<void> {
+  await apiPost<void>(`/api/discs/${id}/type`, { type });
+}
+
 // ----- Derived settings -----------------------------------------------------
 
 /**
