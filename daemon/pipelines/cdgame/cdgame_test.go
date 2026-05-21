@@ -3,11 +3,15 @@ package cdgame_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/cdgame"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/testutil"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
+	"github.com/jumpingmushroom/DiscEcho/daemon/tools"
 )
 
 // stubIdentifier lets tests drive cdgame.Handler.Identify deterministically.
@@ -98,5 +102,71 @@ func TestHandler_PlanTranscode_TranscodeStepSkipped(t *testing.T) {
 		if p.ID == state.StepTranscode && !p.Skip {
 			t.Fatalf("PlanTranscode: transcode step must be skipped")
 		}
+	}
+}
+
+// fakeRedumper writes a stub rip.bin + rip.cue into outDir so the
+// downstream MD5 / chdman / move steps have files to operate on.
+type fakeRedumper struct{ err error }
+
+func (f *fakeRedumper) Rip(_ context.Context, _ string, outDir, name, _ string, _ tools.Sink) error {
+	if f.err != nil {
+		return f.err
+	}
+	if err := os.WriteFile(filepath.Join(outDir, name+".bin"), []byte("BINDATA"), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(outDir, name+".cue"), []byte("CUE"), 0o644)
+}
+
+// fakeCHDMan writes a stub .chd at output so the move step has a file.
+type fakeCHDMan struct{ err error }
+
+func (f *fakeCHDMan) CreateCHD(_ context.Context, _ string, output string, _ tools.Sink) error {
+	if f.err != nil {
+		return f.err
+	}
+	return os.WriteFile(output, []byte("CHD"), 0o644)
+}
+
+func TestHandler_Run_HappyPath(t *testing.T) {
+	lib := t.TempDir()
+	work := t.TempDir()
+	h := cdgame.New(cdgame.Deps{
+		DiscType:    state.DiscTypePSX,
+		WorkPrefix:  "psx",
+		Identifier:  stubIdentifier{disc: &state.Disc{}},
+		Redumper:    &fakeRedumper{},
+		CHDMan:      &fakeCHDMan{},
+		LibraryRoot: lib,
+		WorkRoot:    work,
+	})
+	disc := &state.Disc{ID: "disc-1", Title: "Some Game", Year: 1999}
+	prof := &state.Profile{OutputPathTemplate: "{{.Title}} ({{.Year}})/{{.Title}}.chd"}
+	sink := testutil.NewRecordingSink()
+
+	if err := h.Run(context.Background(), &state.Drive{DevPath: "/dev/sr0"}, disc, prof, sink); err != nil {
+		t.Fatalf("Run() err = %v", err)
+	}
+	dst := filepath.Join(lib, "Some Game (1999)", "Some Game.chd")
+	if _, err := os.Stat(dst); err != nil {
+		t.Fatalf("expected output at %s: %v", dst, err)
+	}
+}
+
+func TestHandler_RunRip_RipFailure(t *testing.T) {
+	h := cdgame.New(cdgame.Deps{
+		DiscType:    state.DiscTypePSX,
+		WorkPrefix:  "psx",
+		Identifier:  stubIdentifier{disc: &state.Disc{}},
+		Redumper:    &fakeRedumper{err: errors.New("disc unreadable")},
+		CHDMan:      &fakeCHDMan{},
+		LibraryRoot: t.TempDir(),
+		WorkRoot:    t.TempDir(),
+	})
+	sink := testutil.NewRecordingSink()
+	err := h.Run(context.Background(), &state.Drive{DevPath: "/dev/sr0"}, &state.Disc{ID: "d"}, &state.Profile{OutputPathTemplate: "{{.Title}}.chd"}, sink)
+	if err == nil {
+		t.Fatalf("expected error from rip failure")
 	}
 }

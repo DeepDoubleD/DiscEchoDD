@@ -11,6 +11,10 @@ package cdgame
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
@@ -108,3 +112,122 @@ func (h *Handler) PlanTranscode(_ *state.Disc, _ *state.Profile) []pipelines.Ste
 	}
 	return out
 }
+
+// spoolName is the filename prefix used inside the spool's rip/ subdir.
+// Stable across discs — the per-job spool dir is already unique.
+const spoolName = "rip"
+
+// Run is the monolithic fallback path. Allocates a tmpdir as spool, runs
+// RunRip + RunTranscode in sequence, cleans up.
+func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
+	tmpdir, err := h.createWorkDir(disc.ID)
+	if err != nil {
+		sink.OnStepStart(state.StepRip)
+		sink.OnStepFailed(state.StepRip, err)
+		return err
+	}
+	defer func() { _ = os.RemoveAll(tmpdir) }()
+	result, err := h.RunRip(ctx, drv, disc, prof, tmpdir, sink)
+	if err != nil {
+		return err
+	}
+	return h.RunTranscode(ctx, result, disc, prof, sink)
+}
+
+// RunRip executes the drive-bound half: detect, identify, redumper rip →
+// spoolDir/rip/rip.bin + rip.cue, eject.
+func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, spoolDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
+	sink.OnStepStart(state.StepDetect)
+	sink.OnStepDone(state.StepDetect, nil)
+	sink.OnStepStart(state.StepIdentify)
+	sink.OnStepDone(state.StepIdentify, nil)
+
+	sink.OnStepStart(state.StepRip)
+	if err := h.deps.LibraryProbe(h.deps.LibraryRoot); err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
+	}
+	if h.deps.Redumper == nil || h.deps.CHDMan == nil {
+		err := fmt.Errorf("cdgame: redumper or chdman not configured (type=%s)", h.deps.DiscType)
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, err
+	}
+	ripDir := filepath.Join(spoolDir, "rip")
+	if err := os.MkdirAll(ripDir, 0o755); err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, fmt.Errorf("mkdir rip: %w", err)
+	}
+	if err := h.deps.Redumper.Rip(ctx, drv.DevPath, ripDir, spoolName, "cd", pipelines.NewStepSink(sink, state.StepRip)); err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, fmt.Errorf("redumper: %w", err)
+	}
+	binPath := filepath.Join(ripDir, spoolName+".bin")
+	sink.OnStepDone(state.StepRip, map[string]any{"file": binPath})
+
+	pipelines.RunEjectStep(ctx, sink, pipelines.EjectDeps{
+		Tools:       h.deps.Tools,
+		ShouldEject: h.deps.ShouldEject,
+	}, drv)
+
+	return pipelines.RipResult{SpoolPath: spoolDir}, nil
+}
+
+// RunTranscode executes the compute-bound half: MD5-verify the rip against
+// the Redump dat (when identified by boot code), chdman compress to .chd,
+// atomic-move to library, notify.
+func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, disc *state.Disc, prof *state.Profile, sink pipelines.EventSink) error {
+	ripDir := filepath.Join(result.SpoolPath, "rip")
+	binPath := filepath.Join(ripDir, spoolName+".bin")
+	cuePath := filepath.Join(ripDir, spoolName+".cue")
+
+	sink.OnStepStart(state.StepCompress)
+	if h.deps.RedumpDB != nil && disc.MetadataID != "" {
+		if entry := h.deps.RedumpDB.LookupByBootCode(disc.MetadataID); entry != nil && entry.MD5 != "" {
+			got, err := pipelines.MD5File(binPath)
+			if err != nil {
+				slog.Warn("cdgame: md5 verify failed (couldn't hash)", "type", h.deps.DiscType, "err", err)
+			} else if got != entry.MD5 {
+				slog.Warn("cdgame: md5 mismatch", "type", h.deps.DiscType, "want", entry.MD5, "got", got)
+			} else {
+				slog.Info("cdgame: md5 verify ok", "type", h.deps.DiscType, "md5", got)
+			}
+		}
+	}
+	chdPath := filepath.Join(result.SpoolPath, spoolName+".chd")
+	if err := h.deps.CHDMan.CreateCHD(ctx, cuePath, chdPath, pipelines.NewStepSink(sink, state.StepCompress)); err != nil {
+		sink.OnStepFailed(state.StepCompress, err)
+		return fmt.Errorf("chdman: %w", err)
+	}
+	sink.OnStepDone(state.StepCompress, map[string]any{"file": chdPath})
+
+	sink.OnStepStart(state.StepMove)
+	region := ""
+	if len(disc.Candidates) > 0 {
+		region = disc.Candidates[0].Region
+	}
+	rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, pipelines.OutputFields{
+		Title: disc.Title, Year: disc.Year, Region: region,
+	})
+	if err != nil {
+		sink.OnStepFailed(state.StepMove, err)
+		return err
+	}
+	dst := filepath.Join(h.deps.LibraryRoot, rel)
+	if err := pipelines.AtomicMove(chdPath, dst); err != nil {
+		sink.OnStepFailed(state.StepMove, err)
+		return err
+	}
+	sink.OnStepDone(state.StepMove, map[string]any{"path": dst})
+
+	pipelines.RunNotifyStep(ctx, sink)
+	return nil
+}
+
+func (h *Handler) createWorkDir(discID string) (string, error) {
+	return pipelines.CreateWorkDir(h.deps.WorkRoot, h.deps.WorkPrefix, discID)
+}
+
+var (
+	_ pipelines.Handler           = (*Handler)(nil)
+	_ pipelines.SplittableHandler = (*Handler)(nil)
+)
