@@ -58,8 +58,12 @@ func (df *discFlow) HandleManual(bus string) {
 			"SUBSYSTEM":         "block",
 			"ID_CDROM":          "1",
 			"DISK_MEDIA_CHANGE": "1",
-			"ACTION":            "change",
-			"DEVNAME":           bus,
+			// Re-identify always targets the disc already sitting in the
+			// drive, so assert media presence — otherwise handle()'s
+			// removal branch would settle the drive idle and skip classify.
+			"ID_CDROM_MEDIA": "1",
+			"ACTION":         "change",
+			"DEVNAME":        bus,
 		},
 	})
 }
@@ -72,7 +76,6 @@ func (df *discFlow) handle(ev drive.Uevent) {
 	defer cancel()
 
 	devPath := "/dev/" + ev.DevName
-	slog.Info("disc inserted", "dev", devPath)
 
 	drv, err := df.findDriveByDevPath(ctx, devPath)
 	if err != nil {
@@ -84,13 +87,32 @@ func (df *discFlow) handle(ev drive.Uevent) {
 	// races the running step's exclusive hold on /dev/sr0 and the
 	// classifier always fails ("cd-info: exit status 1"), which then
 	// flips the drive to Error and kills the in-flight job. Bail out
-	// early if there's already a job in flight for this drive.
+	// early if there's already a job in flight for this drive. Checked
+	// before the eject branch below so a hardware eject mid-rip can't
+	// force a busy drive idle.
 	if busy, err := df.store.HasActiveJobOnDrive(ctx, drv.ID); err != nil {
 		slog.Warn("disc-flow: HasActiveJobOnDrive", "err", err)
 	} else if busy {
 		slog.Info("disc-flow: drive busy, ignoring media-change", "dev", devPath, "drive_id", drv.ID)
 		return
 	}
+	// A media-change uevent fires on eject as well as insert. cdrom_id sets
+	// ID_CDROM_MEDIA=1 only when a disc is loaded; its absence means the tray
+	// was emptied. Classifying an empty tray fails ("cd-info: exit status 1")
+	// and would wrongly flip the drive to Error, so settle it to idle (which
+	// also clears any stale last_error) and stop here.
+	if !ev.HasMedia() {
+		slog.Info("disc removed", "dev", devPath, "drive_id", drv.ID)
+		if err := df.store.UpdateDriveState(ctx, drv.ID, state.DriveStateIdle); err != nil {
+			slog.Warn("disc-flow: settle drive idle on eject", "err", err, "drive_id", drv.ID)
+		}
+		df.bc.Publish(state.Event{
+			Name:    "drive.changed",
+			Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
+		})
+		return
+	}
+	slog.Info("disc inserted", "dev", devPath)
 	if recent, err := df.store.HasRecentJobOnDrive(ctx, drv.ID, discFlowCooldown); err != nil {
 		slog.Warn("disc-flow: HasRecentJobOnDrive", "err", err)
 	} else if recent {

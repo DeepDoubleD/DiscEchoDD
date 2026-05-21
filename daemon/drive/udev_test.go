@@ -61,6 +61,31 @@ func TestParseUevent_DevNameWithPrefix(t *testing.T) {
 	}
 }
 
+func TestUevent_HasMedia(t *testing.T) {
+	// cdrom_id sets ID_CDROM_MEDIA=1 only when a disc is loaded. On insert
+	// the key is present; on eject the same media-change event omits it.
+	insert := "ACTION=change\nSUBSYSTEM=block\nDEVNAME=sr0\n" +
+		"ID_CDROM=1\nDISK_MEDIA_CHANGE=1\nID_CDROM_MEDIA=1\n"
+	eject := "ACTION=change\nSUBSYSTEM=block\nDEVNAME=sr0\n" +
+		"ID_CDROM=1\nDISK_MEDIA_CHANGE=1\n"
+
+	ev, _ := drive.ParseUevent(insert)
+	if !ev.IsOpticalMediaChange() {
+		t.Fatalf("insert: want IsOpticalMediaChange true")
+	}
+	if !ev.HasMedia() {
+		t.Errorf("insert: want HasMedia true")
+	}
+
+	ev, _ = drive.ParseUevent(eject)
+	if !ev.IsOpticalMediaChange() {
+		t.Fatalf("eject: want IsOpticalMediaChange true (it is still a media-change)")
+	}
+	if ev.HasMedia() {
+		t.Errorf("eject: want HasMedia false (empty tray)")
+	}
+}
+
 func TestParseUevent_NotOptical(t *testing.T) {
 	payload := "ACTION=add\nSUBSYSTEM=usb\nDEVNAME=ttyUSB0\n"
 	ev, ok := drive.ParseUevent(payload)

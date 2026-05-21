@@ -64,3 +64,12 @@ func (e Uevent) IsOpticalMediaChange() bool {
 	}
 	return true
 }
+
+// HasMedia reports whether a disc is loaded for this media-change event.
+// udev's cdrom_id builtin sets ID_CDROM_MEDIA=1 only when media is present;
+// on eject the same media-change event omits the key. Callers use this to
+// tell an insertion (classify the disc) from a removal (settle the drive
+// idle) — both arrive as IsOpticalMediaChange events.
+func (e Uevent) HasMedia() bool {
+	return e.Properties["ID_CDROM_MEDIA"] == "1"
+}

@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Ejecting a disc no longer leaves the drive showing an error. The eject fires
+  a media-change event that the daemon used to classify as an insertion, run
+  against the now-empty tray, and fail ("cd-info: exit status 1") — flipping the
+  drive into the Error state. Removal events are now detected (no media present)
+  and settle the drive cleanly to idle, clearing any stale error.
+
 ## [0.30.4] - 2026-05-21
 
 ### Added
