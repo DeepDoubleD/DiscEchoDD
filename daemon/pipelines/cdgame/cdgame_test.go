@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
@@ -152,6 +153,27 @@ func TestHandler_Run_HappyPath(t *testing.T) {
 	if _, err := os.Stat(dst); err != nil {
 		t.Fatalf("expected output at %s: %v", dst, err)
 	}
+
+	// Step ordering: detect → identify → rip → eject (RunRip),
+	// then compress → move → notify (RunTranscode).
+	starts := sink.StepSequence()
+	wantOrder := []state.StepID{
+		state.StepDetect, state.StepIdentify, state.StepRip, state.StepEject,
+		state.StepCompress, state.StepMove, state.StepNotify,
+	}
+	if len(starts) != len(wantOrder) {
+		t.Fatalf("started %d steps, want %d: %v", len(starts), len(wantOrder), starts)
+	}
+	for i := range wantOrder {
+		if starts[i] != wantOrder[i] {
+			t.Errorf("step %d = %s, want %s", i, starts[i], wantOrder[i])
+		}
+	}
+	for _, st := range starts {
+		if st == state.StepTranscode {
+			t.Errorf("transcode should not have started for cdgame")
+		}
+	}
 }
 
 func TestHandler_RunRip_RipFailure(t *testing.T) {
@@ -166,7 +188,7 @@ func TestHandler_RunRip_RipFailure(t *testing.T) {
 	})
 	sink := testutil.NewRecordingSink()
 	err := h.Run(context.Background(), &state.Drive{DevPath: "/dev/sr0"}, &state.Disc{ID: "d"}, &state.Profile{OutputPathTemplate: "{{.Title}}.chd"}, sink)
-	if err == nil {
-		t.Fatalf("expected error from rip failure")
+	if err == nil || !strings.Contains(err.Error(), "disc unreadable") {
+		t.Errorf("want rip error containing \"disc unreadable\", got %v", err)
 	}
 }
