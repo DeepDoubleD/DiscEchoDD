@@ -91,7 +91,7 @@ func TestRefineDiscType_DVD(t *testing.T) {
 		&fakeFSProber{files: []string{"/AUDIO_TS", "/VIDEO_TS", "/VIDEO_TS/VIDEO_TS.IFO"}},
 		&fakeBDProber{},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeDVD {
@@ -106,7 +106,7 @@ func TestRefineDiscType_BDMV(t *testing.T) {
 		&fakeFSProber{files: []string{"/BDMV", "/BDMV/index.bdmv", "/CERTIFICATE"}},
 		&fakeBDProber{info: &identify.BDInfo{AACSEncrypted: true, HasAACS2: false}},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeBDMV {
@@ -121,7 +121,7 @@ func TestRefineDiscType_UHD(t *testing.T) {
 		&fakeFSProber{files: []string{"/BDMV", "/BDMV/index.bdmv", "/AACS"}},
 		&fakeBDProber{info: &identify.BDInfo{AACSEncrypted: true, HasAACS2: true}},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeUHD {
@@ -136,7 +136,7 @@ func TestRefineDiscType_BDMVWhenBDInfoFails(t *testing.T) {
 		&fakeFSProber{files: []string{"/BDMV/index.bdmv"}},
 		&fakeBDProber{err: errors.New("bd_info crashed")},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	// Conservative: when bd_info is unavailable, default to BDMV. The
@@ -153,7 +153,7 @@ func TestRefineDiscType_DataWhenNoVideoMarkers(t *testing.T) {
 		&fakeFSProber{files: []string{"/README.TXT", "/ARCHIVE/PHOTO_001.JPG"}},
 		&fakeBDProber{},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeData {
@@ -170,7 +170,7 @@ func TestRefineDiscType_PreservesAudioCD(t *testing.T) {
 		nil,
 		nil,
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeAudioCD {
@@ -195,7 +195,7 @@ func TestRefineDiscType_PSX(t *testing.T) {
 		&fakeFSProber{files: []string{"/SYSTEM.CNF"}},
 		&fakeBDProber{},
 		&fakeSystemCNFProber{info: &identify.SystemCNF{BootCode: "SCUS_004.34", IsPS2: false}},
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypePSX {
@@ -210,7 +210,7 @@ func TestRefineDiscType_PS2(t *testing.T) {
 		&fakeFSProber{files: []string{"/SYSTEM.CNF"}},
 		&fakeBDProber{},
 		&fakeSystemCNFProber{info: &identify.SystemCNF{BootCode: "SCES_500.51", IsPS2: true}},
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypePS2 {
@@ -225,7 +225,7 @@ func TestRefineDiscType_DataWhenSystemCNFUnreadable(t *testing.T) {
 		&fakeFSProber{files: []string{"/SYSTEM.CNF"}},
 		&fakeBDProber{},
 		&fakeSystemCNFProber{err: errors.New("isoinfo crashed")},
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeData {
@@ -270,6 +270,7 @@ func TestRefineDiscType_Saturn(t *testing.T) {
 		&fakeSaturnProber{info: &identify.SaturnInfo{ProductNumber: "MK-81088"}},
 		nil,
 		nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeSAT {
@@ -287,6 +288,7 @@ func TestRefineDiscType_Dreamcast(t *testing.T) {
 		&fakeSaturnProber{err: identify.ErrNotSaturn},
 		nil,
 		&fakeDCProber{ok: true},
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeDC {
@@ -303,6 +305,7 @@ func TestRefineDiscType_Xbox(t *testing.T) {
 		nil,
 		nil,
 		&fakeXboxProber{info: &identify.XboxInfo{TitleID: 0x4D530002, Region: "USA"}},
+		nil,
 		nil,
 		"/dev/sr0",
 	)
@@ -321,6 +324,7 @@ func TestRefineDiscType_DataFallback(t *testing.T) {
 		&fakeSaturnProber{err: identify.ErrNotSaturn},
 		&fakeXboxProber{err: identify.ErrNotXbox},
 		&fakeDCProber{ok: false},
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeData {
@@ -338,10 +342,82 @@ func TestRefineDiscType_ProbeErrorsFallthrough(t *testing.T) {
 		&fakeSaturnProber{err: errors.New("io")},
 		&fakeXboxProber{err: errors.New("io")},
 		&fakeDCProber{err: errors.New("io")},
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeData {
 		t.Fatalf("got %q, want DATA on probe-error", got)
+	}
+}
+
+type fakeCDGameProber struct {
+	dt state.DiscType
+	ok bool
+}
+
+func (f *fakeCDGameProber) Probe(_ context.Context, _ string) (state.DiscType, bool) {
+	return f.dt, f.ok
+}
+
+// TestRefineDiscType_CDGame_Match verifies that when all earlier probers miss
+// and the CD-game prober matches, the matched disc type is returned.
+func TestRefineDiscType_CDGame_Match(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{}},
+		&fakeBDProber{},
+		nil,
+		&fakeSaturnProber{err: identify.ErrNotSaturn},
+		nil,
+		&fakeDCProber{ok: false},
+		&fakeCDGameProber{dt: state.DiscTypeSegaCD, ok: true},
+		"/dev/sr0",
+	)
+	if got != state.DiscTypeSegaCD {
+		t.Fatalf("got %q, want SEGA_CD", got)
+	}
+}
+
+// TestRefineDiscType_CDGame_Miss verifies that when the CD-game prober returns
+// (_, false) the result is DATA (fall-through preserved).
+func TestRefineDiscType_CDGame_Miss(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{}},
+		&fakeBDProber{},
+		nil,
+		&fakeSaturnProber{err: identify.ErrNotSaturn},
+		nil,
+		&fakeDCProber{ok: false},
+		&fakeCDGameProber{dt: "", ok: false},
+		"/dev/sr0",
+	)
+	if got != state.DiscTypeData {
+		t.Fatalf("got %q, want DATA", got)
+	}
+}
+
+// TestRefineDiscType_CDGame_EarlierProberWins verifies that when an earlier
+// prober matches (Saturn), the CD-game prober is not consulted and does not
+// override the result.
+func TestRefineDiscType_CDGame_EarlierProberWins(t *testing.T) {
+	// fakeCDGameProber would return SegaCD — but Saturn fires first.
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{}},
+		&fakeBDProber{},
+		nil,
+		&fakeSaturnProber{info: &identify.SaturnInfo{ProductNumber: "MK-81088"}},
+		nil,
+		nil,
+		&fakeCDGameProber{dt: state.DiscTypeSegaCD, ok: true},
+		"/dev/sr0",
+	)
+	if got != state.DiscTypeSAT {
+		t.Fatalf("got %q, want SAT (saturn probe wins before cd-game prober)", got)
 	}
 }
 

@@ -228,11 +228,18 @@ type DCProber interface {
 	Probe(ctx context.Context, devPath string) (bool, error)
 }
 
+// CDGameProber detects CD-based consoles (Sega CD, 3DO, PC-FX, Jaguar, CD-i)
+// by reading the data-track magic signature / ISO9660 PVD. Returns ("", false)
+// when none match — the disc then falls through to DATA.
+type CDGameProber interface {
+	Probe(ctx context.Context, devPath string) (state.DiscType, bool)
+}
+
 // ClassifierConfig configures NewClassifier. FSProber, BDProber, and
 // SystemCNFProber are optional dependencies — when nil, the classifier
 // defaults to using NewFSProber / NewBDProber / NewSystemCNFProber with
-// default binaries. SaturnProber, XboxProber, and DCProber are optional;
-// when nil those branches are skipped.
+// default binaries. SaturnProber, XboxProber, DCProber, and CDGameProber
+// are optional; when nil those branches are skipped.
 type ClassifierConfig struct {
 	CDInfoBin       string          // default "cd-info"
 	FSProber        FSProber        // default NewFSProber({}) — distinguishes DVD/BDMV/DATA
@@ -241,6 +248,7 @@ type ClassifierConfig struct {
 	SaturnProber    SaturnProber    // optional — detects Sega Saturn via IP.BIN
 	XboxProber      XboxProber      // optional — detects Xbox via default.xbe
 	DCProber        DCProber        // optional — detects Dreamcast via GD-ROM TOC heuristic
+	CDGameProber    CDGameProber    // optional — detects CD consoles via data-track magic
 
 	// CDInfoBackoff overrides the per-attempt wait schedule between
 	// retries. nil → use the production schedule (~13 s total). A
@@ -274,6 +282,7 @@ func NewClassifier(c ClassifierConfig) Classifier {
 		saturn:    c.SaturnProber,
 		xbox:      c.XboxProber,
 		dc:        c.DCProber,
+		cdGame:    c.CDGameProber,
 		runner:    defaultCDInfoRunner,
 		backoff:   backoff,
 	}
@@ -287,6 +296,7 @@ type multiProbeClassifier struct {
 	saturn    SaturnProber
 	xbox      XboxProber
 	dc        DCProber
+	cdGame    CDGameProber
 	runner    cdInfoRunner
 	backoff   []time.Duration
 }
@@ -323,7 +333,7 @@ func (c *multiProbeClassifier) Classify(ctx context.Context, devPath string) (st
 		// permanently mis-labelled. See retryingSystemCNFProber.
 		sysCNF = &retryingSystemCNFProber{inner: c.sysCNF, backoff: c.backoff}
 	}
-	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.dc, devPath), nil
+	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.dc, c.cdGame, devPath), nil
 }
 
 func (c *multiProbeClassifier) runCDInfo(ctx context.Context, devPath string) ([]byte, error) {
@@ -474,8 +484,8 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 
 // RefineDiscType upgrades a cd-info-level disc type using filesystem
 // listing, bd_info (Blu-ray AACS2 detection), SYSTEM.CNF (PSX/PS2
-// discrimination), and dedicated probers for Xbox, Saturn, and Dreamcast.
-// AUDIO_CD short-circuits.
+// discrimination), and dedicated probers for Xbox, Saturn, Dreamcast, and
+// CD-based consoles. AUDIO_CD short-circuits.
 //
 // Decision tree:
 //   - AUDIO_CD → AUDIO_CD (passthrough)
@@ -490,10 +500,11 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 //   - DATA + /default.xbe + xbox probe ok → XBOX
 //   - saturn probe ok (raw sector 0) → SAT
 //   - dc probe ok (TOC heuristic) → DC
+//   - cdGame probe ok (data-track magic) → SegaCD / 3DO / PC-FX / Jaguar / CD-i
 //   - else → DATA
 //
 // Probes that error are logged and treated as a negative result.
-func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, dc DCProber, devPath string) state.DiscType {
+func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, dc DCProber, cdGame CDGameProber, devPath string) state.DiscType {
 	if base == state.DiscTypeAudioCD {
 		return state.DiscTypeAudioCD
 	}
@@ -577,6 +588,16 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 			slog.Warn("classify: dc probe failed", "dev", devPath, "err", err)
 		} else if ok {
 			return state.DiscTypeDC
+		}
+	}
+	// CD-game magic prober: covers Sega CD, 3DO, PC-FX, Jaguar CD, and CD-i
+	// by reading the data-track magic signature / ISO9660 PVD. Runs after
+	// Saturn and Dreamcast so those dedicated probers take precedence on
+	// discs where signatures could overlap.
+	if cdGame != nil {
+		if dt, ok := cdGame.Probe(ctx, devPath); ok {
+			slog.Info("classify: cd-game prober matched", "dev", devPath, "type", dt)
+			return dt
 		}
 	}
 	// Breadcrumb: nothing recognised the disc. fs_entries==0 points at a
