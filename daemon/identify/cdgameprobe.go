@@ -40,14 +40,8 @@ var cdGameMagicTable = []cdGameMagic{
 	{state.DiscTypeJaguarCD, []byte("ATARI APPROVED DATA HEADER ATRI"), -1},
 }
 
-// ProbeCDGameReader reads the first data sector and matches it against the
-// magic table. Returns ("", false) when nothing matches (disc falls through
-// to plain DATA classification). Partial reads from scratched discs are
-// still matched against whatever bytes were returned.
-func ProbeCDGameReader(r io.Reader) (state.DiscType, bool) {
-	buf := make([]byte, 2352)
-	n, _ := io.ReadFull(r, buf) // partial read is fine
-	buf = buf[:n]
+// matchMagicTable checks buf against the sector-0 magic table.
+func matchMagicTable(buf []byte) (state.DiscType, bool) {
 	for _, m := range cdGameMagicTable {
 		if m.exactAt >= 0 {
 			end := m.exactAt + len(m.magic)
@@ -59,6 +53,42 @@ func ProbeCDGameReader(r io.Reader) (state.DiscType, bool) {
 		}
 	}
 	return "", false
+}
+
+// probeCDi checks the ISO9660/CD-RTOS volume descriptor at byte offset
+// 0x8000 (LBA 16 × 2048). CD-i (Green Book) discs use "CD-I " as the
+// standard identifier (bytes 1-5) and/or "CD-RTOS" in the system identifier
+// (bytes 8-39). A short buffer (e.g. tiny test fixture) never panics.
+func probeCDi(buf []byte) (state.DiscType, bool) {
+	const pvd = 0x8000
+	if len(buf) < pvd+40 {
+		return "", false
+	}
+	std := buf[pvd+1 : pvd+6]  // standard identifier (5 bytes)
+	sys := buf[pvd+8 : pvd+40] // system identifier (32 bytes)
+	if bytes.Equal(std, []byte("CD-I ")) ||
+		bytes.Contains(sys, []byte("CD-RTOS")) ||
+		bytes.Contains(sys, []byte("CD-I")) {
+		return state.DiscTypeCDi, true
+	}
+	return "", false
+}
+
+// ProbeCDGameReader reads a fixed prefix large enough to cover both sector-0
+// magic table signatures and the ISO9660 Primary Volume Descriptor region at
+// LBA 16 (byte offset 0x8000). Returns ("", false) when nothing matches (disc
+// falls through to plain DATA classification). Partial reads from scratched
+// discs are still matched against whatever bytes were returned.
+func ProbeCDGameReader(r io.Reader) (state.DiscType, bool) {
+	// 0x8800 = LBA 16 (0x8000) + one full sector (0x800) — covers both the
+	// sector-0 magic table and the PVD at 0x8000 in a single read.
+	buf := make([]byte, 0x8800)
+	n, _ := io.ReadFull(r, buf) // partial read is fine
+	buf = buf[:n]
+	if dt, ok := matchMagicTable(buf); ok {
+		return dt, ok
+	}
+	return probeCDi(buf)
 }
 
 // ProbeCDGame opens devPath and probes sector 0 of the data track.
