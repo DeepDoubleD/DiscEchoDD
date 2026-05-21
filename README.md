@@ -14,7 +14,8 @@ Supported disc types:
 - **Audio CD** (whipper → FLAC, MusicBrainz-tagged, ReplayGain)
 - **Game discs** — PlayStation, PlayStation 2, Saturn, Dreamcast, Xbox,
   Sega CD, 3DO, PC-FX, Atari Jaguar CD, Philips CD-i, PC Engine CD, Neo Geo CD
-  (redumper + chdman, Redump-verified)
+  (redumper + chdman, Redump-verified); Amiga CD32, FM Towns, and Bandai Pippin
+  via manual disc-type override (not auto-detected)
 
 ## Screenshots
 
@@ -110,7 +111,8 @@ pre-fills a working profile you can tweak:
   passthrough), or `HandBrake` (dvdbackup + encode).
 - **BDMV / UHD** → `MakeMKV+HandBrake` or `MakeMKV`.
 - **PSX / PS2 / Saturn / Dreamcast / Sega CD / 3DO / PC-FX / Jaguar CD /
-  CD-i / PC Engine CD / Neo Geo CD** → `redumper+chdman` (CHD).
+  CD-i / PC Engine CD / Neo Geo CD / CD32 / FM Towns / Pippin** →
+  `redumper+chdman` (CHD).
 - **Xbox** → `redumper` (ISO). **DATA** → `ddrescue` (ISO).
 
 **Quality** (encoding profiles only) is a tier — `Archival`, `High`,
@@ -180,7 +182,7 @@ If a UHD disc is inserted and `KEYDB.cfg` is missing, the job fails
 fast at the identify step with a clear error before any disc read.
 Regular BDMV (Blu-ray) discs do not need this file.
 
-### Game-disc setup (PSX / PS2 / Saturn / Dreamcast / Xbox / Sega CD / 3DO / PC-FX / Jaguar CD / CD-i / PC Engine CD / Neo Geo CD)
+### Game-disc setup (PSX / PS2 / Saturn / Dreamcast / Xbox / Sega CD / 3DO / PC-FX / Jaguar CD / CD-i / PC Engine CD / Neo Geo CD / Amiga CD32 / FM Towns / Bandai Pippin)
 
 DiscEcho's game-disc pipelines use
 [redumper](https://github.com/superg/redumper) for ripping and
@@ -211,6 +213,11 @@ auto-detected by on-disc magic signatures (no embedded title database;
 identification is post-rip via Redump dat or IGDB). **PC Engine CD and
 Neo Geo CD** are not yet auto-detected — insert one of those and select
 the disc type manually from the dashboard override before ripping.
+
+**Amiga CD32, FM Towns, and Bandai Pippin** are not auto-detected; insert
+one of these, select the disc type manually from the override, then start
+the rip. Post-rip Redump dat verification is available for all three if the
+matching dat-file is present.
 
 Disc detection is automatic:
 
@@ -254,6 +261,9 @@ ${DISCECHO_DATA}/redump/jaguar-cd/Atari - Jaguar CD Interactive Multimedia Syste
 ${DISCECHO_DATA}/redump/cdi/Philips - CD-i - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/pc-engine-cd/NEC - PC Engine CD & TurboGrafx-CD - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/neo-geo-cd/SNK - Neo Geo CD - Datfile (*.dat)
+${DISCECHO_DATA}/redump/cd32/Commodore - Amiga CD32 - Datfile (*.dat)
+${DISCECHO_DATA}/redump/fm-towns/Fujitsu - FM Towns series - Datfile (*.dat)
+${DISCECHO_DATA}/redump/pippin/Apple - Pippin - Datfile (*.dat)
 ```
 
 Sourced from <http://redump.org/downloads/>. Refresh manually as

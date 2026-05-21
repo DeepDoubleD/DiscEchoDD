@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   against Redump dats: Sega CD, 3DO, PC-FX, Atari Jaguar CD, and Philips CD-i
   are auto-detected; PC Engine CD and Neo Geo CD are supported via the manual
   disc-type override (auto-detection for those two is planned).
+- Amiga CD32, FM Towns, and Bandai Pippin can be ripped to CHD via the manual
+  disc-type override (these CD formats are not auto-detected; set the type by
+  hand on the disc card).
 - Manual disc-type override: correct a misclassified disc from the dashboard
   (e.g. a game disc detected as data). Re-identifies for the chosen type when
   the disc is still in the drive.
