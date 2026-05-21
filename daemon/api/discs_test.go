@@ -1013,6 +1013,65 @@ func TestSetDiscType_NoDrive(t *testing.T) {
 	}
 }
 
+// TestSetDiscType_BusyDrive verifies that when the disc's drive has an
+// active job, SetDiscType still persists the new type and returns 200
+// with the type-only fallback (empty candidates). The type override is
+// authoritative; re-identify is best-effort.
+func TestSetDiscType_BusyDrive(t *testing.T) {
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubDiscHandlerForType{dt: state.DiscTypeDVD})
+	h := apitestServer(t)
+	h.Pipelines = reg
+
+	drv := seedDrive(t, h)
+	prof := seedProfile(t, h)
+	disc := seedDiscOfType(t, h, drv.ID, state.DiscTypeData)
+
+	// Seed a queued job on the drive so HasActiveJobOnDrive returns true.
+	activeJob := &state.Job{
+		DiscID:    disc.ID,
+		DriveID:   drv.ID,
+		ProfileID: prof.ID,
+	}
+	if err := h.Store.CreateJob(context.Background(), activeJob); err != nil {
+		t.Fatal(err)
+	}
+
+	r := chi.NewRouter()
+	r.Post("/api/discs/{id}/type", h.SetDiscType)
+	body := bytes.NewReader(mustJSON(t, map[string]any{"type": "DVD"}))
+	req := httptest.NewRequest(http.MethodPost, "/api/discs/"+disc.ID+"/type", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Disc       state.Disc        `json:"disc"`
+		Candidates []state.Candidate `json:"candidates"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Disc.Type != state.DiscTypeDVD {
+		t.Errorf("response disc.type = %q, want DVD", resp.Disc.Type)
+	}
+	if resp.Candidates == nil {
+		t.Errorf("candidates should be empty slice, got nil")
+	}
+
+	// Verify the type was persisted in the DB despite the busy drive.
+	got, err := h.Store.GetDisc(context.Background(), disc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != state.DiscTypeDVD {
+		t.Errorf("db disc.type = %q, want DVD", got.Type)
+	}
+}
+
 // TestSetDiscType_RejectsAudioCD verifies that AUDIO_CD is not a valid
 // override target — its identify path is TOC + MusicBrainz, not a
 // drive-probe the override flow drives.

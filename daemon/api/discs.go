@@ -781,7 +781,8 @@ func (h *Handlers) SetDiscType(w http.ResponseWriter, r *http.Request) {
 	}
 	busy, err := h.Store.HasActiveJobOnDrive(ctx, drv.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		slog.Warn("set-disc-type: active-job check failed; keeping type only", "err", err, "drive_id", drv.ID)
+		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
 		return
 	}
 	if busy {
@@ -790,7 +791,8 @@ func (h *Handlers) SetDiscType(w http.ResponseWriter, r *http.Request) {
 	}
 	claimed, err := h.Store.ClaimDriveForIdentify(ctx, drv.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		slog.Warn("set-disc-type: claim failed; keeping type only", "err", err, "drive_id", drv.ID)
+		h.finishTypeOverride(w, ctx, disc, []state.Candidate{})
 		return
 	}
 	if !claimed {
