@@ -143,6 +143,9 @@ func TestDiscTypeLabel_Tier1CDConsoles(t *testing.T) {
 		{state.DiscTypeCDi, "Philips CD-i"},
 		{state.DiscTypePCECD, "PC Engine CD"},
 		{state.DiscTypeNeoCD, "Neo Geo CD"},
+		{state.DiscTypeCD32, "Amiga CD32"},
+		{state.DiscTypeFMTowns, "FM Towns"},
+		{state.DiscTypePippin, "Bandai Pippin"},
 	}
 	for _, tc := range cases {
 		if got := discTypeLabel(tc.dt); got != tc.want {
@@ -180,6 +183,7 @@ func TestPickAttachment_Tier1CDConsoles_UseCoverURL(t *testing.T) {
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
 		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
 		state.DiscTypeNeoCD,
+		state.DiscTypeCD32, state.DiscTypeFMTowns, state.DiscTypePippin,
 	}
 	meta := map[string]any{"cover_url": "https://img/cover.jpg", "poster_url": "https://img/poster.jpg"}
 	for _, dt := range newTypes {

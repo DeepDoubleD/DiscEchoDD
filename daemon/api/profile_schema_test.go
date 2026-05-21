@@ -493,6 +493,9 @@ func TestDiscTypeEngines_NewCDConsoles(t *testing.T) {
 		state.DiscTypeCDi,
 		state.DiscTypePCECD,
 		state.DiscTypeNeoCD,
+		state.DiscTypeCD32,
+		state.DiscTypeFMTowns,
+		state.DiscTypePippin,
 	}
 	for _, dt := range newTypes {
 		engines, ok := api.DiscTypeEngines[dt]

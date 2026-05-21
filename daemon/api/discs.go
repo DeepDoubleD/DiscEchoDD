@@ -582,7 +582,8 @@ func isGameDisc(t state.DiscType) bool {
 	switch t {
 	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT, state.DiscTypeDC, state.DiscTypeXBOX,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX, state.DiscTypeJaguarCD,
-		state.DiscTypeCDi, state.DiscTypePCECD, state.DiscTypeNeoCD:
+		state.DiscTypeCDi, state.DiscTypePCECD, state.DiscTypeNeoCD,
+		state.DiscTypeCD32, state.DiscTypeFMTowns, state.DiscTypePippin:
 		return true
 	}
 	return false
@@ -614,6 +615,12 @@ func gameSystemName(t state.DiscType) string {
 		return "PC Engine CD"
 	case state.DiscTypeNeoCD:
 		return "Neo Geo CD"
+	case state.DiscTypeCD32:
+		return "Amiga CD32"
+	case state.DiscTypeFMTowns:
+		return "FM Towns"
+	case state.DiscTypePippin:
+		return "Bandai Pippin"
 	}
 	return string(t)
 }

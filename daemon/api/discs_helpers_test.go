@@ -15,6 +15,9 @@ func TestIsGameDisc_NewTypes(t *testing.T) {
 		state.DiscTypeCDi,
 		state.DiscTypePCECD,
 		state.DiscTypeNeoCD,
+		state.DiscTypeCD32,
+		state.DiscTypeFMTowns,
+		state.DiscTypePippin,
 	}
 	for _, dt := range newTypes {
 		if !isGameDisc(dt) {
@@ -51,6 +54,9 @@ func TestGameSystemName_NewTypes(t *testing.T) {
 		{state.DiscTypeCDi, "Philips CD-i"},
 		{state.DiscTypePCECD, "PC Engine CD"},
 		{state.DiscTypeNeoCD, "Neo Geo CD"},
+		{state.DiscTypeCD32, "Amiga CD32"},
+		{state.DiscTypeFMTowns, "FM Towns"},
+		{state.DiscTypePippin, "Bandai Pippin"},
 	}
 	for _, tc := range cases {
 		if got := gameSystemName(tc.dt); got != tc.want {

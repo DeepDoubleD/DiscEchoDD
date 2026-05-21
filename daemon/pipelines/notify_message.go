@@ -56,7 +56,8 @@ func BuildSuccessNotification(disc *state.Disc, job *state.Job, prof *state.Prof
 		state.DiscTypeDC, state.DiscTypeXBOX,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
 		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
-		state.DiscTypeNeoCD:
+		state.DiscTypeNeoCD,
+		state.DiscTypeCD32, state.DiscTypeFMTowns, state.DiscTypePippin:
 		b.headline(titleYear(mdEscape(disc.Title), disc.Year), "ripped successfully")
 		b.line("System", firstNonEmpty(metaStr(meta, "system"), discTypeLabel(disc.Type)))
 		b.line("Region", candidateRegion(disc))
@@ -182,6 +183,12 @@ func discTypeLabel(t state.DiscType) string {
 		return "PC Engine CD"
 	case state.DiscTypeNeoCD:
 		return "Neo Geo CD"
+	case state.DiscTypeCD32:
+		return "Amiga CD32"
+	case state.DiscTypeFMTowns:
+		return "FM Towns"
+	case state.DiscTypePippin:
+		return "Bandai Pippin"
 	case state.DiscTypeData:
 		return "Data disc"
 	default:
@@ -328,7 +335,8 @@ func pickAttachment(disc *state.Disc, meta map[string]any) []string {
 		state.DiscTypeDC, state.DiscTypeXBOX,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
 		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
-		state.DiscTypeNeoCD:
+		state.DiscTypeNeoCD,
+		state.DiscTypeCD32, state.DiscTypeFMTowns, state.DiscTypePippin:
 		url = metaStr(meta, "cover_url")
 	default:
 		url = metaStr(meta, "poster_url")

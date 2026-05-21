@@ -165,6 +165,9 @@ var DiscTypeEngines = map[state.DiscType][]string{
 	state.DiscTypeCDi:      {"redumper+chdman"},
 	state.DiscTypePCECD:    {"redumper+chdman"},
 	state.DiscTypeNeoCD:    {"redumper+chdman"},
+	state.DiscTypeCD32:     {"redumper+chdman"},
+	state.DiscTypeFMTowns:  {"redumper+chdman"},
+	state.DiscTypePippin:   {"redumper+chdman"},
 	state.DiscTypeData:     {"ddrescue"},
 }
 

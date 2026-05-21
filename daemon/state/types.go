@@ -26,6 +26,9 @@ const (
 	DiscTypeCDi      DiscType = "CDI"
 	DiscTypePCECD    DiscType = "PCECD"
 	DiscTypeNeoCD    DiscType = "NEOCD"
+	DiscTypeCD32     DiscType = "CD32"
+	DiscTypeFMTowns  DiscType = "FMTOWNS"
+	DiscTypePippin   DiscType = "PIPPIN"
 	DiscTypeVCD      DiscType = "VCD"
 	DiscTypeData     DiscType = "DATA"
 )
