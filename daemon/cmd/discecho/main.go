@@ -25,6 +25,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/audiocd"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/bdmv"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/cdgame"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/data"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/dreamcast"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/dvdvideo"
@@ -119,6 +120,7 @@ func main() {
 		FSProber:        identify.NewFSProber(identify.FSProberConfig{IsoInfoBin: cfg.IsoInfoBin}),
 		BDProber:        identify.NewBDProber(identify.BDProberConfig{BDInfoBin: cfg.BDInfoBin}),
 		SystemCNFProber: sysCNFProber,
+		CDGameProber:    identify.NewDevCDGameProber(),
 	})
 
 	// urlsForTrigger is shared by every pipeline — looks up the
@@ -380,6 +382,37 @@ func main() {
 		URLsForTrigger: urlsForTrigger,
 		ShouldEject:    shouldEjectOnFinish,
 	}))
+	// CD-only consoles: no boot code, so PostRipIdentify = true (Redump MD5
+	// lookup fills title/year after the rip). All rip via redumper CD mode →
+	// .bin/.cue → .chd.
+	for _, cd := range []struct {
+		dt     state.DiscType
+		prefix string
+	}{
+		{state.DiscTypeSegaCD, "segacd"},
+		{state.DiscType3DO, "3do"},
+		{state.DiscTypePCFX, "pcfx"},
+		{state.DiscTypeJaguarCD, "jagcd"},
+		{state.DiscTypeCDi, "cdi"},
+		{state.DiscTypePCECD, "pcecd"},
+		{state.DiscTypeNeoCD, "neocd"},
+	} {
+		pipeReg.Register(cdgame.New(cdgame.Deps{
+			DiscType:        cd.dt,
+			WorkPrefix:      cd.prefix,
+			PostRipIdentify: true,
+			Identifier:      cdgame.NoBootIdentifier{DiscType: cd.dt},
+			Redumper:        redumperTool,
+			CHDMan:          chdmanTool,
+			RedumpDB:        redumpDB,
+			Tools:           toolReg,
+			LibraryRoot:     cfg.LibraryGames,
+			WorkRoot:        filepath.Join(cfg.DataPath, "work"),
+			URLsForTrigger:  urlsForTrigger,
+			ShouldEject:     shouldEjectOnFinish,
+		}))
+	}
+
 	pipeReg.Register(data.New(data.Deps{
 		DD:             &tools.DDRescue{Bin: cfg.DDRescueBin},
 		LabelProber:    &data.IsoinfoLabelProber{Bin: cfg.IsoInfoBin},

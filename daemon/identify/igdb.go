@@ -54,11 +54,18 @@ type IGDBGameDetails struct {
 
 // igdbPlatformID maps DiscEcho disc types to IGDB platform IDs.
 var igdbPlatformID = map[state.DiscType]int{
-	state.DiscTypePSX:  7,
-	state.DiscTypePS2:  8,
-	state.DiscTypeXBOX: 11,
-	state.DiscTypeDC:   23,
-	state.DiscTypeSAT:  32,
+	state.DiscTypePSX:      7,
+	state.DiscTypePS2:      8,
+	state.DiscTypeXBOX:     11,
+	state.DiscTypeDC:       23,
+	state.DiscTypeSAT:      32,
+	state.DiscTypeSegaCD:   78,
+	state.DiscType3DO:      50,
+	state.DiscTypePCFX:     274,
+	state.DiscTypeJaguarCD: 77,
+	state.DiscTypeCDi:      117,
+	state.DiscTypePCECD:    150,
+	state.DiscTypeNeoCD:    136,
 }
 
 // NewIGDBClient constructs an IGDBClient. Empty credentials produce a

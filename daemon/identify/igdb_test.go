@@ -3,6 +3,7 @@ package identify_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -196,6 +197,54 @@ func TestIGDBClient_GameDetails_Genres(t *testing.T) {
 	}
 	if len(g.Genres) != 2 || g.Genres[0] != "Racing" || g.Genres[1] != "Simulator" {
 		t.Errorf("Genres = %v, want [Racing Simulator]", g.Genres)
+	}
+}
+
+func TestIGDBClient_PlatformIDs_CDConsoles(t *testing.T) {
+	// Each new CD console type must map to a platform ID and must not
+	// produce "no platform mapping" from SearchGames.
+	cases := []struct {
+		dt   state.DiscType
+		want int
+	}{
+		{state.DiscTypeSegaCD, 78},
+		{state.DiscType3DO, 50},
+		{state.DiscTypePCFX, 274},
+		{state.DiscTypeJaguarCD, 77},
+		{state.DiscTypeCDi, 117},
+		{state.DiscTypePCECD, 150},
+		{state.DiscTypeNeoCD, 136},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(string(tc.dt), func(t *testing.T) {
+			// Verify the platform filter is in the Apicalypse body.
+			wantFilter := fmt.Sprintf("where platforms = (%d)", tc.want)
+			apiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body := mustReadAll(t, r.Body)
+				if !strings.Contains(body, wantFilter) {
+					t.Errorf("body lacks platform filter %q: %s", wantFilter, body)
+				}
+				_, _ = w.Write([]byte(`[]`))
+			}))
+			defer apiSrv.Close()
+			tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "expires_in": 3600})
+			}))
+			defer tokenSrv.Close()
+
+			c := identify.NewIGDBClient(identify.IGDBConfig{
+				ClientID: "x", ClientSecret: "y",
+				BaseURL: apiSrv.URL, TokenURL: tokenSrv.URL,
+				MinInterval: time.Millisecond,
+			})
+
+			_, err := c.SearchGames(context.Background(), "test", tc.dt)
+			if err != nil {
+				t.Errorf("SearchGames(%s): unexpected error: %v", tc.dt, err)
+			}
+		})
 	}
 }
 
