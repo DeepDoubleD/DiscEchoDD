@@ -62,7 +62,7 @@ var igdbPlatformID = map[state.DiscType]int{
 	state.DiscTypeSegaCD:   78,
 	state.DiscType3DO:      50,
 	state.DiscTypePCFX:     274,
-	state.DiscTypeJaguarCD: 77,
+	state.DiscTypeJaguarCD: 410,
 	state.DiscTypeCDi:      117,
 	state.DiscTypePCECD:    150,
 	state.DiscTypeNeoCD:    136,
