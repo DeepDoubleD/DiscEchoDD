@@ -70,6 +70,7 @@ type OutputFields struct {
 	EpisodeTitle  string // TV episodes (TMDB episode name; empty when no mapping)
 	IsExtra       bool   // true when this output is a bonus-material title; handlers override the path to land under extras/
 	Region        string
+	ShortHash     string // short content-hash id; disambiguates DATA discs that share a generic volume label
 }
 
 // RenderOutputPath applies a Go template to fields and sanitizes the
@@ -111,6 +112,7 @@ func (f OutputFields) asMap() map[string]any {
 		"EpisodeTitle":  sanitizeFieldValue(f.EpisodeTitle),
 		"IsExtra":       f.IsExtra,
 		"Region":        sanitizeFieldValue(f.Region),
+		"ShortHash":     sanitizeFieldValue(f.ShortHash),
 	}
 }
 

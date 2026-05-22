@@ -891,7 +891,7 @@ func seedDataProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}}/{{.Title}}.iso`,
+		OutputPathTemplate: `{{.Title}}/{{.Title}} [{{.ShortHash}}].iso`,
 		Enabled:            true,
 		StepCount:          6,
 		CreatedAt:          now,

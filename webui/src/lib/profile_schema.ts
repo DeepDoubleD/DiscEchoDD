@@ -470,7 +470,10 @@ export const OUTPUT_VARS_BY_DISC_TYPE: Record<string, OutputVar[]> = {
   CD32: gameVars(),
   FMTOWNS: gameVars(),
   PIPPIN: gameVars(),
-  DATA: [{ name: 'Title', desc: 'Disc volume label' }],
+  DATA: [
+    { name: 'Title', desc: 'Disc volume label' },
+    { name: 'ShortHash', desc: 'Short content-hash id (disambiguates same-label discs)' },
+  ],
   VCD: [{ name: 'Title', desc: 'Disc volume label (per-title folder for the .mpg tracks)' }],
 };
 

@@ -229,6 +229,10 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 	sink.OnStepStart(state.StepMove)
 	rel, err := pipelines.RenderOutputPath(prof.OutputPathTemplate, pipelines.OutputFields{
 		Title: disc.Title,
+		// First 8 hex of the ISO content sha256 — disambiguates discs that
+		// share a generic volume label (e.g. PictureCD/VCD hybrids all
+		// labelled "VIDEOCD") so their outputs never collide.
+		ShortHash: hashHex[:8],
 	})
 	if err != nil {
 		sink.OnStepFailed(state.StepMove, err)

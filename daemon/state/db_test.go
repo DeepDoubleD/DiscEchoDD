@@ -24,8 +24,8 @@ func TestOpen_AppliesMigrationsOnFreshDB(t *testing.T) {
 	if err := row.Scan(&v); err != nil {
 		t.Fatalf("scan version: %v", err)
 	}
-	if v != 20 {
-		t.Errorf("schema_migrations max version: want 20, got %d", v)
+	if v != 21 {
+		t.Errorf("schema_migrations max version: want 21, got %d", v)
 	}
 
 	for _, tbl := range []string{
@@ -63,8 +63,8 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	if err := row.Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 20 {
-		t.Errorf("schema_migrations rows after second open: want 20, got %d", n)
+	if n != 21 {
+		t.Errorf("schema_migrations rows after second open: want 21, got %d", n)
 	}
 }
 
@@ -270,6 +270,62 @@ func TestMigration019_RewritesQualityPresetSlugs(t *testing.T) {
 		// untouched custom row keeps both as-is.
 		if id != "custom" && preset != exp {
 			t.Errorf("%s: preset = %q, want %q", id, preset, exp)
+		}
+	}
+}
+
+// TestMigration021_AppendsShortHashToDataTemplate confirms the migration
+// rewrites only DATA profiles still on the old seeded default, leaving any
+// custom template untouched.
+func TestMigration021_AppendsShortHashToDataTemplate(t *testing.T) {
+	dir := t.TempDir()
+	db, err := state.Open(filepath.Join(dir, "test.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := context.Background()
+
+	rows := []struct{ id, tmpl string }{
+		{"old", "{{.Title}}/{{.Title}}.iso"},
+		{"custom", "data/{{.Title}}-backup.iso"},
+	}
+	for _, r := range rows {
+		if _, err := db.Conn().ExecContext(ctx, `
+			INSERT INTO profiles (id, disc_type, name, engine, format, preset,
+			                      container, video_codec, quality_preset,
+			                      drive_policy, options_json,
+			                      output_path_template, enabled, step_count,
+			                      created_at, updated_at)
+			VALUES (?, 'DATA', ?, 'ddrescue', 'ISO', '', 'ISO', '', '', 'any',
+			        '{}', ?, 1, 6,
+			        '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+			r.id, r.id, r.tmpl); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body, err := migrationBody("021_data_iso_shorthash.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Conn().ExecContext(ctx, body); err != nil {
+		t.Fatalf("re-exec migration 021: %v", err)
+	}
+
+	want := map[string]string{
+		"old":    "{{.Title}}/{{.Title}} [{{.ShortHash}}].iso",
+		"custom": "data/{{.Title}}-backup.iso",
+	}
+	for id, exp := range want {
+		var tmpl string
+		if err := db.Conn().QueryRowContext(ctx,
+			`SELECT output_path_template FROM profiles WHERE id = ?`, id).
+			Scan(&tmpl); err != nil {
+			t.Fatal(err)
+		}
+		if tmpl != exp {
+			t.Errorf("%s: output_path_template = %q, want %q", id, tmpl, exp)
 		}
 	}
 }

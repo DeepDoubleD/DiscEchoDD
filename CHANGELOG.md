@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- DATA disc outputs now include a short content-hash id in the default filename
+  (`VIDEOCD/VIDEOCD [a1b2c3d4].iso`) via a new `{{.ShortHash}}` template variable.
+  Discs that share a generic ISO9660 volume label (common with PictureCD/VCD
+  hybrids all labelled `VIDEOCD`) previously resolved to the same path and failed
+  at the move step; they now never collide. Existing installs are migrated; custom
+  DATA templates are left untouched.
+
+### Fixed
+- The disc-type override dropdown briefly showed the wrong label (e.g.
+  "PlayStation") after a selection, because the chosen type was removed from the
+  list while the control still pointed at its slot. The dropdown now resets to
+  "Set type…" after each pick.
+
 ## [0.33.0] - 2026-05-22
 
 ### Changed

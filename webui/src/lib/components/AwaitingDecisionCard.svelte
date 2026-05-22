@@ -373,11 +373,15 @@
   ];
   // Never offer a self-set (the backend 422s it) — drop the disc's current type.
   $: overrideOptions = OVERRIDE_TYPES.filter((t) => t.value !== liveDisc.type);
+  // Controlled value: binding re-asserts the selected option on every reactive
+  // update, so filtering an option out of the (non-keyed) list can't leave the
+  // selection pointing at a relabeled neighbour. Reset to '' after each pick.
+  let overrideValue = '';
   let overrideError = '';
   let overrideBusy = false;
 
-  async function onOverrideType(e: Event): Promise<void> {
-    const value = (e.currentTarget as HTMLSelectElement).value;
+  async function onOverrideType(): Promise<void> {
+    const value = overrideValue;
     if (!value) return;
     overrideBusy = true;
     overrideError = '';
@@ -387,6 +391,7 @@
       overrideError = err instanceof Error ? err.message : 'failed to set type';
     } finally {
       overrideBusy = false;
+      overrideValue = '';
     }
   }
 </script>
@@ -456,6 +461,7 @@
       data-testid="disc-type-override"
       class="ml-2 rounded bg-zinc-800 px-2 py-1 text-text"
       disabled={overrideBusy}
+      bind:value={overrideValue}
       on:change={onOverrideType}
     >
       <option value="">Set type…</option>

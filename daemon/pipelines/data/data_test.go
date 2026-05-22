@@ -208,6 +208,38 @@ func TestRun_HappyPath(t *testing.T) {
 	}
 }
 
+// TestRun_ShortHashInPath verifies the default DATA template's {{.ShortHash}} is
+// populated with the first 8 hex of the ISO content digest, so discs sharing a
+// generic volume label resolve to distinct paths.
+func TestRun_ShortHashInPath(t *testing.T) {
+	libRoot := t.TempDir()
+	dd := &fakeDD{content: []byte("hello world")}
+	h := data.New(data.Deps{
+		DD:          dd,
+		LabelProber: &fakeLabelProber{label: "VIDEOCD"},
+		Tools:       newRegistry(),
+		LibraryRoot: libRoot,
+		WorkRoot:    t.TempDir(),
+	})
+	prof := &state.Profile{
+		ID:                 "p-data",
+		Name:               "Data",
+		OutputPathTemplate: "{{.Title}}/{{.Title}} [{{.ShortHash}}].iso",
+	}
+	disc := &state.Disc{ID: "disc-1", Type: state.DiscTypeData, Title: "VIDEOCD"}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	if err := h.Run(context.Background(), drv, disc, prof, testutil.NewRecordingSink()); err != nil {
+		t.Fatal(err)
+	}
+
+	// sha256("hello world") = b94d27b9... → first 8 hex = "b94d27b9".
+	want := filepath.Join(libRoot, "VIDEOCD", "VIDEOCD [b94d27b9].iso")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("expected file at %s: %v", want, err)
+	}
+}
+
 func TestRun_DDFailure(t *testing.T) {
 	h := data.New(data.Deps{
 		DD:          &fakeDD{err: errors.New("read error")},

@@ -71,6 +71,19 @@ func TestRenderOutputPath_Standard(t *testing.T) {
 	}
 }
 
+func TestRenderOutputPath_ShortHash(t *testing.T) {
+	got, err := pipelines.RenderOutputPath(
+		`{{.Title}}/{{.Title}} [{{.ShortHash}}].iso`,
+		pipelines.OutputFields{Title: "VIDEOCD", ShortHash: "a1b2c3d4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "VIDEOCD/VIDEOCD [a1b2c3d4].iso"
+	if got != want {
+		t.Errorf("got %q\nwant %q", got, want)
+	}
+}
+
 func TestRenderOutputPath_SanitizesPathSeparators(t *testing.T) {
 	// A track title with "/" must not introduce a directory.
 	got, err := pipelines.RenderOutputPath(
