@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-05-22
+
 ### Changed
 - The disc-type override on an awaiting-decision card is now bidirectional: it
   appears on every disc (not just `DATA`) and can switch to any other valid type,
