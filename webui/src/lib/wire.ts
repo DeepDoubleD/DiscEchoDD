@@ -11,6 +11,16 @@ export type DiscType =
   | 'XBOX'
   | 'SAT'
   | 'DC'
+  | 'SEGACD'
+  | '3DO'
+  | 'PCFX'
+  | 'JAGCD'
+  | 'CDI'
+  | 'PCECD'
+  | 'NEOCD'
+  | 'CD32'
+  | 'FMTOWNS'
+  | 'PIPPIN'
   | 'VCD'
   | 'DATA';
 

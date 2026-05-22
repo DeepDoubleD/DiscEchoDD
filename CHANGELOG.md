@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- Profile-list badges: all game consoles now share one colour so games read as a
+  single group, the Video CD badge is tinted in the movie-format family, and
+  profiles are ordered Movies → Audio → Games → Data with each group sorted oldest
+  to newest.
+
+### Fixed
+- The 10 newer CD-game consoles (Sega CD, 3DO, PC-FX, Jaguar, CD-i, PC Engine CD,
+  Neo Geo CD, CD32, FM Towns, Pippin) rendered with an unstyled grey badge and a
+  raw type label (e.g. `SEGACD`) because the web UI's disc-type list had drifted
+  from the daemon. They now show proper colours and labels.
+
 ## [0.32.0] - 2026-05-22
 
 ### Added

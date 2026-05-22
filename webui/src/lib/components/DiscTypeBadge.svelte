@@ -3,17 +3,36 @@
 
   type Meta = { label: string; color: string };
 
+  // All game consoles share one warm colour so "games" read as a single
+  // group at a glance; the per-badge label and the list ordering keep
+  // individual systems distinguishable.
+  const GAME = '#ffb37e';
+
   export const DISC_TYPE_META: Record<DiscType, Meta> = {
-    AUDIO_CD: { label: 'CD', color: '#7eb6ff' },
+    // Video — cool family, VCD a lighter lavender related to DVD's purple.
+    VCD: { label: 'VCD', color: '#c4b5fd' },
     DVD: { label: 'DVD', color: '#a78bfa' },
     BDMV: { label: 'Blu-ray', color: '#5ea3ff' },
     UHD: { label: '4K UHD', color: '#f5a524' },
-    PSX: { label: 'PSX', color: '#ff7eb6' },
-    PS2: { label: 'PS2', color: '#ff7eb6' },
-    XBOX: { label: 'Xbox', color: '#7eff9f' },
-    SAT: { label: 'Saturn', color: '#ffb37e' },
-    DC: { label: 'Dreamcast', color: '#ff9f7e' },
-    VCD: { label: 'VCD', color: '#9ca3af' },
+    // Audio.
+    AUDIO_CD: { label: 'CD', color: '#7eb6ff' },
+    // Games — unified warm orange.
+    PSX: { label: 'PSX', color: GAME },
+    PS2: { label: 'PS2', color: GAME },
+    SAT: { label: 'Saturn', color: GAME },
+    DC: { label: 'Dreamcast', color: GAME },
+    XBOX: { label: 'Xbox', color: GAME },
+    SEGACD: { label: 'Sega CD', color: GAME },
+    '3DO': { label: '3DO', color: GAME },
+    PCFX: { label: 'PC-FX', color: GAME },
+    JAGCD: { label: 'Jaguar', color: GAME },
+    CDI: { label: 'CD-i', color: GAME },
+    PCECD: { label: 'PCE-CD', color: GAME },
+    NEOCD: { label: 'Neo CD', color: GAME },
+    CD32: { label: 'CD32', color: GAME },
+    FMTOWNS: { label: 'FM Towns', color: GAME },
+    PIPPIN: { label: 'Pippin', color: GAME },
+    // Catch-all.
     DATA: { label: 'Data', color: '#a1a1aa' },
   };
 </script>

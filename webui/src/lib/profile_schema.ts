@@ -116,28 +116,36 @@ export const ENGINES: Record<string, EngineSpec> = {
   },
 };
 
+// Display order (NOT the Go enum order): drives the desktop profile-list
+// rank, the mobile group headers, and the editor's disc-type dropdown.
+// Grouped Movies → Audio → Games → Data, each group oldest → newest.
+// Game order is by console release year (intra-1994 order is approximate).
 export const DISC_TYPES: ReadonlyArray<string> = [
-  'AUDIO_CD',
+  // Movies
+  'VCD',
   'DVD',
   'BDMV',
   'UHD',
-  'PSX',
-  'PS2',
-  'SAT',
-  'DC',
-  'XBOX',
-  'SEGACD',
-  '3DO',
-  'PCFX',
-  'JAGCD',
-  'CDI',
+  // Audio
+  'AUDIO_CD',
+  // Games (oldest → newest)
   'PCECD',
-  'NEOCD',
-  'CD32',
   'FMTOWNS',
+  'SEGACD',
+  'CDI',
+  '3DO',
+  'CD32',
+  'PCFX',
+  'NEOCD',
+  'SAT',
+  'PSX',
+  'JAGCD',
   'PIPPIN',
+  'DC',
+  'PS2',
+  'XBOX',
+  // Catch-all
   'DATA',
-  'VCD',
 ];
 
 // HDR_PIPELINES mirrors daemon/api/profile_schema.go HDRPipelines. The
