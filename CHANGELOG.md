@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-05-22
+
 ### Added
 - Video CD and Super Video CD ripping. (S)VCD discs are auto-detected and their
   MPEG-1/MPEG-2 video tracks extracted to `.mpg` files with `vcdxrip` (no
