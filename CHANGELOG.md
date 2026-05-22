@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-05-22
+
 ### Changed
 - DATA disc outputs now include a short content-hash id in the default filename
   (`VIDEOCD/VIDEOCD [a1b2c3d4].iso`) via a new `{{.ShortHash}}` template variable.
