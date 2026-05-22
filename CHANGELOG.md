@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.32.1] - 2026-05-22
+
 ### Changed
 - Profile-list badges: all game consoles now share one colour so games read as a
   single group, the Video CD badge is tinted in the movie-format family, and
