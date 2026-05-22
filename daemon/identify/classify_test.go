@@ -99,6 +99,34 @@ func TestRefineDiscType_DVD(t *testing.T) {
 	}
 }
 
+func TestRefineDiscType_VCD(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{"/MPEGAV", "/MPEGAV/AVSEQ01.DAT", "/VCD", "/VCD/INFO.VCD"}},
+		&fakeBDProber{},
+		nil, nil, nil, nil, nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypeVCD {
+		t.Errorf("want VCD, got %s", got)
+	}
+}
+
+func TestRefineDiscType_SVCDFoldsIntoVCD(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{"/MPEG2", "/MPEG2/AVSEQ01.MPG", "/SVCD", "/SVCD/INFO.SVD"}},
+		&fakeBDProber{},
+		nil, nil, nil, nil, nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypeVCD {
+		t.Errorf("want VCD (SVCD folded), got %s", got)
+	}
+}
+
 func TestRefineDiscType_BDMV(t *testing.T) {
 	got := identify.RefineDiscType(
 		context.Background(),

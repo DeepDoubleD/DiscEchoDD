@@ -146,6 +146,7 @@ func TestDiscTypeLabel_Tier1CDConsoles(t *testing.T) {
 		{state.DiscTypeCD32, "Amiga CD32"},
 		{state.DiscTypeFMTowns, "FM Towns"},
 		{state.DiscTypePippin, "Bandai Pippin"},
+		{state.DiscTypeVCD, "Video CD"},
 	}
 	for _, tc := range cases {
 		if got := discTypeLabel(tc.dt); got != tc.want {

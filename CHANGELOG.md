@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Video CD and Super Video CD ripping. (S)VCD discs are auto-detected and their
+  MPEG-1/MPEG-2 video tracks extracted to `.mpg` files with `vcdxrip` (no
+  re-encode — VCD is already low-bitrate constant-format MPEG). A misdetected
+  disc can also be set to Video CD via the manual disc-type override.
+  Auto-detection matches the on-disc VCD/SVCD directory structure; the magic
+  has not yet been validated against a physical sample disc.
+
 ## [0.31.0] - 2026-05-21
 
 ### Added

@@ -182,6 +182,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
         flac \
         libdvd-pkg dvdbackup genisoimage \
         gddrescue \
+        vcdimager \
         libbluray-bdj libbluray2 libbluray-bin \
         libass9 libturbojpeg0 \
         libsdl2-2.0-0 \

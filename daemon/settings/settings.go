@@ -54,6 +54,7 @@ type Settings struct {
 	CHDManBin            string
 	RedumpDataDir        string
 	DDRescueBin          string
+	VCDXRipBin           string
 	IGDBClientID         string
 	IGDBClientSecret     string
 }
@@ -90,6 +91,7 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 		CHDManBin:            firstNonEmpty(getenv("DISCECHO_CHDMAN_BIN"), "chdman"),
 		RedumpDataDir:        firstNonEmpty(getenv("DISCECHO_REDUMP_DIR"), filepath.Join(firstNonEmpty(getenv("DISCECHO_DATA"), "/var/lib/discecho"), "redump")),
 		DDRescueBin:          firstNonEmpty(getenv("DISCECHO_DDRESCUE_BIN"), "ddrescue"),
+		VCDXRipBin:           firstNonEmpty(getenv("DISCECHO_VCDXRIP_BIN"), "vcdxrip"),
 		IGDBClientID:         getenv("DISCECHO_IGDB_CLIENT_ID"),
 		IGDBClientSecret:     getenv("DISCECHO_IGDB_CLIENT_SECRET"),
 	}
@@ -169,6 +171,9 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 	}
 	if err := seedDataProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed Data profile: %w", err)
+	}
+	if err := seedVCDProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed VCD profile: %w", err)
 	}
 	if err := seedNotifications(ctx, store, getenv("DISCECHO_APPRISE_URLS")); err != nil {
 		return nil, fmt.Errorf("seed notifications: %w", err)
@@ -321,6 +326,7 @@ const (
 	dcProfileName                    = "DC-CHD"
 	xboxProfileName                  = "XBOX-ISO"
 	dataProfileName                  = "Data-ISO"
+	vcdProfileName                   = "VCD-MPEG"
 	segaCDProfileName                = "SegaCD-CHD"
 	threeDOProfileName               = "3DO-CHD"
 	pcfxProfileName                  = "PCFX-CHD"
@@ -886,6 +892,40 @@ func seedDataProfile(ctx context.Context, store *state.Store) error {
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
 		OutputPathTemplate: `{{.Title}}/{{.Title}}.iso`,
+		Enabled:            true,
+		StepCount:          6,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+// seedVCDProfile creates the default Video CD profile. vcdxrip extracts
+// the MPEG tracks as-is; there is no encode, so video_codec stays empty
+// (vcdimager accepts no codec — same as the ddrescue data engine) and
+// quality_preset is empty. OutputPathTemplate renders a per-title
+// directory the handler drops avseqNN.mpg files into.
+func seedVCDProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeVCD)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == vcdProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypeVCD,
+		Name:               vcdProfileName,
+		Engine:             "vcdimager",
+		Format:             "MPEG",
+		Preset:             "",
+		Container:          "MPG",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}}`,
 		Enabled:            true,
 		StepCount:          6,
 		CreatedAt:          now,

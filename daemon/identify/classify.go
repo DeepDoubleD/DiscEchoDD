@@ -490,6 +490,7 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 // Decision tree:
 //   - AUDIO_CD → AUDIO_CD (passthrough)
 //   - DATA + /VIDEO_TS → DVD
+//   - DATA + /MPEGAV|/VCD (VCD) or /MPEG2|/SVCD (SVCD) → VCD
 //   - DATA + /BDMV/index.bdmv:
 //     bd_info AACS2 → UHD
 //     else          → BDMV
@@ -518,6 +519,13 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 	}
 	if hasPath(files, "/VIDEO_TS") {
 		return state.DiscTypeDVD
+	}
+	// Video CD / Super Video CD. VCD discs carry /MPEGAV (tracks) + /VCD
+	// (INFO.VCD); SVCD carry /MPEG2 + /SVCD (INFO.SVD). Both fold into
+	// DiscTypeVCD — vcdxrip extracts MPEG-1 or MPEG-2 transparently.
+	if hasPath(files, "/MPEGAV") || hasPath(files, "/VCD") ||
+		hasPath(files, "/MPEG2") || hasPath(files, "/SVCD") {
+		return state.DiscTypeVCD
 	}
 	if hasPath(files, "/BDMV/index.bdmv") {
 		if bd == nil {

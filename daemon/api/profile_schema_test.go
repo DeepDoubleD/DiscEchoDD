@@ -367,6 +367,7 @@ func TestValidateProfile_AllowedEnginesPerDiscType(t *testing.T) {
 		{state.DiscTypePSX, "redumper+chdman", "CHD", "", ""},
 		{state.DiscTypeXBOX, "redumper", "ISO", "", ""},
 		{state.DiscTypeData, "ddrescue", "ISO", "", ""},
+		{state.DiscTypeVCD, "vcdimager", "MPG", "", ""},
 	}
 	for _, tc := range cases {
 		p := &state.Profile{

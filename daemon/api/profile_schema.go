@@ -140,6 +140,13 @@ var engineSchemas = map[string]EngineSchema{
 		Options:     map[string]OptionSchema{},
 		StepCount:   6,
 	},
+	"vcdimager": {
+		Formats:     []string{"MPEG"},
+		Containers:  []string{"MPG"},
+		VideoCodecs: []string{},
+		Options:     map[string]OptionSchema{},
+		StepCount:   6,
+	},
 }
 
 // DiscTypeEngines is the curated allow-list of engines per disc type.
@@ -169,6 +176,7 @@ var DiscTypeEngines = map[state.DiscType][]string{
 	state.DiscTypeFMTowns:  {"redumper+chdman"},
 	state.DiscTypePippin:   {"redumper+chdman"},
 	state.DiscTypeData:     {"ddrescue"},
+	state.DiscTypeVCD:      {"vcdimager"},
 }
 
 // QualityTier is a resolved (constant-quality RF, encoder speed-preset)

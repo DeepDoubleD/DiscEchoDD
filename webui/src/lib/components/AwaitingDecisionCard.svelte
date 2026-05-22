@@ -365,6 +365,7 @@
     { value: 'DVD', label: 'DVD-Video' },
     { value: 'BDMV', label: 'Blu-ray' },
     { value: 'UHD', label: 'UHD Blu-ray' },
+    { value: 'VCD', label: 'Video CD' },
   ];
   let overrideError = '';
   let overrideBusy = false;

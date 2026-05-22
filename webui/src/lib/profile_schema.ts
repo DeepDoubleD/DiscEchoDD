@@ -107,6 +107,13 @@ export const ENGINES: Record<string, EngineSpec> = {
     options: {},
     stepCount: 6,
   },
+  vcdimager: {
+    formats: ['MPEG'],
+    containers: ['MPG'],
+    videoCodecs: [],
+    options: {},
+    stepCount: 6,
+  },
 };
 
 export const DISC_TYPES: ReadonlyArray<string> = [
@@ -130,6 +137,7 @@ export const DISC_TYPES: ReadonlyArray<string> = [
   'FMTOWNS',
   'PIPPIN',
   'DATA',
+  'VCD',
 ];
 
 // HDR_PIPELINES mirrors daemon/api/profile_schema.go HDRPipelines. The
@@ -188,6 +196,7 @@ export const DISC_TYPE_ENGINES: Record<string, string[]> = {
   FMTOWNS: ['redumper+chdman'],
   PIPPIN: ['redumper+chdman'],
   DATA: ['ddrescue'],
+  VCD: ['vcdimager'],
 };
 
 // QUALITY_TIER_SLUGS mirrors daemon/api/profile_schema.go QualityTierSlugs.
@@ -404,6 +413,13 @@ export const DISC_TYPE_DEFAULTS: Record<string, DiscTypeDefault> = {
     qualityPreset: '',
     outputPathTemplate: '{{.Title}}/{{.Title}}.iso',
   },
+  VCD: {
+    engine: 'vcdimager',
+    container: 'MPG',
+    videoCodec: '',
+    qualityPreset: '',
+    outputPathTemplate: '{{.Title}}',
+  },
 };
 
 export interface OutputVar {
@@ -447,6 +463,7 @@ export const OUTPUT_VARS_BY_DISC_TYPE: Record<string, OutputVar[]> = {
   FMTOWNS: gameVars(),
   PIPPIN: gameVars(),
   DATA: [{ name: 'Title', desc: 'Disc volume label' }],
+  VCD: [{ name: 'Title', desc: 'Disc volume label (per-title folder for the .mpg tracks)' }],
 };
 
 function dvdBdmvVars(): OutputVar[] {

@@ -11,6 +11,7 @@ discs to the drive.
 Supported disc types:
 
 - **DVD / Blu-ray / 4K UHD** video (MakeMKV rip → optional HandBrake re-encode)
+- **Video CD / Super Video CD** (vcdxrip → MPEG-1/MPEG-2 `.mpg` tracks)
 - **Audio CD** (whipper → FLAC, MusicBrainz-tagged, ReplayGain)
 - **Game discs** — PlayStation, PlayStation 2, Saturn, Dreamcast, Xbox,
   Sega CD, 3DO, PC-FX, Atari Jaguar CD, Philips CD-i, PC Engine CD, Neo Geo CD

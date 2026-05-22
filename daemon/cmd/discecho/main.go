@@ -33,6 +33,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/psx"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/saturn"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/uhd"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/vcd"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/xbox"
 	"github.com/jumpingmushroom/DiscEcho/daemon/settings"
 	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
@@ -421,6 +422,18 @@ func main() {
 		LabelProber:    &data.IsoinfoLabelProber{Bin: cfg.IsoInfoBin},
 		Tools:          toolReg,
 		LibraryRoot:    cfg.LibraryData,
+		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
+		URLsForTrigger: urlsForTrigger,
+		ShouldEject:    shouldEjectOnFinish,
+	}))
+
+	// VCD/SVCD → vcdxrip extracts the MPEG tracks (no transcode). Video
+	// media, so it lands under the movies root alongside DVD/BD/UHD.
+	pipeReg.Register(vcd.New(vcd.Deps{
+		Ripper:         &tools.VCDXRip{Bin: cfg.VCDXRipBin},
+		LabelProber:    &data.IsoinfoLabelProber{Bin: cfg.IsoInfoBin},
+		Tools:          toolReg,
+		LibraryRoot:    cfg.LibraryMovies,
 		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
 		URLsForTrigger: urlsForTrigger,
 		ShouldEject:    shouldEjectOnFinish,

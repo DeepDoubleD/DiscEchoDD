@@ -73,7 +73,7 @@ func BuildSuccessNotification(disc *state.Disc, job *state.Job, prof *state.Prof
 		b.line("Size", size)
 		b.line("Saved to", saved)
 
-	default: // DVD / BDMV / UHD — movie or series
+	default: // DVD / BDMV / UHD / VCD — movie or series
 		if isSeries(disc, meta) {
 			season := SelectedSeasonFromDisc(disc)
 			head := mdEscape(disc.Title)
@@ -191,6 +191,8 @@ func discTypeLabel(t state.DiscType) string {
 		return "Bandai Pippin"
 	case state.DiscTypeData:
 		return "Data disc"
+	case state.DiscTypeVCD:
+		return "Video CD"
 	default:
 		return string(t)
 	}
