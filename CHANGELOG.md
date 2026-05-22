@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- The disc-type override on an awaiting-decision card is now bidirectional: it
+  appears on every disc (not just `DATA`) and can switch to any other valid type,
+  including back to `DATA`. Fixes the case where a correctly-identified Video CD —
+  or any other type — had no way to be re-ripped as a plain data disc. The disc's
+  own current type is omitted from the list.
+
 ## [0.32.1] - 2026-05-22
 
 ### Changed

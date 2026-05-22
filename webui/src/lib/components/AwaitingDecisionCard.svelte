@@ -344,9 +344,13 @@
     }
   }
 
-  // ----- Disc-type override (DATA misclassification safety net) ---------------
+  // ----- Disc-type override (misclassification safety net) --------------------
+  // Bidirectional: any awaiting-decision disc can be switched to any other valid
+  // target. The backend (validOverrideTarget) accepts any type with a registered
+  // pipeline handler, rejecting only the same-as-current type and AUDIO_CD.
 
   const OVERRIDE_TYPES: { value: string; label: string }[] = [
+    { value: 'DATA', label: 'Data disc' },
     { value: 'PSX', label: 'PlayStation' },
     { value: 'PS2', label: 'PlayStation 2' },
     { value: 'SAT', label: 'Sega Saturn' },
@@ -367,6 +371,8 @@
     { value: 'UHD', label: 'UHD Blu-ray' },
     { value: 'VCD', label: 'Video CD' },
   ];
+  // Never offer a self-set (the backend 422s it) — drop the disc's current type.
+  $: overrideOptions = OVERRIDE_TYPES.filter((t) => t.value !== liveDisc.type);
   let overrideError = '';
   let overrideBusy = false;
 
@@ -443,24 +449,22 @@
     </div>
   </div>
 
-  {#if liveDisc.type === 'DATA'}
-    <div class="mt-2 text-sm">
-      <label class="text-zinc-400" for="disc-type-override-{liveDisc.id}">Not a data disc?</label>
-      <select
-        id="disc-type-override-{liveDisc.id}"
-        data-testid="disc-type-override"
-        class="ml-2 rounded bg-zinc-800 px-2 py-1 text-text"
-        disabled={overrideBusy}
-        on:change={onOverrideType}
-      >
-        <option value="">Set type…</option>
-        {#each OVERRIDE_TYPES as t}
-          <option value={t.value}>{t.label}</option>
-        {/each}
-      </select>
-      {#if overrideError}<p class="mt-1 text-rose-400">{overrideError}</p>{/if}
-    </div>
-  {/if}
+  <div class="mt-2 text-sm">
+    <label class="text-zinc-400" for="disc-type-override-{liveDisc.id}">Wrong type?</label>
+    <select
+      id="disc-type-override-{liveDisc.id}"
+      data-testid="disc-type-override"
+      class="ml-2 rounded bg-zinc-800 px-2 py-1 text-text"
+      disabled={overrideBusy}
+      on:change={onOverrideType}
+    >
+      <option value="">Set type…</option>
+      {#each overrideOptions as t}
+        <option value={t.value}>{t.label}</option>
+      {/each}
+    </select>
+    {#if overrideError}<p class="mt-1 text-rose-400">{overrideError}</p>{/if}
+  </div>
 
   {#if searching}
     <div class="space-y-3">

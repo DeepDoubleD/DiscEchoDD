@@ -496,6 +496,15 @@ describe('AwaitingDecisionCard disc-type override', () => {
     created_at: new Date().toISOString(),
   };
 
+  const vcdDisc: Disc = {
+    id: 'disc-vcd',
+    drive_id: 'drv1',
+    type: 'VCD',
+    title: 'VIDEOCD',
+    candidates: [],
+    created_at: new Date().toISOString(),
+  };
+
   beforeEach(() => {
     profiles.set([dataProfile]);
     settings.set({ 'operation.mode': 'manual' });
@@ -517,9 +526,17 @@ describe('AwaitingDecisionCard disc-type override', () => {
     expect(getByTestId('disc-type-override')).toBeInTheDocument();
   });
 
-  it('hides the disc-type override control when disc.type is not DATA', () => {
-    const { queryByTestId } = render(AwaitingDecisionCard, { disc: psxDisc });
-    expect(queryByTestId('disc-type-override')).toBeNull();
+  it('shows the disc-type override control for non-DATA discs too', () => {
+    const { getByTestId } = render(AwaitingDecisionCard, { disc: vcdDisc });
+    expect(getByTestId('disc-type-override')).toBeInTheDocument();
+  });
+
+  it('offers DATA and omits the disc’s own type in the option list', () => {
+    const { getByTestId } = render(AwaitingDecisionCard, { disc: vcdDisc });
+    const select = getByTestId('disc-type-override') as HTMLSelectElement;
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).toContain('DATA');
+    expect(values).not.toContain('VCD');
   });
 
   it('choosing a type calls setDiscType with the disc id and chosen value', async () => {
