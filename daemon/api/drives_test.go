@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jumpingmushroom/DiscEcho/daemon/api"
@@ -136,6 +137,104 @@ func TestEjectDrive_EjectorFailureRestoresIdle(t *testing.T) {
 	if got.State != state.DriveStateIdle {
 		t.Errorf("post-failed-eject state %s want idle", got.State)
 	}
+}
+
+func TestEjectDrive_DropsOrphanDiscBoundToDrive(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	disc := seedDisc(t, h, d.ID) // no jobs → orphan
+	h.Ejector = func(_ context.Context, _ string) error { return nil }
+
+	// Subscribe before issuing the request to catch the disc.deleted event.
+	ch, cancel := h.Broadcaster.Subscribe(8)
+	defer cancel()
+
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/eject", h.EjectDrive)
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/eject", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+
+	// Disc row gone.
+	if _, err := h.Store.GetDisc(context.Background(), disc.ID); !errors.Is(err, state.ErrNotFound) {
+		t.Errorf("disc still present after eject: err=%v", err)
+	}
+
+	// disc.deleted broadcast received before drive.changed.
+	got := drainBroadcast(t, ch, 2)
+	var sawDelete bool
+	for _, ev := range got {
+		if ev.Name == "disc.deleted" {
+			p, _ := ev.Payload.(map[string]any)
+			if p["disc_id"] != disc.ID {
+				t.Errorf("disc.deleted payload: got %+v, want disc_id=%s", p, disc.ID)
+			}
+			sawDelete = true
+		}
+	}
+	if !sawDelete {
+		t.Errorf("no disc.deleted event broadcast; got %+v", got)
+	}
+}
+
+func TestEjectDrive_KeepsDiscWithJobHistory(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	p := seedProfile(t, h)
+	disc := seedDisc(t, h, d.ID)
+	// Failed job → retry-intent; eject must NOT delete the disc.
+	if err := h.Store.CreateJob(context.Background(), &state.Job{
+		DiscID: disc.ID, DriveID: d.ID, ProfileID: p.ID,
+		State: state.JobStateFailed,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.Ejector = func(_ context.Context, _ string) error { return nil }
+
+	ch, cancel := h.Broadcaster.Subscribe(8)
+	defer cancel()
+
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/eject", h.EjectDrive)
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/eject", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+
+	if _, err := h.Store.GetDisc(context.Background(), disc.ID); err != nil {
+		t.Errorf("disc with failed job should be kept; got err=%v", err)
+	}
+
+	for _, ev := range drainBroadcast(t, ch, 1) {
+		if ev.Name == "disc.deleted" {
+			t.Errorf("unexpected disc.deleted broadcast for disc with job history")
+		}
+	}
+}
+
+// drainBroadcast collects up to `max` events from ch with a short
+// settling window. Returns whatever it gathered.
+func drainBroadcast(t *testing.T, ch <-chan state.Event, max int) []state.Event {
+	t.Helper()
+	var out []state.Event
+	deadline := time.After(200 * time.Millisecond)
+	for len(out) < max {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				return out
+			}
+			out = append(out, ev)
+		case <-deadline:
+			return out
+		}
+	}
+	return out
 }
 
 func TestEjectDrive_NotFound(t *testing.T) {

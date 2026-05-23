@@ -618,6 +618,36 @@ func (s *Store) DeleteDisc(ctx context.Context, id string) error {
 	return nil
 }
 
+// OrphanDiscOnDrive returns the id of the most-recent disc bound to driveID
+// that has no job history (the truly-orphan awaiting-decision case).
+// Returns "" + nil when nothing matches.
+//
+// Used by the eject paths (API + udev removal branch) to clean up so the
+// dashboard's computed Drive.CurrentDiscID stops resolving to a phantom
+// disc after the user ejects without ripping. Discs with any job history
+// (including failed/cancelled/interrupted retry-intent rows) are left
+// alone — those are already excluded from CurrentDiscByDrive when
+// terminal, and active jobs would have refused the eject upstream.
+func (s *Store) OrphanDiscOnDrive(ctx context.Context, driveID string) (string, error) {
+	if driveID == "" {
+		return "", nil
+	}
+	var id string
+	err := s.db.Conn().QueryRowContext(ctx, `
+		SELECT id FROM discs
+		WHERE drive_id = ?
+		  AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.disc_id = discs.id)
+		ORDER BY created_at DESC
+		LIMIT 1`, driveID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 // UpdateDiscCandidates replaces the candidates JSON for an existing disc.
 // Used by the identify endpoint when the user supplies a manual TMDB
 // query and we want to persist the new candidate list.

@@ -106,6 +106,11 @@ func (df *discFlow) handle(ev drive.Uevent) {
 		if err := df.store.UpdateDriveState(ctx, drv.ID, state.DriveStateIdle); err != nil {
 			slog.Warn("disc-flow: settle drive idle on eject", "err", err, "drive_id", drv.ID)
 		}
+		// Mirror the API eject path: drop the orphan awaiting-decision disc
+		// so the dashboard's computed Drive.CurrentDiscID stops resolving
+		// to a phantom card after a physical eject. Discs with job history
+		// (failed/cancelled retry-intent) are kept.
+		df.dropOrphanDiscOnDrive(ctx, drv.ID)
 		df.bc.Publish(state.Event{
 			Name:    "drive.changed",
 			Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
@@ -283,6 +288,30 @@ func (df *discFlow) reuseDiscRow(ctx context.Context, existing, disc *state.Disc
 	disc.ID = existing.ID
 	disc.CreatedAt = existing.CreatedAt
 	return nil
+}
+
+// dropOrphanDiscOnDrive deletes the awaiting-decision (no jobs) disc
+// bound to driveID and broadcasts disc.deleted so the webui drops it
+// from its $discs map. No-op when nothing matches. Idempotent — safe to
+// race against the API EjectDrive path (which calls the same cleanup
+// helper in daemon/api on the user's button click).
+func (df *discFlow) dropOrphanDiscOnDrive(ctx context.Context, driveID string) {
+	discID, err := df.store.OrphanDiscOnDrive(ctx, driveID)
+	if err != nil {
+		slog.Warn("disc-flow: lookup orphan disc on eject", "err", err, "drive_id", driveID)
+		return
+	}
+	if discID == "" {
+		return
+	}
+	if err := df.store.DeleteDisc(ctx, discID); err != nil && !errors.Is(err, state.ErrNotFound) {
+		slog.Warn("disc-flow: delete orphan disc on eject", "err", err, "disc_id", discID)
+		return
+	}
+	df.bc.Publish(state.Event{
+		Name:    "disc.deleted",
+		Payload: map[string]any{"disc_id": discID},
+	})
 }
 
 // recordDriveError persists the raw error message from a classify

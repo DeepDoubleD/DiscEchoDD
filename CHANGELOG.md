@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- Ejecting a disc that had not been ripped left the drive card stuck on the
+  phantom disc title (with `Re-identify` / `Re-rip` buttons) instead of flipping
+  to the "Idle — insert a disc" prompt. Both the API eject endpoint and the
+  physical-eject-button (udev) path now drop the orphan awaiting-decision disc
+  on the way to idle. Discs with job history (failed/cancelled retry-intent
+  rows) are kept untouched.
+
 ## [0.33.1] - 2026-05-22
 
 ### Changed

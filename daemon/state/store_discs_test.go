@@ -396,3 +396,89 @@ func TestStore_ListDiscHistory(t *testing.T) {
 		t.Errorf("disc C: got %q, want failed", seen[discC.ID])
 	}
 }
+
+func TestStore_OrphanDiscOnDrive_ReturnsDiscWithNoJobs(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	d := newDisc(t, s, drv)
+
+	got, err := s.OrphanDiscOnDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != d.ID {
+		t.Errorf("got %q, want %q", got, d.ID)
+	}
+}
+
+func TestStore_OrphanDiscOnDrive_SkipsDiscsWithJobHistory(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	prof := newProfile(t, s, "CD-FLAC", state.DiscTypeAudioCD)
+
+	// Disc with a job in any state — including terminal — must NOT be
+	// returned. The eject path leaves these alone so AwaitingDecisionList
+	// preserves the retry-intent surface for failed/cancelled rows.
+	for _, st := range []state.JobState{
+		state.JobStateDone, state.JobStateFailed,
+		state.JobStateCancelled, state.JobStateInterrupted,
+	} {
+		disc := newDisc(t, s, drv)
+		j := newJob(t, s, drv, prof, disc)
+		if err := s.UpdateJobState(ctx, j.ID, st, ""); err != nil {
+			t.Fatalf("update job state %s: %v", st, err)
+		}
+	}
+
+	got, err := s.OrphanDiscOnDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestStore_OrphanDiscOnDrive_PicksMostRecent(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+
+	_ = newDisc(t, s, drv)
+	time.Sleep(2 * time.Millisecond)
+	newer := newDisc(t, s, drv)
+
+	got, err := s.OrphanDiscOnDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != newer.ID {
+		t.Errorf("got %q, want %q (newest)", got, newer.ID)
+	}
+}
+
+func TestStore_OrphanDiscOnDrive_NoDiscReturnsEmpty(t *testing.T) {
+	s := openStore(t)
+	drv := newDrive(t, s, "/dev/sr0")
+
+	got, err := s.OrphanDiscOnDrive(context.Background(), drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestStore_OrphanDiscOnDrive_EmptyDriveID(t *testing.T) {
+	s := openStore(t)
+	got, err := s.OrphanDiscOnDrive(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}

@@ -63,3 +63,52 @@ func TestDiscFlow_Eject_SettlesIdleAndClearsError(t *testing.T) {
 		t.Errorf("last_error = %q, want cleared", got.LastError)
 	}
 }
+
+// Physical eject (drive-button press) fires the same media-change uevent
+// as the API eject path; the discflow handler must also drop the orphan
+// awaiting-decision disc bound to the drive so the dashboard's computed
+// Drive.CurrentDiscID stops resolving to a phantom card.
+func TestDiscFlow_Eject_DropsOrphanDiscOnDrive(t *testing.T) {
+	store := newDiscFlowTestStore(t)
+	ctx := context.Background()
+	drv := &state.Drive{DevPath: "/dev/sr0", Model: "X", Bus: "sr0", State: state.DriveStateIdle, LastSeenAt: time.Now()}
+	if err := store.UpsertDrive(ctx, drv); err != nil {
+		t.Fatal(err)
+	}
+	disc := &state.Disc{DriveID: drv.ID, Type: state.DiscTypeAudioCD, Title: "Orphan"}
+	if err := store.CreateDisc(ctx, disc); err != nil {
+		t.Fatal(err)
+	}
+
+	bc := state.NewBroadcaster()
+	t.Cleanup(bc.Close)
+	ch, cancel := bc.Subscribe(8)
+	defer cancel()
+	df := &discFlow{store: store, bc: bc, identifyDur: 5 * time.Second}
+	df.handle(ejectUevent())
+
+	if _, err := store.GetDisc(ctx, disc.ID); err == nil {
+		t.Errorf("orphan disc still present after eject")
+	}
+
+	var sawDelete bool
+	deadline := time.After(200 * time.Millisecond)
+loop:
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				break loop
+			}
+			if ev.Name == "disc.deleted" {
+				sawDelete = true
+				break loop
+			}
+		case <-deadline:
+			break loop
+		}
+	}
+	if !sawDelete {
+		t.Errorf("no disc.deleted broadcast for orphan disc on eject")
+	}
+}

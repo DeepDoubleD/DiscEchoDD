@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -88,6 +90,12 @@ func (h *Handlers) EjectDrive(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Drop the orphan disc bound to this drive (no jobs ever attached) so
+	// the dashboard's computed Drive.CurrentDiscID stops resolving to a
+	// phantom card after eject. Discs with job history are kept — failed/
+	// cancelled rows preserve retry intent in AwaitingDecisionList. Errors
+	// here are non-fatal: the eject itself already succeeded.
+	dropOrphanDiscOnDrive(r.Context(), h.Store, h.Broadcaster, drv.ID)
 	if h.Broadcaster != nil {
 		h.Broadcaster.Publish(state.Event{
 			Name:    "drive.changed",
@@ -95,6 +103,34 @@ func (h *Handlers) EjectDrive(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// dropOrphanDiscOnDrive deletes the awaiting-decision (no jobs) disc bound
+// to driveID and broadcasts disc.deleted so the webui drops it from its
+// $discs map. No-op when nothing matches. Idempotent — safe to call from
+// both the API eject endpoint and any other cleanup site.
+func dropOrphanDiscOnDrive(ctx context.Context, store *state.Store, bc *state.Broadcaster, driveID string) {
+	if store == nil {
+		return
+	}
+	discID, err := store.OrphanDiscOnDrive(ctx, driveID)
+	if err != nil {
+		slog.Warn("eject: lookup orphan disc", "err", err, "drive_id", driveID)
+		return
+	}
+	if discID == "" {
+		return
+	}
+	if err := store.DeleteDisc(ctx, discID); err != nil && !errors.Is(err, state.ErrNotFound) {
+		slog.Warn("eject: delete orphan disc", "err", err, "disc_id", discID)
+		return
+	}
+	if bc != nil {
+		bc.Publish(state.Event{
+			Name:    "disc.deleted",
+			Payload: map[string]any{"disc_id": discID},
+		})
+	}
 }
 
 // ReclassifyDrive reruns the disc-flow handler against the disc that
