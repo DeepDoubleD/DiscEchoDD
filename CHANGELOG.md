@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.33.2] - 2026-05-24
+
 ### Fixed
 - Ejecting a disc that had not been ripped left the drive card stuck on the
   phantom disc title (with `Re-identify` / `Re-rip` buttons) instead of flipping
