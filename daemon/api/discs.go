@@ -74,6 +74,26 @@ func (h *Handlers) StartDisc(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "disc already has an active job")
 		return
 	}
+	// Authoritative duplicate guard. The fast-path check above isn't
+	// atomic with Submit, so two requests racing within that window
+	// both pass it. Re-check under startMu — held across Submit — so
+	// exactly one job is created no matter how many requests race;
+	// the losers get the same 409 as a sequential duplicate. Held
+	// *before* the candidate-promotion writes below so a request that
+	// loses the race 409s without having overwritten the disc's
+	// title/metadata_id/metadata_json out from under the winner.
+	h.startMu.Lock()
+	defer h.startMu.Unlock()
+	hasActive, err = h.Store.DiscHasActiveJob(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if hasActive {
+		writeError(w, http.StatusConflict, "disc already has an active job")
+		return
+	}
+
 	// Promote chosen candidate by mutating the in-memory disc; the
 	// orchestrator only re-reads disc metadata, not candidate index, so
 	// this carries the user choice into the pipeline. M1.2 may persist
@@ -125,23 +145,6 @@ func (h *Handlers) StartDisc(w http.ResponseWriter, r *http.Request) {
 		if blob, err := h.fetchExtendedMetadata(r.Context(), disc, &c); err == nil && blob != "" {
 			_ = h.Store.UpdateDiscMetadataBlob(r.Context(), disc.ID, blob)
 		}
-	}
-
-	// Authoritative duplicate guard. The fast-path check above isn't
-	// atomic with Submit, so two requests racing within that window
-	// both pass it. Re-check under startMu — held across Submit — so
-	// exactly one job is created no matter how many requests race;
-	// the losers get the same 409 as a sequential duplicate.
-	h.startMu.Lock()
-	defer h.startMu.Unlock()
-	hasActive, err = h.Store.DiscHasActiveJob(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if hasActive {
-		writeError(w, http.StatusConflict, "disc already has an active job")
-		return
 	}
 
 	// Persist the user-picked title IDs into the disc's metadata_json
