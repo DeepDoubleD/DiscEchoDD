@@ -1054,7 +1054,9 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 
 // ListActiveAndRecentJobs returns currently-active jobs plus the N
 // most-recent finished jobs, used for /api/state's first-paint payload.
-// Active = state NOT IN ('done','failed','cancelled').
+// Active = state NOT IN ('done','failed','cancelled','interrupted') — the
+// terminal-state tuple must match the recent arm's IN clause below, or an
+// interrupted job qualifies as both active and recent and appears twice.
 func (s *Store) ListActiveAndRecentJobs(ctx context.Context, recentLimit int) ([]Job, error) {
 	if recentLimit < 0 {
 		recentLimit = 0
@@ -1066,7 +1068,7 @@ func (s *Store) ListActiveAndRecentJobs(ctx context.Context, recentLimit int) ([
 		       started_at, finished_at, error_message, created_at, active_substep,
 		       kind, COALESCE(parent_job_id, ''), spool_path
 		FROM jobs
-		WHERE state NOT IN ('done','failed','cancelled')
+		WHERE state NOT IN ('done','failed','cancelled','interrupted')
 		ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err

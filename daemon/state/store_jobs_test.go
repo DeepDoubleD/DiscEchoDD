@@ -161,6 +161,37 @@ func TestStore_Job_ListActiveAndRecent(t *testing.T) {
 	}
 }
 
+// Regression: an interrupted job must appear exactly once in the snapshot.
+// The active arm's NOT IN tuple omitted 'interrupted' while the recent arm's
+// IN tuple included it, so every /api/state after a crash listed each
+// interrupted job twice.
+func TestStore_Job_ListActiveAndRecent_InterruptedNotDuplicated(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	prof := newProfile(t, s, "CD-FLAC", state.DiscTypeAudioCD)
+	disc := newDisc(t, s, drv)
+
+	j := newJob(t, s, drv, prof, disc)
+	if err := s.UpdateJobState(ctx, j.ID, state.JobStateInterrupted, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ListActiveAndRecentJobs(ctx, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, g := range got {
+		if g.ID == j.ID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("interrupted job appeared %d times, want 1", count)
+	}
+}
+
 // Regression: ListActiveAndRecentJobs hydrates Steps for every returned
 // job from a single batched query. Without batching, the dashboard's
 // SSE bootstrap fanned out one query per job; the steps must match
