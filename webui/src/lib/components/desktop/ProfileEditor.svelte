@@ -9,8 +9,6 @@
     DISC_TYPE_DEFAULTS,
     HDR_PIPELINES,
     HDR_PIPELINE_LABELS,
-    DRIVE_POLICIES,
-    DRIVE_POLICY_LABELS,
     QUALITY_TIER_SLUGS,
     QUALITY_TIER_LABELS,
     enginesFor,
@@ -550,13 +548,6 @@
           >
             {#each validEngines as e}
               <option value={e}>{e}</option>
-            {/each}
-          </select>
-        </FormRow>
-        <FormRow label="Drive policy" error={fieldErrors.drive_policy}>
-          <select name="drive_policy" bind:value={working.drive_policy} class={inputClass}>
-            {#each DRIVE_POLICIES as dp}
-              <option value={dp}>{DRIVE_POLICY_LABELS[dp] ?? dp}</option>
             {/each}
           </select>
         </FormRow>

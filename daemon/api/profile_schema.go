@@ -236,9 +236,12 @@ var QualityTiers = map[string]map[string]QualityTier{
 // (per-engine default — no HDR concept for audio/data engines).
 var HDRPipelines = []string{"", "passthrough", "hdr10plus", "tone-map-sdr", "strip"}
 
-// DrivePolicies lists the valid drive_policy values. The "drv-N"
-// strings are reserved for pinning to a specific drive; UI offers the
-// IDs of currently-attached drives in addition to "any".
+// DrivePolicies lists the valid drive_policy values. Only "any" is
+// enforced today: no scheduler code reads Profile.DrivePolicy, so the
+// "drv-N" pin values are a no-op (and could never match a real drive,
+// whose ID is a UUID). They're retained as reserved slugs for a future
+// drive-pinning feature; the profile editor no longer surfaces the
+// control so users aren't misled into thinking a pin takes effect.
 var DrivePolicies = []string{"any", "drv-1", "drv-2", "drv-3"}
 
 // ValidationError is one field-level issue with a submitted profile.
