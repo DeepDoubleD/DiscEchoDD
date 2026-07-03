@@ -23,7 +23,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -44,10 +43,6 @@ type Spool struct {
 	mu          sync.Mutex
 	cachedBytes int64
 	cachedAt    time.Time
-
-	// gen ticks every Cleanup / Create so concurrent UsageBytes callers
-	// can invalidate stale caches without racing on the mutex.
-	gen atomic.Uint64
 }
 
 // usageTTL is how long a UsageBytes() result is reused before a fresh
@@ -89,7 +84,6 @@ func (s *Spool) Create(jobID string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("spool: mkdir %s: %w", dir, err)
 	}
-	s.gen.Add(1)
 	return dir, nil
 }
 
@@ -102,7 +96,6 @@ func (s *Spool) Cleanup(jobID string) error {
 	if err := os.RemoveAll(s.Path(jobID)); err != nil {
 		return fmt.Errorf("spool: rm %s: %w", s.Path(jobID), err)
 	}
-	s.gen.Add(1)
 	return nil
 }
 
@@ -152,9 +145,6 @@ func (s *Spool) GC(ctx context.Context, store StoreRefs) (int, error) {
 			continue
 		}
 		removed++
-	}
-	if removed > 0 {
-		s.gen.Add(1)
 	}
 	return removed, nil
 }

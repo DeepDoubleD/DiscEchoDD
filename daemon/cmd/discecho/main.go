@@ -450,15 +450,6 @@ func main() {
 		slog.Error("spool.New", "err", err)
 		os.Exit(1)
 	}
-	// GC at startup: a daemon crash mid-pipeline leaves spool dirs
-	// behind. MarkInterruptedJobs (already called by NewOrchestrator)
-	// keeps the dirs for jobs the user might retry; GC just removes the
-	// orphans (no row references them).
-	if n, gcErr := spoolStore.GC(context.Background(), store); gcErr != nil {
-		slog.Warn("spool GC at startup", "err", gcErr)
-	} else if n > 0 {
-		slog.Info("spool GC at startup", "removed", n)
-	}
 	encConc := readIntSetting(store, "compute.concurrent_encodes", 1)
 	compute := jobs.NewCompute(jobs.ComputeConfig{
 		Store:          store,
@@ -487,6 +478,18 @@ func main() {
 		URLsForTrigger: urlsForTrigger,
 	})
 	defer orch.Close()
+
+	// GC at startup: a daemon crash mid-pipeline leaves spool dirs behind.
+	// Runs after NewOrchestrator (which called MarkInterruptedJobs), so
+	// crashed jobs are already `interrupted` and ActiveSpoolReferences
+	// reflects the true keep-set: transcode-referenced spools survive for
+	// the retry-transcode flow, while orphan crashed-rip dirs (no row
+	// references them) are reclaimed on this boot rather than the next.
+	if n, gcErr := spoolStore.GC(context.Background(), store); gcErr != nil {
+		slog.Warn("spool GC at startup", "err", gcErr)
+	} else if n > 0 {
+		slog.Info("spool GC at startup", "removed", n)
+	}
 
 	// HTTP API.
 	apiH := &api.Handlers{
