@@ -83,10 +83,20 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 // every worker selects on, and discard the queues map so future
 // Submits return errStopped without sending. Pending items in the
 // channels are dropped — the worker observes <-o.stopped first.
+//
+// In-flight jobs get their per-job context cancelled (mirroring
+// Compute.Close) so a rip mid-handler.Run winds down and reaches a
+// terminal state instead of blocking wg.Wait() for the rip's full
+// duration — without this, SIGTERM hangs until docker force-kills the
+// process. A cancelled handler returns ctx.Err(), so runJob writes the
+// job `cancelled`.
 func (o *Orchestrator) Close() {
 	o.stopOnce.Do(func() {
 		o.mu.Lock()
 		o.queues = nil
+		for _, cancel := range o.cancels {
+			cancel()
+		}
 		o.mu.Unlock()
 		close(o.stopped)
 		o.wg.Wait()

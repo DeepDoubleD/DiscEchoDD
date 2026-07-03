@@ -237,6 +237,50 @@ func TestOrchestrator_CrashRecoveryMarksInterrupted(t *testing.T) {
 	}
 }
 
+// TestOrchestrator_Close_CancelsInFlight verifies Close cancels a running
+// job's context so shutdown doesn't block for the rip's full duration. The
+// handler blocks on ctx; Close must return promptly and the job must land in a
+// terminal state (cancelled) rather than hanging wg.Wait().
+func TestOrchestrator_Close_CancelsInFlight(t *testing.T) {
+	store, bc, h := openOrch(t)
+	defer bc.Close()
+	h.delay = time.Hour // would block Close forever without ctx cancellation
+	h.startedCh = make(chan struct{}, 1)
+	reg := pipelines.NewRegistry()
+	reg.Register(h)
+
+	o := jobs.NewOrchestrator(jobs.OrchestratorConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg,
+	})
+
+	_, disc, prof := seedJobInputs(t, store)
+	job, err := o.Submit(context.Background(), disc.ID, prof.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.startedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("job never started")
+	}
+
+	done := make(chan struct{})
+	go func() { o.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return — in-flight job context was not cancelled")
+	}
+
+	got, err := store.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != state.JobStateCancelled {
+		t.Errorf("job state = %q, want cancelled after Close", got.State)
+	}
+}
+
 func waitJobState(store *state.Store, id string, want state.JobState, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
