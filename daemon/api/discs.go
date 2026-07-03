@@ -665,8 +665,20 @@ func (h *Handlers) forceReidentify(w http.ResponseWriter, r *http.Request, disc 
 		return
 	}
 	defer func() {
-		if uerr := h.Store.UpdateDriveState(context.Background(), drv.ID, state.DriveStateIdle); uerr != nil {
+		// CAS release scoped to `identifying`: if a rip started on this disc
+		// mid-re-identify (orchestrator flipped the drive to `ripping`), the
+		// release is a no-op and we must not announce a stale `idle`. Publish
+		// the idle transition only when we actually released the drive, so the
+		// dashboard pill returns from "Identifying…" without a reload.
+		released, uerr := h.Store.ReleaseDriveFromIdentify(context.Background(), drv.ID, state.DriveStateIdle)
+		if uerr != nil {
 			slog.Warn("force-reidentify: release drive state", "err", uerr, "drive_id", drv.ID)
+		}
+		if released && h.Broadcaster != nil {
+			h.Broadcaster.Publish(state.Event{
+				Name:    "drive.changed",
+				Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
+			})
 		}
 	}()
 	if h.Broadcaster != nil {
@@ -828,8 +840,18 @@ func (h *Handlers) SetDiscType(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() {
-		if uerr := h.Store.UpdateDriveState(context.Background(), drv.ID, state.DriveStateIdle); uerr != nil {
+		// CAS release scoped to `identifying` (see forceReidentify): don't
+		// stomp a rip that started mid-re-identify, and publish idle only when
+		// the release actually moved the row so the UI leaves "Identifying…".
+		released, uerr := h.Store.ReleaseDriveFromIdentify(context.Background(), drv.ID, state.DriveStateIdle)
+		if uerr != nil {
 			slog.Warn("set-disc-type: release drive state", "err", uerr, "drive_id", drv.ID)
+		}
+		if released && h.Broadcaster != nil {
+			h.Broadcaster.Publish(state.Event{
+				Name:    "drive.changed",
+				Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
+			})
 		}
 	}()
 	if h.Broadcaster != nil {

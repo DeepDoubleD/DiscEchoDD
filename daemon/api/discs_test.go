@@ -1072,6 +1072,113 @@ func TestSetDiscType_BusyDrive(t *testing.T) {
 	}
 }
 
+// TestSetDiscType_ReleasesDriveToIdle verifies that a successful override on
+// an idle drive releases the drive from `identifying` back to `idle` and
+// broadcasts the idle transition, so the dashboard pill doesn't stick on
+// "Identifying…" after the re-identify completes.
+func TestSetDiscType_ReleasesDriveToIdle(t *testing.T) {
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubDiscHandlerForType{dt: state.DiscTypeDVD})
+	h := apitestServer(t)
+	h.Pipelines = reg
+
+	drv := seedDrive(t, h)
+	disc := seedDiscOfType(t, h, drv.ID, state.DiscTypeData)
+
+	events, cancel := h.Broadcaster.Subscribe(8)
+	defer cancel()
+
+	r := chi.NewRouter()
+	r.Post("/api/discs/{id}/type", h.SetDiscType)
+	body := bytes.NewReader(mustJSON(t, map[string]any{"type": "DVD"}))
+	req := httptest.NewRequest(http.MethodPost, "/api/discs/"+disc.ID+"/type", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+
+	got, err := h.Store.GetDrive(context.Background(), drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != state.DriveStateIdle {
+		t.Errorf("drive state = %q, want idle", got.State)
+	}
+
+	// An idle drive.changed transition must be broadcast after the
+	// identifying one so live clients leave the "Identifying…" pill.
+	var sawIdle bool
+	drain := time.After(500 * time.Millisecond)
+	for !sawIdle {
+		select {
+		case ev := <-events:
+			if ev.Name != "drive.changed" {
+				continue
+			}
+			p, _ := ev.Payload.(map[string]any)
+			if s, _ := p["state"].(string); s == "idle" {
+				sawIdle = true
+			}
+		case <-drain:
+			t.Fatalf("no drive.changed idle event observed")
+		}
+	}
+}
+
+// TestSetDiscType_DoesNotStompRippingDrive verifies the CAS release is a no-op
+// when a rip claimed the drive mid-re-identify: the deferred release must not
+// clobber `ripping` back to `idle`.
+func TestSetDiscType_DoesNotStompRippingDrive(t *testing.T) {
+	h := apitestServer(t)
+	drv := seedDrive(t, h)
+	disc := seedDiscOfType(t, h, drv.ID, state.DiscTypeData)
+
+	// The handler's Identify simulates a rip winning the drive while the
+	// re-identify is mid-flight by flipping it to `ripping`.
+	reg := pipelines.NewRegistry()
+	reg.Register(&ripStompHandler{store: h.Store, driveID: drv.ID})
+	h.Pipelines = reg
+
+	r := chi.NewRouter()
+	r.Post("/api/discs/{id}/type", h.SetDiscType)
+	body := bytes.NewReader(mustJSON(t, map[string]any{"type": "DVD"}))
+	req := httptest.NewRequest(http.MethodPost, "/api/discs/"+disc.ID+"/type", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+	got, err := h.Store.GetDrive(context.Background(), drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != state.DriveStateRipping {
+		t.Errorf("drive state = %q, want ripping (CAS release must not stomp a running rip)", got.State)
+	}
+}
+
+// ripStompHandler flips its drive to `ripping` during Identify to simulate a
+// rip claiming the drive while a re-identify is in flight.
+type ripStompHandler struct {
+	store   *state.Store
+	driveID string
+}
+
+func (h *ripStompHandler) DiscType() state.DiscType { return state.DiscTypeDVD }
+func (h *ripStompHandler) Identify(ctx context.Context, _ *state.Drive) (*state.Disc, []state.Candidate, error) {
+	_ = h.store.UpdateDriveState(ctx, h.driveID, state.DriveStateRipping)
+	return nil, nil, nil
+}
+func (h *ripStompHandler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan { return nil }
+func (h *ripStompHandler) Run(_ context.Context, _ *state.Drive, _ *state.Disc, _ *state.Profile, _ pipelines.EventSink) error {
+	return nil
+}
+
 // TestSetDiscType_RejectsAudioCD verifies that AUDIO_CD is not a valid
 // override target — its identify path is TOC + MusicBrainz, not a
 // drive-probe the override flow drives.
