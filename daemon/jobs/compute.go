@@ -264,10 +264,14 @@ func (c *Compute) runOne(jobID string) {
 	job, err := c.cfg.Store.GetJob(ctx, jobID)
 	if err != nil {
 		slog.Error("compute: get job", "id", jobID, "err", err)
+		// Strand-proof: mark failed so the consumed queue item doesn't
+		// leave the row queued forever (matches the finalise paths below).
+		c.finalise(jobID, "", state.JobStateFailed, err.Error())
 		return
 	}
 	if job.Kind != state.JobKindTranscode {
 		slog.Error("compute: refusing non-transcode job", "id", jobID, "kind", job.Kind)
+		c.finalise(jobID, "", state.JobStateFailed, fmt.Sprintf("refusing non-transcode job (kind %s)", job.Kind))
 		return
 	}
 	if job.State == state.JobStateCancelled {
@@ -307,6 +311,7 @@ func (c *Compute) runOne(jobID string) {
 
 	if err := c.cfg.Store.UpdateJobState(ctx, jobID, state.JobStateRunning, ""); err != nil {
 		slog.Error("compute: state running", "id", jobID, "err", err)
+		c.finalise(jobID, "", state.JobStateFailed, err.Error())
 		return
 	}
 	c.cfg.Broadcaster.Publish(state.Event{Name: "job.started", Payload: map[string]any{"job_id": jobID}})

@@ -311,6 +311,24 @@ func (o *Orchestrator) waitForSpoolCapacity(driveID, jobID string) bool {
 	}
 }
 
+// failEarly marks a job failed when a pre-flight lookup or the
+// queued→running transition fails, before the handler ever runs. Without
+// it the queue item is consumed but the row stays queued forever —
+// invisible to retry and blocking eject/reclassify on its disc/drive
+// until the next daemon restart flips it to interrupted. The drive is
+// still idle at these points (ripping is set only after all lookups), so
+// no drive-state reset is needed. Uses a fresh context because the
+// per-job ctx may already be cancelled on the caller's path.
+func (o *Orchestrator) failEarly(jobID string, cause error) {
+	if uerr := o.cfg.Store.UpdateJobState(context.Background(), jobID, state.JobStateFailed, cause.Error()); uerr != nil {
+		slog.Error("orchestrator: mark failed (early)", "id", jobID, "err", uerr)
+	}
+	o.cfg.Broadcaster.Publish(state.Event{
+		Name:    "job.failed",
+		Payload: map[string]any{"job_id": jobID, "error": cause.Error()},
+	})
+}
+
 // runJob dispatches one job through its handler.
 func (o *Orchestrator) runJob(jobID string) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -327,6 +345,7 @@ func (o *Orchestrator) runJob(jobID string) {
 	job, err := o.cfg.Store.GetJob(ctx, jobID)
 	if err != nil {
 		slog.Error("orchestrator: get job", "id", jobID, "err", err)
+		o.failEarly(jobID, err)
 		return
 	}
 	if job.State == state.JobStateCancelled {
@@ -338,16 +357,19 @@ func (o *Orchestrator) runJob(jobID string) {
 	disc, err := o.cfg.Store.GetDisc(ctx, job.DiscID)
 	if err != nil {
 		slog.Error("orchestrator: get disc", "id", jobID, "err", err)
+		o.failEarly(jobID, err)
 		return
 	}
 	drv, err := o.cfg.Store.GetDrive(ctx, job.DriveID)
 	if err != nil {
 		slog.Error("orchestrator: get drive", "id", jobID, "err", err)
+		o.failEarly(jobID, err)
 		return
 	}
 	prof, err := o.cfg.Store.GetProfile(ctx, job.ProfileID)
 	if err != nil {
 		slog.Error("orchestrator: get profile", "id", jobID, "err", err)
+		o.failEarly(jobID, err)
 		return
 	}
 	handler, ok := o.cfg.Pipelines.Get(disc.Type)
@@ -361,6 +383,7 @@ func (o *Orchestrator) runJob(jobID string) {
 	// Transition: queued → running
 	if err := o.cfg.Store.UpdateJobState(ctx, jobID, state.JobStateRunning, ""); err != nil {
 		slog.Error("orchestrator: state running", "id", jobID, "err", err)
+		o.failEarly(jobID, err)
 		return
 	}
 	if err := o.cfg.Store.UpdateDriveState(ctx, drv.ID, state.DriveStateRipping); err != nil {
