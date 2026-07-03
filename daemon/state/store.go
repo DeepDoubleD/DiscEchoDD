@@ -2848,6 +2848,13 @@ func (s *Store) ClearHistory(ctx context.Context) (int, error) {
 // Spark24h are similarly zero-filled here and stitched in by the API
 // layer's in-memory active-jobs sampler.
 func (s *Store) Stats(ctx context.Context, now time.Time) (Stats, error) {
+	// finished_at is stored as a UTC RFC3339Nano string and SQLite's
+	// date(finished_at) yields the UTC calendar day, so all cutoffs and
+	// day-bucket math below must run in UTC too. Normalizing once here keeps
+	// the whole aggregator in one zone; a local-zone `now` would build
+	// cutoffs like `…+02:00` that compare non-chronologically (lexically)
+	// against the stored `…Z` values and drop jobs near the day boundary.
+	now = now.UTC()
 	var out Stats
 	if err := s.statsActive(ctx, &out.ActiveJobs); err != nil {
 		return out, err
@@ -2876,7 +2883,7 @@ func (s *Store) statsActive(ctx context.Context, out *ActiveJobsStat) error {
 }
 
 func (s *Store) statsTodayRipped(ctx context.Context, now time.Time, out *TodayRippedStat) error {
-	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Format(time.RFC3339)
+	startOfToday := timestamp(time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()))
 	row := s.db.Conn().QueryRowContext(ctx, `
 		SELECT COALESCE(SUM(output_bytes), 0), COUNT(*)
 		FROM jobs WHERE state='done' AND finished_at >= ?`, startOfToday)
@@ -2936,8 +2943,8 @@ func (s *Store) statsLibrary(ctx context.Context, now time.Time, out *LibrarySta
 }
 
 func (s *Store) statsFailures(ctx context.Context, now time.Time, out *Failures7dStat) error {
-	cutCurr := now.AddDate(0, 0, -7).Format(time.RFC3339)
-	cutPrev := now.AddDate(0, 0, -14).Format(time.RFC3339)
+	cutCurr := timestamp(now.AddDate(0, 0, -7))
+	cutPrev := timestamp(now.AddDate(0, 0, -14))
 
 	row := s.db.Conn().QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM jobs
@@ -2955,7 +2962,7 @@ func (s *Store) statsFailures(ctx context.Context, now time.Time, out *Failures7
 	}
 
 	out.Spark30d = make([]int, 30)
-	cut30 := now.AddDate(0, 0, -30).Format(time.RFC3339)
+	cut30 := timestamp(now.AddDate(0, 0, -30))
 	rows, err := s.db.Conn().QueryContext(ctx, `
 		SELECT date(finished_at), COUNT(*)
 		FROM jobs WHERE state IN ('failed','cancelled','interrupted')
@@ -2983,7 +2990,7 @@ func (s *Store) statsFailures(ctx context.Context, now time.Time, out *Failures7
 // `days` calendar days as a slice of length `days` (oldest first).
 // Missing days are zero-filled.
 func (s *Store) dailyByteSeries(ctx context.Context, now time.Time, days int) ([]int64, error) {
-	cut := now.AddDate(0, 0, -days).Format(time.RFC3339)
+	cut := timestamp(now.AddDate(0, 0, -days))
 	rows, err := s.db.Conn().QueryContext(ctx, `
 		SELECT date(finished_at), SUM(output_bytes)
 		FROM jobs WHERE state='done' AND finished_at >= ?
