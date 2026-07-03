@@ -81,6 +81,7 @@ The codebase is in good health for its size (~51k LOC Go, ~18k LOC webui). The d
 - **Verification:** apitest: call retry twice back-to-back; second returns 409.
 
 ### [SEV-4] Graceful shutdown can't complete while a rip is running — `Orchestrator.Close` never cancels in-flight job contexts
+> **DEFERRED (SEV-4):** a shutdown-behavior change (mirror Compute.Close's cancel loop) wanting its own test; the deploy runbook already gates on no-running-jobs. Skipped per "SEV-4 unless trivial".
 - **File:** daemon/jobs/orchestrator.go:86-94, daemon/cmd/discecho/main.go:575-589
 - **Issue:** `Compute.Close` cancels every in-flight per-job context; `Orchestrator.Close` only closes `stopped` and then `wg.Wait()`s — a worker mid-`handler.Run` blocks it for the duration of the rip (hours). On SIGTERM, main returns and the deferred `orch.Close()` hangs until docker's kill timeout force-kills the process. The deploy runbook already gates on "no running jobs", so this is consistent-but-inelegant; the asymmetry with Compute looks unintentional.
 - **Evidence:** compute.go:174-184 (`for _, cancel := range c.cancels { cancel() }`) vs orchestrator.go:86-94 (no cancel loop).
@@ -96,6 +97,7 @@ The codebase is in good health for its size (~51k LOC Go, ~18k LOC webui). The d
 - **Verification:** store.test.ts already covers the cancelled branch; add a daemon test asserting the payload shape, or just grep-verify all `job.failed` publishers carry `state` when not failed.
 
 ### [SEV-4] `StartDisc` mutates disc metadata before the authoritative duplicate guard
+> **DEFERRED (SEV-4):** needs a careful reorder of the promotion writes under `startMu`; low real-world impact (racers are usually the same auto-confirm). Skipped per "SEV-4 unless trivial".
 - **File:** daemon/api/discs.go:82-128 vs 130-145
 - **Issue:** The candidate-promotion writes (`UpdateDiscMetadata`, runtime fetch, extended-metadata blob) happen before the `startMu`-protected re-check. A request that ultimately loses the race and 409s has already overwritten the disc's title/metadata_id/metadata_json — potentially between the winner's `Submit` and the pipeline's re-read of the disc row. In practice both racers are usually the same auto-confirm with the same candidate, so impact is low; it's still a write-then-reject ordering smell.
 - **Evidence:** Comment at line 64-67 acknowledges the fast-path check is non-atomic, but the mutations sit between the two checks.
@@ -103,18 +105,21 @@ The codebase is in good health for its size (~51k LOC Go, ~18k LOC webui). The d
 - **Verification:** apitest: two concurrent /start with different candidate_index; loser gets 409 and the winner's candidate is what the job used.
 
 ### [SEV-4] IGDB token request puts `client_secret` in the URL query string
+> **DEFERRED (SEV-4):** small but touches the token flow + httptest fakes; the secret is in the daemon's *outbound* request to Twitch, not exposed to LAN clients. Recommended as the next follow-up (security hygiene).
 - **File:** daemon/identify/igdb.go:318-327
 - **Issue:** `getToken` builds `cfg.TokenURL + "?" + form.Encode()` with client_id/client_secret as query params. Twitch accepts it, but secrets in URLs land in proxy/server access logs. The sibling implementation in api/integrations.go:312-322 (`testIGDB`) correctly POSTs the form in the body.
 - **Suggested fix:** Send the form as the POST body with `Content-Type: application/x-www-form-urlencoded`, matching `testIGDB`.
 - **Verification:** Existing httptest-based IGDB tests — update the fake token endpoint to read the body; live: IGDB search still works.
 
 ### [SEV-4] `Spool.gen` is written on every Create/Cleanup/GC but never read — the documented cache invalidation doesn't exist
+> **DEFERRED (SEV-4):** dead-field removal (or implementing the invalidation) touching the spool internals; harmless at current scale. Skipped per "SEV-4 unless trivial".
 - **File:** daemon/spool/spool.go:48-51, 92, 105, 157, 165-172
 - **Issue:** The comment says "gen ticks every Cleanup/Create so concurrent UsageBytes callers can invalidate stale caches", but `UsageBytes` only checks the 5s TTL and never consults `gen`. Post-cleanup usage (and thus the backpressure check) can read up to 5s stale — harmless at this scale, but the field is dead weight and the comment misleads.
 - **Suggested fix:** Either compare a snapshot of `gen` in `UsageBytes` and bypass the TTL when it changed, or delete the field and fix the comment.
 - **Verification:** `go vet`/tests; a unit test that Cleanup makes the next UsageBytes reflect the removal (if implementing invalidation).
 
 ### [SEV-4] main.go runs spool GC before `MarkInterruptedJobs`, contradicting its own comment
+> **DEFERRED (SEV-4):** reordering startup calls (or correcting the comment) carries startup-sequencing risk for a currently-conservative behavior. Skipped per "SEV-4 unless trivial".
 - **File:** daemon/cmd/discecho/main.go:453-461 (GC) vs 475 (NewOrchestrator, which calls MarkInterruptedJobs)
 - **Issue:** The GC comment says "MarkInterruptedJobs (already called by NewOrchestrator) keeps the dirs…", but NewOrchestrator is constructed ~20 lines later. Behavior happens to be conservative (crashed rip jobs are still `running` at GC time, so their dirs are kept; the next boot's GC removes them), but the stated invariant is false and a future reorder could silently change GC semantics.
 - **Suggested fix:** Move the GC call after `jobs.NewOrchestrator(...)` (or call `MarkInterruptedJobs` explicitly before GC) and fix the comment.
@@ -128,24 +133,28 @@ The codebase is in good health for its size (~51k LOC Go, ~18k LOC webui). The d
 - **Verification:** Create a new DATA profile in the editor; the template field pre-fills with `[{{.ShortHash}}]`.
 
 ### [SEV-4] `jobs.elapsed_seconds` is never written non-zero — dead wire field
+> **DEFERRED (SEV-4):** removing the parameter/field (or computing elapsed) touches `UpdateJobProgress`'s signature + all call sites; UI already derives elapsed from `started_at`. Skipped per "SEV-4 unless trivial".
 - **File:** daemon/jobs/sink.go:133 (`UpdateJobProgress(…, p.eta, 0)`), daemon/state/store.go:1368-1383
 - **Issue:** Every progress write passes `elapsedSeconds = 0`; nothing else writes the column. `notify_message.go:450` guards on `job.ElapsedSeconds > 0` (so it falls back correctly), and the UI derives elapsed from `started_at`. The column, struct field, and wire field are effectively dead — a trap for someone who trusts them.
 - **Suggested fix:** Either compute and pass elapsed in `flushProgress` (the sink knows the step start time) or drop the parameter/field.
 - **Verification:** grep for remaining readers after the change; `pnpm check` + `go test ./...`.
 
 ### [SEV-4] `paused` missing from two active-state tuples (latent — pause is never used)
+> **DEFERRED (SEV-4):** purely latent (`JobStatePaused` is never set today); left to avoid touching crash-recovery/eject-guard SQL without a driving need. Revisit if pause ships.
 - **File:** daemon/state/store.go:1266-1279 (`HasActiveJobOnDrive`: `('queued','running','identifying')`), 1552-1590 (`MarkInterruptedJobs`: `('queued','identifying','running')`)
 - **Issue:** `DiscHasActiveJob`, `ActiveSpoolReferences`, and `ClearHistory` all treat `paused` as active; these two don't. Today `JobStatePaused` is never set ("M1: never; pause is 501"), so this is purely latent — but the day pause ships, a paused job wouldn't block eject/reclassify and wouldn't be crash-recovered to `interrupted`.
 - **Suggested fix:** Add `'paused'` to both tuples now (cheap), or centralize the active/terminal tuples as shared SQL fragments so the CLAUDE.md "grep 7+ sites" chore disappears.
 - **Verification:** Store tests seeding a `paused` job and asserting both methods treat it as active.
 
 ### [SEV-4] Retention SQL's `finished_at IS NOT NULL` guards are ineffective — the column stores `''`, never NULL
+> **DEFERRED (SEV-4):** harmless today (all terminal writers stamp `finished_at`); left to avoid touching retention/prune SQL without a driving need. Skipped per "SEV-4 unless trivial".
 - **File:** daemon/state/store.go:2590-2610 (retentionWhere), 2718-2721 (HistoryBucketTotals)
 - **Issue:** Jobs are inserted with `finished_at = ''` (via `timestampPtr(nil)`), so `IS NOT NULL` is always true and the real guard is the terminal-state tuple. Currently harmless (all terminal writers stamp finished_at), but the day-cutoff arm `finished_at < ?` would classify a hypothetical terminal-with-empty-finished_at row as "older than everything" and prune it. Brittle invariant worth making explicit.
 - **Suggested fix:** Change guards to `finished_at != ''` (matching `ListActiveAndRecentJobs`'s `NULLIF(finished_at,'')` awareness), or normalize the column to real NULLs.
 - **Verification:** Store test: terminal job with empty finished_at is not pruned by a days-only policy.
 
 ### [SEV-4] `statsLibrary` loads every done job on each snapshot and ignores timestamp parse errors
+> **DEFERRED (SEV-4):** a query/perf refactor (GROUP BY daily-sum); small under retention, grows only with `retention.forever`. Skipped per "SEV-4 unless trivial".
 - **File:** daemon/state/store.go:2892-2934
 - **Issue:** The 30-day cumulative spark loads all `done` rows and does an O(30·N) in-memory scan on every `/api/state` and SSE connect. With retention on this stays small; with `retention.forever` (the default) it grows unboundedly with library size. Also `t, _ := time.Parse(…)` — a malformed row lands at zero time and inflates every bucket.
 - **Suggested fix:** Replace with a `GROUP BY date(finished_at)` daily-sum query + Go-side running total (the `dailyByteSeries` shape); log/skip parse failures.
