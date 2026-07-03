@@ -319,11 +319,14 @@ func (c *igdbClient) getToken(ctx context.Context, cfg IGDBConfig) (string, erro
 	form.Set("client_id", cfg.ClientID)
 	form.Set("client_secret", cfg.ClientSecret)
 	form.Set("grant_type", "client_credentials")
+	// Send credentials in the form body, not the URL query — a secret in the
+	// query string lands in proxy/server access logs. Twitch accepts either.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		cfg.TokenURL+"?"+form.Encode(), nil)
+		cfg.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", fmt.Errorf("igdb: build token request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := cfg.HTTPClient.Do(req)
 	if err != nil {
 		return "", err

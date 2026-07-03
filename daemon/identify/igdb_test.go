@@ -20,6 +20,15 @@ func TestIGDBClient_TokenCached(t *testing.T) {
 	var tokenCalls int32
 	tokenSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&tokenCalls, 1)
+		// The secret must travel in the form body, never the URL query
+		// (query strings land in access logs).
+		if r.URL.RawQuery != "" {
+			t.Errorf("token request has non-empty query %q — secret must be in the body", r.URL.RawQuery)
+		}
+		_ = r.ParseForm()
+		if got := r.PostFormValue("client_secret"); got != "secret-pqr" {
+			t.Errorf("client_secret in body = %q, want secret-pqr", got)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token": "test-token-abc",
 			"expires_in":   3600,
