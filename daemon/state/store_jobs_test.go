@@ -243,7 +243,7 @@ func TestStore_Job_UpdateProgress(t *testing.T) {
 	disc := newDisc(t, s, drv)
 	j := newJob(t, s, drv, prof, disc)
 
-	if err := s.UpdateJobProgress(ctx, j.ID, state.StepRip, 42.5, "8.4×", 120, 60); err != nil {
+	if err := s.UpdateJobProgress(ctx, j.ID, state.StepRip, 42.5, "8.4×", 120); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.GetJob(ctx, j.ID)
@@ -456,5 +456,29 @@ func TestStore_UpdateJobSubStep_NotFound(t *testing.T) {
 	err := s.UpdateJobSubStep(ctx, "no-such-job", "REFINE")
 	if err != state.ErrNotFound {
 		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
+// TestStore_HasActiveJobOnDrive_CountsPaused verifies a paused job counts as
+// active so it blocks mid-rip udev media-change handling — consistent with
+// DiscHasActiveJob / ActiveSpoolReferences (latent until pause ships).
+func TestStore_HasActiveJobOnDrive_CountsPaused(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	prof := newProfile(t, s, "p", state.DiscTypeAudioCD)
+	disc := newDisc(t, s, drv)
+	j := newJob(t, s, drv, prof, disc)
+
+	if _, err := s.DB().Conn().ExecContext(ctx,
+		`UPDATE jobs SET state='paused' WHERE id=?`, j.ID); err != nil {
+		t.Fatal(err)
+	}
+	active, err := s.HasActiveJobOnDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !active {
+		t.Error("paused job should count as active on its drive")
 	}
 }

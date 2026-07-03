@@ -9,6 +9,59 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
 
+// TestStore_Stats_LibrarySeries pins the statsLibrary refactor: the 30-day
+// cumulative series is a running total that folds in a pre-window baseline,
+// stays monotonic, and ends exactly at UsedBytes.
+func TestStore_Stats_LibrarySeries(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	prof := newProfile(t, s, "CD-FLAC", state.DiscTypeAudioCD)
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+
+	mk := func(daysAgo int, bytes int64) {
+		disc := newDisc(t, s, drv)
+		j := newJob(t, s, drv, prof, disc)
+		if err := s.UpdateJobState(ctx, j.ID, state.JobStateDone, ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordOutputBytes(ctx, j.ID, bytes); err != nil {
+			t.Fatal(err)
+		}
+		backdateJobFinishedAt(t, s, j.ID, now.AddDate(0, 0, -daysAgo))
+	}
+	mk(40, 1000) // before the 30-day window → baseline
+	mk(5, 100)   // index 24
+	mk(2, 200)   // index 27
+	mk(0, 50)    // index 29 (today)
+
+	out, err := s.Stats(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib := out.Library
+	if lib.UsedBytes != 1350 {
+		t.Fatalf("used_bytes = %d, want 1350", lib.UsedBytes)
+	}
+	if len(lib.Spark30dUsed) != 30 {
+		t.Fatalf("series len = %d, want 30", len(lib.Spark30dUsed))
+	}
+	checks := map[int]int64{0: 1000, 23: 1000, 24: 1100, 27: 1300, 29: 1350}
+	for idx, want := range checks {
+		if lib.Spark30dUsed[idx] != want {
+			t.Errorf("series[%d] = %d, want %d", idx, lib.Spark30dUsed[idx], want)
+		}
+	}
+	if lib.Spark30dUsed[29] != lib.UsedBytes {
+		t.Errorf("series must end at used_bytes: %d vs %d", lib.Spark30dUsed[29], lib.UsedBytes)
+	}
+	for i := 1; i < 30; i++ {
+		if lib.Spark30dUsed[i] < lib.Spark30dUsed[i-1] {
+			t.Errorf("series not monotonic at %d: %d < %d", i, lib.Spark30dUsed[i], lib.Spark30dUsed[i-1])
+		}
+	}
+}
+
 // TestStore_Stats_ZoneStable pins the fix for the stats timezone-mixing bug:
 // finished_at is stored UTC and date(finished_at) buckets by the UTC day, so
 // the aggregator must define "today" and every cutoff in UTC regardless of the

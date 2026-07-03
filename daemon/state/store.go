@@ -1262,9 +1262,11 @@ func (s *Store) LifecycleStates(ctx context.Context, discIDs []string) (map[stri
 }
 
 // HasActiveJobOnDrive reports whether the given drive currently has a
-// job in queued / running / identifying state. Used by the udev event
-// handler to drop mid-rip media-change events that would otherwise
-// collide with the active job's exclusive hold on /dev/sr0.
+// job in queued / running / identifying / paused state. Used by the udev
+// event handler to drop mid-rip media-change events that would otherwise
+// collide with the active job's exclusive hold on /dev/sr0. `paused` is
+// included for consistency with DiscHasActiveJob / ActiveSpoolReferences,
+// which all treat a paused job as active (latent until pause ships).
 func (s *Store) HasActiveJobOnDrive(ctx context.Context, driveID string) (bool, error) {
 	if driveID == "" {
 		return false, nil
@@ -1272,7 +1274,7 @@ func (s *Store) HasActiveJobOnDrive(ctx context.Context, driveID string) (bool, 
 	var n int
 	err := s.db.Conn().QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM jobs
-		WHERE drive_id = ? AND state IN ('queued','running','identifying')`,
+		WHERE drive_id = ? AND state IN ('queued','running','identifying','paused')`,
 		driveID).Scan(&n)
 	if err != nil {
 		return false, err
@@ -1367,13 +1369,18 @@ func (s *Store) CancelJobIfActive(ctx context.Context, id string) error {
 
 // UpdateJobProgress writes the volatile progress fields. Cheap; called
 // by the orchestrator at most once per second per job.
+//
+// elapsed_seconds is intentionally not written here: it was only ever
+// passed 0, and both the notify formatter and the UI derive elapsed from
+// started_at. The column is retained (always 0) rather than dropped to
+// avoid a destructive migration across the jobs SELECT column lists.
 func (s *Store) UpdateJobProgress(ctx context.Context, id string, activeStep StepID,
-	pct float64, speed string, etaSeconds, elapsedSeconds int) error {
+	pct float64, speed string, etaSeconds int) error {
 	res, err := s.db.Conn().ExecContext(ctx, `
 		UPDATE jobs SET active_step = ?, progress = ?, speed = ?,
-		                eta_seconds = ?, elapsed_seconds = ?
+		                eta_seconds = ?
 		WHERE id = ?`,
-		string(activeStep), pct, speed, etaSeconds, elapsedSeconds, id)
+		string(activeStep), pct, speed, etaSeconds, id)
 	if err != nil {
 		return err
 	}
@@ -1551,9 +1558,9 @@ var ErrInvalidJobKindForRetry = errors.New("state: job is not a transcode job")
 // requested job isn't in a retryable terminal state.
 var ErrInvalidJobStateForRetry = errors.New("state: job is not in a retryable state")
 
-// MarkInterruptedJobs flips every job in {queued, identifying, running}
-// to interrupted. Used at daemon startup so crashed-mid-rip jobs are
-// visible in the UI for resolution. Returns the count flipped.
+// MarkInterruptedJobs flips every job in {queued, identifying, running,
+// paused} to interrupted. Used at daemon startup so crashed-mid-rip jobs
+// are visible in the UI for resolution. Returns the count flipped.
 //
 // Also flips any orphan job_steps still in 'running' for those jobs to
 // 'failed' (with finished_at stamped). Without this, the job-detail
@@ -1571,7 +1578,7 @@ func (s *Store) MarkInterruptedJobs(ctx context.Context) (int, error) {
 	res, err := tx.ExecContext(ctx, `
 		UPDATE jobs
 		SET state = 'interrupted', finished_at = ?
-		WHERE state IN ('queued','identifying','running')`, now)
+		WHERE state IN ('queued','identifying','running','paused')`, now)
 	if err != nil {
 		return 0, err
 	}
@@ -2601,13 +2608,17 @@ func retentionWhere(states []string, days, count int, now time.Time) (string, []
 	if count > 0 {
 		arms = append(arms,
 			"id NOT IN (SELECT id FROM jobs WHERE state IN ("+inList+
-				") AND finished_at IS NOT NULL ORDER BY finished_at DESC, id DESC LIMIT ?)")
+				") AND finished_at != '' ORDER BY finished_at DESC, id DESC LIMIT ?)")
 		args = append(args, count)
 	}
 	if len(arms) == 0 {
 		return "", nil
 	}
-	return "state IN (" + inList + ") AND finished_at IS NOT NULL AND (" +
+	// finished_at is stored as '' (never NULL) until a terminal write stamps
+	// it, so `IS NOT NULL` is a no-op that would let a terminal-but-unstamped
+	// row match the `finished_at < ?` age arm (empty string sorts before any
+	// timestamp) and be pruned. Guard on `!= ''` instead.
+	return "state IN (" + inList + ") AND finished_at != '' AND (" +
 		strings.Join(arms, " OR ") + ")", args
 }
 
@@ -2720,7 +2731,7 @@ func (s *Store) HistoryBucketTotals(ctx context.Context) (success, failed int, e
 		inList := "'" + strings.Join(b.states, "','") + "'"
 		if err = s.db.Conn().QueryRowContext(ctx,
 			"SELECT COUNT(*) FROM jobs WHERE state IN ("+inList+
-				") AND finished_at IS NOT NULL").Scan(b.out); err != nil {
+				") AND finished_at != ''").Scan(b.out); err != nil {
 			return 0, 0, fmt.Errorf("count bucket totals: %w", err)
 		}
 	}
@@ -2905,39 +2916,52 @@ func (s *Store) statsLibrary(ctx context.Context, now time.Time, out *LibrarySta
 	if err := row.Scan(&out.UsedBytes); err != nil {
 		return err
 	}
-	// Build a cumulative-at-end-of-day series for the last 30 days.
+	// Build a cumulative-at-end-of-day series for the last 30 UTC days.
+	// Rather than load every done row and do an O(30·N) in-memory scan on
+	// every /api/state, bucket per-day in SQL (date(finished_at) is the UTC
+	// day) and carry a running total forward from a pre-window baseline.
+	// This also drops the old Go-side time.Parse whose ignored error folded
+	// malformed rows into a zero-time bucket.
+	todayUTC := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	windowStart := todayUTC.AddDate(0, 0, -29)
+	windowStartStr := timestamp(windowStart)
+
+	// Baseline: everything finished before the window (empty finished_at
+	// sorts before any timestamp, matching the old zero-time handling, so
+	// the series' last point still equals UsedBytes).
+	var baseline int64
+	if err := s.db.Conn().QueryRowContext(ctx, `
+		SELECT COALESCE(SUM(output_bytes), 0)
+		FROM jobs WHERE state='done' AND finished_at < ?`, windowStartStr).Scan(&baseline); err != nil {
+		return err
+	}
+
 	rows, err := s.db.Conn().QueryContext(ctx, `
-		SELECT finished_at, output_bytes
-		FROM jobs WHERE state='done' ORDER BY finished_at ASC`)
+		SELECT date(finished_at), COALESCE(SUM(output_bytes), 0)
+		FROM jobs WHERE state='done' AND finished_at >= ?
+		GROUP BY date(finished_at)`, windowStartStr)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = rows.Close() }()
-	type pt struct {
-		t time.Time
-		b int64
-	}
-	var all []pt
+	daily := make(map[string]int64)
 	for rows.Next() {
-		var ts string
-		var b int64
-		if err := rows.Scan(&ts, &b); err != nil {
+		var day string
+		var sum int64
+		if err := rows.Scan(&day, &sum); err != nil {
 			return err
 		}
-		t, _ := time.Parse(time.RFC3339, ts)
-		all = append(all, pt{t, b})
+		daily[day] = sum
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
 	out.Spark30dUsed = make([]int64, 30)
-	dayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
+	running := baseline
 	for i := 0; i < 30; i++ {
-		thisDayEnd := dayEnd.AddDate(0, 0, -(29 - i))
-		var sum int64
-		for _, p := range all {
-			if !p.t.After(thisDayEnd) {
-				sum += p.b
-			}
-		}
-		out.Spark30dUsed[i] = sum
+		running += daily[windowStart.AddDate(0, 0, i).Format("2006-01-02")]
+		out.Spark30dUsed[i] = running
 	}
 	return nil
 }

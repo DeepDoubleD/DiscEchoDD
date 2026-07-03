@@ -67,7 +67,7 @@ func TestStore_FullCycle(t *testing.T) {
 	if err := s.UpdateJobStepState(ctx, job.ID, state.StepRip, state.JobStepStateRunning); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateJobProgress(ctx, job.ID, state.StepRip, 50, "10×", 60, 30); err != nil {
+	if err := s.UpdateJobProgress(ctx, job.ID, state.StepRip, 50, "10×", 60); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AppendJobStepNotes(ctx, job.ID, state.StepRip,

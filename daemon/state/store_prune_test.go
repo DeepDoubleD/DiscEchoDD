@@ -156,6 +156,34 @@ func TestStore_PruneHistory_KeepsRunning(t *testing.T) {
 	mustExist(t, s, run.ID)
 }
 
+// TestStore_PruneHistory_KeepsTerminalWithEmptyFinishedAt guards the
+// non-empty-finished_at fix: a terminal job whose finished_at is the empty
+// string (never stamped) must not be pruned by a days-only policy. The old
+// IS-NOT-NULL guard was a no-op (the column is empty, not NULL), so the empty
+// string — which sorts before any timestamp — matched the finished_at-below-
+// cutoff age arm and the row was wrongly deleted.
+func TestStore_PruneHistory_KeepsTerminalWithEmptyFinishedAt(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	prof := newProfile(t, s, "p", state.DiscTypeAudioCD)
+	disc := newDisc(t, s, drv)
+	j := newJob(t, s, drv, prof, disc)
+	if _, err := s.DB().Conn().ExecContext(ctx,
+		`UPDATE jobs SET state='done', finished_at='' WHERE id=?`, j.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.PruneHistory(ctx, state.RetentionPolicy{SuccessDays: 1}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total() != 0 {
+		t.Fatalf("terminal job with empty finished_at must not be pruned, got %+v", res)
+	}
+	mustExist(t, s, j.ID)
+}
+
 // The orphan-disc cleanup keeps the drive's most-recent disc (still inserted)
 // even when its only job is pruned, but drops an older orphaned disc.
 func TestStore_PruneHistory_NewestDiscGuard(t *testing.T) {

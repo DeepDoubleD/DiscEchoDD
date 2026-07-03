@@ -69,7 +69,7 @@ func (s *PersistentSink) OnStepStart(step state.StepID) {
 	// Reset progress/speed/eta so the previous step's terminal values
 	// don't bleed into the new step's UI window. UpdateJobProgress also
 	// re-asserts active_step; that's fine — it matches SetActiveStep.
-	if err := s.store.UpdateJobProgress(context.Background(), s.jobID, step, 0, "", 0, 0); err != nil {
+	if err := s.store.UpdateJobProgress(context.Background(), s.jobID, step, 0, "", 0); err != nil {
 		slog.Warn("PersistentSink: reset progress on step start", "job", s.jobID, "step", step, "err", err)
 	}
 	s.mu.Lock()
@@ -130,7 +130,7 @@ func (s *PersistentSink) Flush() {
 }
 
 func (s *PersistentSink) flushProgress(p pendingProgress) {
-	if err := s.store.UpdateJobProgress(context.Background(), s.jobID, p.step, p.pct, p.spd, p.eta, 0); err != nil {
+	if err := s.store.UpdateJobProgress(context.Background(), s.jobID, p.step, p.pct, p.spd, p.eta); err != nil {
 		slog.Warn("PersistentSink: UpdateJobProgress", "job", s.jobID, "err", err)
 	}
 	s.bc.Publish(state.Event{
@@ -201,7 +201,7 @@ func (s *PersistentSink) OnStepDone(step state.StepID, notes map[string]any) {
 		slog.Warn("PersistentSink: clear substep on step done", "job", s.jobID, "err", err)
 	}
 	s.Flush()
-	if err := s.store.UpdateJobProgress(context.Background(), s.jobID, step, 100, "", 0, 0); err != nil {
+	if err := s.store.UpdateJobProgress(context.Background(), s.jobID, step, 100, "", 0); err != nil {
 		slog.Warn("PersistentSink: UpdateJobProgress 100 on step done", "job", s.jobID, "step", step, "err", err)
 	}
 	s.bc.Publish(state.Event{
