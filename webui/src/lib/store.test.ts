@@ -262,6 +262,26 @@ describe('handleSSEEvent', () => {
     expect(j.steps?.[0].state).toBe('running');
   });
 
+  it('job.substep patches active_substep by id', () => {
+    jobs.set([{ ...seedJob, state: 'running', active_step: 'rip' }]);
+    handleSSEEvent('job.substep', { job_id: 'job-1', substep: 'REFINE' });
+    expect(get(jobs)[0].active_substep).toBe('REFINE');
+  });
+
+  it('job.step done clears the lingering active_substep', () => {
+    jobs.set([
+      {
+        ...seedJob,
+        state: 'running',
+        active_step: 'rip',
+        active_substep: 'REFINE',
+        steps: [{ step: 'rip', state: 'running', attempt_count: 0 }],
+      },
+    ]);
+    handleSSEEvent('job.step', { job_id: 'job-1', step: 'rip', state: 'done' });
+    expect(get(jobs)[0].active_substep).toBe('');
+  });
+
   it('job.log ring-buffers up to 300 lines per job', () => {
     for (let i = 0; i < 320; i++) {
       handleSSEEvent('job.log', {

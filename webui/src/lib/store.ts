@@ -99,6 +99,7 @@ const SSE_EVENT_NAMES = [
   'job.created',
   'job.step',
   'job.progress',
+  'job.substep',
   'job.log',
   'job.done',
   'job.failed',
@@ -241,7 +242,12 @@ export function handleSSEEvent(name: string, payload: unknown): void {
           // picked it up. Flip job.state so the dashboard stops
           // reading "QUEUED" while a step is already running.
           const promoted = j.state === 'queued' && stepState === 'running' ? 'running' : j.state;
-          return { ...j, active_step: step, state: promoted, steps };
+          // Clear the rip sub-phase label when a step completes, mirroring
+          // the daemon's OnStepDone (which blanks active_substep in the DB
+          // but doesn't broadcast a job.substep clear). Without this a stale
+          // "REFINE"/"DUMP" label lingers into the next step.
+          const activeSubstep = stepState === 'done' ? '' : j.active_substep;
+          return { ...j, active_step: step, state: promoted, active_substep: activeSubstep, steps };
         }),
       );
       break;
@@ -261,6 +267,19 @@ export function handleSSEEvent(name: string, payload: unknown): void {
                 eta_seconds: p.eta_seconds as number | undefined,
               },
         ),
+      );
+      break;
+    }
+
+    case 'job.substep': {
+      // Live rip sub-phase (redumper DUMP/REFINE/SPLIT, MakeMKV scan/…).
+      // Daemon persists jobs.active_substep and broadcasts {job_id, substep};
+      // patch the matching job so the drive card label tracks it without a
+      // reload. Empty substep clears (daemon sends "" on step completion).
+      const jobID = p.job_id as string;
+      const substep = typeof p.substep === 'string' ? p.substep : '';
+      jobs.update((arr) =>
+        arr.map((j) => (j.id === jobID ? { ...j, active_substep: substep } : j)),
       );
       break;
     }

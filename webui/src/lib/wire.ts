@@ -316,6 +316,7 @@ export type SSEEvent =
       event: 'job.progress';
       data: { job_id: string; step: StepID; pct: number; speed: string; eta_seconds: number };
     }
+  | { event: 'job.substep'; data: { job_id: string; substep: string } }
   | {
       event: 'job.log';
       data: { job_id: string; t: string; step?: StepID | ''; level: LogLevel; message: string };
