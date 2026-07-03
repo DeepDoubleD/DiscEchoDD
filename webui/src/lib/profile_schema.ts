@@ -423,7 +423,10 @@ export const DISC_TYPE_DEFAULTS: Record<string, DiscTypeDefault> = {
     container: 'ISO',
     videoCodec: '',
     qualityPreset: '',
-    outputPathTemplate: '{{.Title}}/{{.Title}}.iso',
+    // Mirrors migration 021 + settings.go seeder: the [{{.ShortHash}}] suffix
+    // disambiguates discs that share a generic ISO9660 volume label, which
+    // otherwise collide at the move step. Keep in sync with the Go seeder.
+    outputPathTemplate: '{{.Title}}/{{.Title}} [{{.ShortHash}}].iso',
   },
   VCD: {
     engine: 'vcdimager',

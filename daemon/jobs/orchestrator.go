@@ -349,8 +349,10 @@ func (o *Orchestrator) runJob(jobID string) {
 		return
 	}
 	if job.State == state.JobStateCancelled {
-		// User cancelled before the worker picked it up.
-		o.cfg.Broadcaster.Publish(state.Event{Name: "job.failed", Payload: map[string]any{"job_id": jobID}})
+		// User cancelled before the worker picked it up. Carry state:cancelled
+		// so the webui renders CANCELLED, not FAILED (its job.failed handler
+		// only downgrades to cancelled when the payload says so).
+		o.cfg.Broadcaster.Publish(state.Event{Name: "job.failed", Payload: map[string]any{"job_id": jobID, "state": "cancelled"}})
 		return
 	}
 

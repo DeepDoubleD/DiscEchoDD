@@ -275,7 +275,8 @@ func (c *Compute) runOne(jobID string) {
 		return
 	}
 	if job.State == state.JobStateCancelled {
-		c.cfg.Broadcaster.Publish(state.Event{Name: "job.failed", Payload: map[string]any{"job_id": jobID}})
+		// Carry state:cancelled so the UI shows CANCELLED, not FAILED.
+		c.cfg.Broadcaster.Publish(state.Event{Name: "job.failed", Payload: map[string]any{"job_id": jobID, "state": "cancelled"}})
 		return
 	}
 

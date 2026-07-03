@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -224,8 +225,7 @@ func (h *Handlers) DeleteJob(w http.ResponseWriter, r *http.Request) {
 		parentID := filepath.Base(job.SpoolPath)
 		if err := h.Spool.Cleanup(parentID); err != nil {
 			// Non-fatal: row's gone, startup GC sweeps the orphan dir.
-			// Log only.
-			_ = err
+			slog.Warn("delete job: spool cleanup", "err", err, "job", id, "spool", parentID)
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
