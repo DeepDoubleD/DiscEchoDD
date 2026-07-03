@@ -131,7 +131,19 @@ func (h *Handlers) RetryTranscode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.Store.ResetTranscodeJob(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		// The pre-checks above already guard kind/state, but ResetTranscodeJob
+		// re-checks inside its transaction; a lost race (e.g. a double-clicked
+		// retry, or the job finishing between the read and the reset) surfaces
+		// as these sentinels and must map to the same client-facing codes as
+		// the pre-checks, not a blanket 500.
+		switch {
+		case errors.Is(err, state.ErrInvalidJobStateForRetry):
+			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, state.ErrInvalidJobKindForRetry):
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	if err := h.Compute.Enqueue(id); err != nil {
