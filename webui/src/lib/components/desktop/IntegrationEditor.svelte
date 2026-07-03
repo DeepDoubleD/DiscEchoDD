@@ -38,7 +38,15 @@
   $: sourceTone = detail.source === 'unset' ? 'unset' : 'set';
 
   function openEditor(): void {
-    draft = { ...detail.values };
+    // Prefill only non-secret fields. Secret values are masked by the server
+    // (never echoed back), so copying detail.values for them would seed the
+    // draft — and Test/Save bodies — with the mask placeholder. Leaving them
+    // blank means "keep the stored value"; the server's Test merges stored
+    // creds and Save only sends touched fields.
+    draft = {};
+    for (const f of fields) {
+      if (!f.secret) draft[f.name] = detail.values[f.name] ?? '';
+    }
     touched = {};
     testResult = null;
     editing = true;
@@ -172,6 +180,7 @@
           <input
             type={f.secret ? 'password' : 'text'}
             value={draft[f.name] ?? ''}
+            placeholder={f.secret && detail.configured ? 'leave blank to keep current' : ''}
             on:input={(e) => onFieldInput(f.name, e)}
             class="rounded border border-border bg-surface-1 px-2 py-1 font-mono text-text"
             data-testid={`integration-field-${f.name}`}

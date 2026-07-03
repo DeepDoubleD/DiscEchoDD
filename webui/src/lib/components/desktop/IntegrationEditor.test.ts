@@ -48,7 +48,7 @@ describe('IntegrationEditor', () => {
     expect(container.textContent).toContain('Configured (env)');
   });
 
-  it('masks secret fields until Edit is clicked', async () => {
+  it('does not prefill secret fields into the editor', async () => {
     const { container, getByTestId } = render(IntegrationEditor, {
       props: {
         detail: baseDetail,
@@ -61,9 +61,14 @@ describe('IntegrationEditor', () => {
     });
     expect(container.textContent).toContain('•••');
     await fireEvent.click(getByTestId('integration-edit'));
-    // Secret input revealed with the env-sourced cleartext for promotion.
+    // Secrets are masked by the server and never echoed back — the input
+    // starts blank ("leave blank to keep current"), while the non-secret
+    // public field is prefilled.
     const secretInput = getByTestId('integration-field-client_secret') as HTMLInputElement;
-    expect(secretInput.value).toBe('env-secret');
+    expect(secretInput.value).toBe('');
+    expect(secretInput.placeholder).toBe('leave blank to keep current');
+    const idInput = getByTestId('integration-field-client_id') as HTMLInputElement;
+    expect(idInput.value).toBe('env-id');
   });
 
   it('sends a partial PUT containing only the changed field', async () => {

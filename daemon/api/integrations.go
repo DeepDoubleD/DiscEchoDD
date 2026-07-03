@@ -37,6 +37,37 @@ type integrationDetail struct {
 	Values map[string]string `json:"values"`
 }
 
+// integrationSecretFields lists, per integration, the credential fields whose
+// value is a secret that must never be echoed back over the API. GET/PUT
+// responses return a fixed mask for these (the raw value never leaves the
+// daemon); non-secret fields (IGDB client_id, TMDB lang) pass through so the
+// UI can still display them. Mirrors the webui FieldSpec `secret` flags in
+// SystemSection.svelte — keep the two in sync.
+var integrationSecretFields = map[string]map[string]bool{
+	"igdb":    {"client_secret": true},
+	"tmdb":    {"key": true},
+	"makemkv": {"beta_key": true},
+}
+
+// secretMask is the placeholder returned in place of a configured secret. It
+// reveals nothing; `fields_present` still tells the UI the field is set.
+const secretMask = "••••••"
+
+// maskCredsForResponse returns a copy of creds with each secret field's
+// non-empty value replaced by secretMask. The input map is not mutated.
+func maskCredsForResponse(name string, creds map[string]string) map[string]string {
+	secrets := integrationSecretFields[name]
+	out := make(map[string]string, len(creds))
+	for k, v := range creds {
+		if v != "" && secrets[k] {
+			out[k] = secretMask
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 type integrationTestResult struct {
 	OK         bool   `json:"ok"`
 	Error      string `json:"error,omitempty"`
@@ -89,7 +120,7 @@ func (h *Handlers) GetIntegration(w http.ResponseWriter, r *http.Request) {
 			Name: name, Source: source, Configured: configured,
 			FieldsPresent: fields,
 		},
-		Values: creds,
+		Values: maskCredsForResponse(name, creds),
 	})
 }
 
@@ -203,6 +234,22 @@ func (h *Handlers) TestIntegration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+	// Fill unset/blank fields from stored credentials so Test works on an
+	// already-configured integration without the client re-sending secrets
+	// (the GET response masks them, so the editor no longer holds them).
+	if h.Integrations != nil {
+		stored, _, _ := h.Integrations.Get(name)
+		merged := make(map[string]string, len(stored))
+		for k, v := range stored {
+			merged[k] = v
+		}
+		for k, v := range body {
+			if v != "" {
+				merged[k] = v
+			}
+		}
+		body = merged
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	var result integrationTestResult
@@ -233,7 +280,7 @@ func (h *Handlers) respondWithDetail(w http.ResponseWriter, name string) {
 			Name: name, Source: source, Configured: configured,
 			FieldsPresent: fields,
 		},
-		Values: creds,
+		Values: maskCredsForResponse(name, creds),
 	})
 }
 

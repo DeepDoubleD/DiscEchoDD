@@ -108,7 +108,7 @@ func TestListIntegrations_ReturnsAllInSortedOrder(t *testing.T) {
 	}
 }
 
-func TestGetIntegration_ReturnsSecretsCleartext(t *testing.T) {
+func TestGetIntegration_MasksSecretsButNotPublicFields(t *testing.T) {
 	fr := newFakeRegistry()
 	_ = fr.Put("igdb", map[string]string{
 		"client_id": "abc", "client_secret": "secret-xyz",
@@ -127,8 +127,28 @@ func TestGetIntegration_ReturnsSecretsCleartext(t *testing.T) {
 	var body map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	values := body["values"].(map[string]any)
-	if values["client_secret"] != "secret-xyz" {
-		t.Errorf("secret not returned cleartext: %v", values["client_secret"])
+	// The secret must never be echoed back cleartext. It's masked to a
+	// non-empty placeholder (fields_present, below, is what signals "set").
+	if got := values["client_secret"]; got == "secret-xyz" {
+		t.Errorf("client_secret returned cleartext: %v", got)
+	}
+	if got := values["client_secret"]; got == "" {
+		t.Errorf("client_secret should be a non-empty mask, got empty")
+	}
+	// Non-secret public identifiers still pass through so the UI can show them.
+	if values["client_id"] != "abc" {
+		t.Errorf("client_id should pass through, got %v", values["client_id"])
+	}
+	// fields_present must still report the secret as configured.
+	fp, _ := body["fields_present"].([]any)
+	var hasSecret bool
+	for _, f := range fp {
+		if f == "client_secret" {
+			hasSecret = true
+		}
+	}
+	if !hasSecret {
+		t.Errorf("fields_present should include client_secret, got %v", fp)
 	}
 	if body["source"] != "ui" {
 		t.Errorf("source: %v want ui", body["source"])
@@ -266,6 +286,43 @@ func TestPostIntegrationTest_TMDB_UpstreamOK(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["ok"] != true {
 		t.Errorf("ok: %v want true", body["ok"])
+	}
+}
+
+// TestPostIntegrationTest_TMDB_UsesStoredKeyWhenBodyBlank verifies that Test
+// falls back to stored credentials when the client omits the (now-masked)
+// secret, so testing an already-configured integration still works.
+func TestPostIntegrationTest_TMDB_UsesStoredKeyWhenBodyBlank(t *testing.T) {
+	var gotKey string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.URL.Query().Get("api_key")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"images":{"base_url":"x"}}`))
+	}))
+	defer upstream.Close()
+
+	fr := newFakeRegistry()
+	_ = fr.Put("tmdb", map[string]string{"key": "stored-key"}, integrations.SourceUI, nil)
+	h := apitestServerWithIntegrations(t, fr)
+	h.TMDBTestEndpoint = upstream.URL
+	r := chi.NewRouter()
+	r.Post("/api/integrations/{name}/test", h.TestIntegration)
+
+	// Empty body — the editor no longer holds the secret.
+	req := httptest.NewRequest(http.MethodPost, "/api/integrations/tmdb/test",
+		strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d (%s)", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body["ok"] != true {
+		t.Errorf("ok: %v want true", body["ok"])
+	}
+	if gotKey != "stored-key" {
+		t.Errorf("upstream saw api_key=%q, want stored-key (merge from stored creds)", gotKey)
 	}
 }
 
