@@ -454,6 +454,19 @@ func (r *retryingSystemCNFProber) Probe(ctx context.Context, devPath string) (*S
 	return info, nil
 }
 
+// mediaIsBluRay reports if udev already classified the medium as BD.
+// UDF Blu-rays often have an empty ISO9660 listing, so RefineDiscType
+// must not depend on /BDMV/index.bdmv being visible to isoinfo.
+func mediaIsBluRay(devPath string) bool {
+	cmd := exec.Command("udevadm", "info", "--query=property", "--name="+devPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.Debug("classify: udev info failed", "dev", devPath, "err", err)
+		return false
+	}
+	return strings.Contains(string(out), "ID_CDROM_MEDIA_BD=1")
+}
+
 // cdDATokenRE matches the bare CD-DA disc-mode token. Anchored with
 // word boundaries so it does NOT match CD-DATA, the value cd-info
 // prints for single-data-track CD-ROMs (e.g. Morrowind's "CD-DATA
@@ -508,6 +521,20 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, dc DCProber, cdGame CDGameProber, devPath string) state.DiscType {
 	if base == state.DiscTypeAudioCD {
 		return state.DiscTypeAudioCD
+	}
+	if mediaIsBluRay(devPath) {
+		slog.Info("classify: udev reports BD media; not treating as DATA", "dev", devPath)
+		if bd != nil {
+			info, err := bd.Probe(ctx, devPath)
+			if err != nil {
+				slog.Warn("classify: bd_info failed; defaulting to BDMV", "dev", devPath, "err", err)
+				return state.DiscTypeBDMV
+			}
+			if info != nil && info.HasAACS2 {
+				return state.DiscTypeUHD
+			}
+		}
+		return state.DiscTypeBDMV
 	}
 	if fs == nil {
 		return base
