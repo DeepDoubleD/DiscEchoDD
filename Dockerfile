@@ -177,7 +177,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
         > /etc/apt/sources.list.d/contrib.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-        ca-certificates eject cdparanoia libcdio-utils whipper \
+        ca-certificates eject udev cdparanoia libcdio-utils whipper \
         python3-cdio \
         flac \
         libdvd-pkg dvdbackup genisoimage \
