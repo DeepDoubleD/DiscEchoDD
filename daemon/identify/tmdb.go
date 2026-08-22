@@ -429,10 +429,9 @@ func (c *tmdbClient) SearchBoth(ctx context.Context, query string) ([]state.Cand
 }
 
 // rankConfidence maps a candidate's rank position to a confidence
-// value. Top match gets 100; subsequent matches step down in 20-point
-// increments with a floor of 20. This replaces the older popularity/10
-// mapping, which rendered every real result as 0-15% because TMDB's
-// popularity field is typically 1-30 for non-blockbuster titles.
+// value, used only when there's no query to measure similarity against
+// (see applyRankConfidence). Top match gets 100; subsequent matches
+// step down in 20-point increments with a floor of 20.
 func rankConfidence(rank int) int {
 	switch {
 	case rank <= 0:
@@ -451,12 +450,21 @@ func rankConfidence(rank int) int {
 // applyRankConfidence sorts cands by title-vs-query similarity desc,
 // breaks ties on the existing Confidence (which still holds the TMDB
 // popularity-derived score at this point), then overwrites each
-// Confidence with its rank position (100, 80, 60, 40, 20).
+// Confidence with round(TitleSimilarity*100).
 //
-// Passing an empty query falls back to popularity-only ordering — the
-// pre-similarity behaviour — for tests and callers that don't have a
-// natural query (none in production today). Stable sort preserves the
-// relative order of full ties.
+// A rank-based ladder (top match always 100, regardless of how similar
+// it actually is) previously lived here; it let a disc with a
+// low-signal label — e.g. a UDF Blu-ray whose volume label is the
+// literal placeholder "VOLUME_ID" — auto-match a completely unrelated
+// title at a false 100% confidence, because that title happened to
+// outrank the others via incidental token overlap ("volume"). Real
+// similarity is the only honest confidence signal: a weak match must
+// report a low number so the UI/user can tell it's a guess, not a hit.
+//
+// Passing an empty query falls back to the old rank ladder — for tests
+// and callers that don't have a natural query (none in production
+// today), since TitleSimilarity can't score against nothing. Stable
+// sort preserves the relative order of full ties.
 func applyRankConfidence(cands []state.Candidate, query string) {
 	sort.SliceStable(cands, func(i, j int) bool {
 		if query != "" {
@@ -469,7 +477,11 @@ func applyRankConfidence(cands []state.Candidate, query string) {
 		return cands[i].Confidence > cands[j].Confidence
 	})
 	for i := range cands {
-		cands[i].Confidence = rankConfidence(i)
+		if query == "" {
+			cands[i].Confidence = rankConfidence(i)
+			continue
+		}
+		cands[i].Confidence = int(math.Round(TitleSimilarity(query, cands[i].Title) * 100))
 	}
 }
 

@@ -63,10 +63,11 @@ func TestTMDB_SearchMovie(t *testing.T) {
 	if cands[0].Source != "TMDB" {
 		t.Errorf("source: got %q", cands[0].Source)
 	}
-	// Confidence is rank-based: top candidate always 100 regardless of
-	// the raw TMDB popularity score.
+	// Confidence reflects title-vs-query similarity, not raw TMDB
+	// popularity: an exact match ("Arrival" query, "Arrival" title)
+	// scores 100.
 	if cands[0].Confidence != 100 {
-		t.Errorf("top candidate confidence: want 100, got %d", cands[0].Confidence)
+		t.Errorf("exact-match confidence: want 100, got %d", cands[0].Confidence)
 	}
 }
 
@@ -114,24 +115,56 @@ func TestTMDB_SearchBoth_MergesAndSortsAndCaps(t *testing.T) {
 	defer srv.Close()
 
 	c := identify.NewTMDBClient(identify.TMDBConfig{APIKey: "x", BaseURL: srv.URL})
-	cands, err := c.SearchBoth(context.Background(), "x")
+	cands, err := c.SearchBoth(context.Background(), "Friends")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cands) > 5 {
 		t.Errorf("should cap at 5, got %d", len(cands))
 	}
-	// Sort key for the cross-endpoint merge is popularity (Friends pop 110
-	// > Arrival pop 38.5), so TV lands first. Confidence is then assigned
-	// by rank position: 100, 80, 60, 40, 20.
+	// "Friends" is an exact-title match for the TV result and shares no
+	// tokens with "Arrival", so similarity — not raw TMDB popularity —
+	// must put TV first and score it 100; the unrelated movie result
+	// must score near 0, not the old rank-ladder's inflated 80.
 	if cands[0].MediaType != "tv" {
-		t.Errorf("highest popularity first: got %s", cands[0].MediaType)
+		t.Errorf("exact title match first: got %s", cands[0].MediaType)
 	}
 	if cands[0].Confidence != 100 {
-		t.Errorf("rank-0 confidence: want 100, got %d", cands[0].Confidence)
+		t.Errorf("exact-match confidence: want 100, got %d", cands[0].Confidence)
 	}
-	if len(cands) >= 2 && cands[1].Confidence != 80 {
-		t.Errorf("rank-1 confidence: want 80, got %d", cands[1].Confidence)
+	if len(cands) >= 2 && cands[1].Confidence != 0 {
+		t.Errorf("unrelated-title confidence: want 0, got %d", cands[1].Confidence)
+	}
+}
+
+// TestTMDB_SearchBoth_LowSignalQueryStaysLowConfidence covers the bug
+// that let a UDF Blu-ray with a generic placeholder volume label
+// ("VOLUME_ID") auto-match an unrelated title at a false 100%
+// confidence: a query with no real relation to any candidate title
+// must not be reported as a confident match just because it happens to
+// rank first (by popularity tiebreak, since similarity ties at 0).
+func TestTMDB_SearchBoth_LowSignalQueryStaysLowConfidence(t *testing.T) {
+	movieBody, _ := os.ReadFile("testdata/tmdb-arrival-movie.json")
+	tvBody, _ := os.ReadFile("testdata/tmdb-friends-tv.json")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/search/movie") {
+			_, _ = w.Write(movieBody)
+		} else {
+			_, _ = w.Write(tvBody)
+		}
+	}))
+	defer srv.Close()
+
+	c := identify.NewTMDBClient(identify.TMDBConfig{APIKey: "x", BaseURL: srv.URL})
+	cands, err := c.SearchBoth(context.Background(), "VOLUME_ID")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cand := range cands {
+		if cand.Confidence >= 50 {
+			t.Errorf("candidate %q: confidence %d too high for a query sharing no real words with it", cand.Title, cand.Confidence)
+		}
 	}
 }
 
