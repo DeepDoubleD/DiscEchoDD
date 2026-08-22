@@ -50,6 +50,8 @@ type Settings struct {
 	MakeMKVDataDir       string
 	MakeMKVBetaKey       string
 	BDInfoBin            string
+	MKVMergeBin          string
+	MKVExtractBin        string
 	RedumperBin          string
 	CHDManBin            string
 	RedumpDataDir        string
@@ -87,6 +89,8 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 		MakeMKVDataDir:       firstNonEmpty(getenv("DISCECHO_MAKEMKV_DATA"), filepath.Join(firstNonEmpty(getenv("DISCECHO_DATA"), "/var/lib/discecho"), "MakeMKV")),
 		MakeMKVBetaKey:       getenv("DISCECHO_MAKEMKV_BETA_KEY"),
 		BDInfoBin:            firstNonEmpty(getenv("DISCECHO_BDINFO_BIN"), "bd_info"),
+		MKVMergeBin:          firstNonEmpty(getenv("DISCECHO_MKVMERGE_BIN"), "mkvmerge"),
+		MKVExtractBin:        firstNonEmpty(getenv("DISCECHO_MKVEXTRACT_BIN"), "mkvextract"),
 		RedumperBin:          firstNonEmpty(getenv("DISCECHO_REDUMPER_BIN"), "redumper"),
 		CHDManBin:            firstNonEmpty(getenv("DISCECHO_CHDMAN_BIN"), "chdman"),
 		RedumpDataDir:        firstNonEmpty(getenv("DISCECHO_REDUMP_DIR"), filepath.Join(firstNonEmpty(getenv("DISCECHO_DATA"), "/var/lib/discecho"), "redump")),

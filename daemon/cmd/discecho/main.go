@@ -117,6 +117,7 @@ func main() {
 	})
 	sysCNFProber := identify.NewSystemCNFProber(cfg.IsoInfoBin)
 	bdProber := identify.NewBDProber(identify.BDProberConfig{BDInfoBin: cfg.BDInfoBin})
+	mkvSubs := tools.NewMKVToolNix(cfg.MKVMergeBin, cfg.MKVExtractBin)
 	classifier := identify.NewClassifier(identify.ClassifierConfig{
 		CDInfoBin:       cfg.CDInfoBin,
 		FSProber:        identify.NewFSProber(identify.FSProberConfig{IsoInfoBin: cfg.IsoInfoBin}),
@@ -206,6 +207,7 @@ func main() {
 		MetadataStore:    store,
 		NVENCAvailable:   nvencAvailable,
 		ShouldEject:      shouldEjectOnFinish,
+		MKVSubs:          mkvSubs,
 	}))
 
 	// BDMV + UHD pipelines (M3.1).
@@ -223,6 +225,7 @@ func main() {
 		URLsForTrigger: urlsForTrigger,
 		NVENCAvailable: nvencAvailable,
 		ShouldEject:    shouldEjectOnFinish,
+		MKVSubs:        mkvSubs,
 	}))
 
 	pipeReg.Register(uhd.New(uhd.Deps{
@@ -238,6 +241,7 @@ func main() {
 		AACS2KeyDB:     filepath.Join(cfg.MakeMKVDataDir, "KEYDB.cfg"),
 		URLsForTrigger: urlsForTrigger,
 		ShouldEject:    shouldEjectOnFinish,
+		MKVSubs:        mkvSubs,
 	}))
 
 	// PSX + PS2 pipelines (M5.1).

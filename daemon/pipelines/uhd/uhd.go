@@ -54,6 +54,10 @@ type Deps struct {
 	Prober         identify.DVDProber
 	BDProber       identify.BDProber // optional: disc-library metadata name, preferred over the volume label when present
 	TMDB           identify.TMDBClient
+	// MKVSubs pulls text-based subtitle tracks out of the moved output
+	// as sidecar files when the profile's extract_text_subtitles option
+	// is set. nil disables the feature regardless of profile options.
+	MKVSubs pipelines.MKVSubtitleTool
 	MakeMKVScanner MakeMKVScanner
 	MakeMKVRipper  MakeMKVRipper
 	Tools          *tools.Registry // looked up: apprise, eject
@@ -311,6 +315,14 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 		sink.OnStepDone(state.StepMove, map[string]any{"path": moved[0]})
 	} else {
 		sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
+	}
+
+	if h.deps.MKVSubs != nil && pipelines.ExtractTextSubtitlesFromProfile(prof) {
+		for _, p := range moved {
+			if _, err := pipelines.ExtractTextSubtitleSidecars(ctx, h.deps.MKVSubs, p, sink); err != nil {
+				sink.OnLog(state.LogLevelWarn, "subtitle sidecar: %s: %v", filepath.Base(p), err)
+			}
+		}
 	}
 
 	pipelines.RunNotifyStep(ctx, sink)

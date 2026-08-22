@@ -172,7 +172,10 @@ FROM python:3.12-slim-bookworm AS runtime
 # libass9 + libturbojpeg0 are HandBrakeCLI runtime deps not pulled in
 # transitively by anything else in this image. libsdl2-2.0-0 is the
 # sole runtime dep of the chdman binary built from MAME source in the
-# chdman-build stage above (chdman links ocore_sdl).
+# chdman-build stage above (chdman links ocore_sdl). mkvtoolnix ships
+# mkvmerge (track identify, JSON) + mkvextract, used to pull text-based
+# subtitle tracks (S_TEXT/*) out of MakeMKV's ripped .mkv as sidecar
+# files -- lossless, no OCR needed, unlike bitmap PGS/VobSub tracks.
 RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
         > /etc/apt/sources.list.d/contrib.list \
  && apt-get update \
@@ -187,6 +190,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
         libass9 libturbojpeg0 \
         libsdl2-2.0-0 \
         libebur128-1 libavformat59 libswresample4 libavutil57 libtag1v5 \
+        mkvtoolnix \
  && DEBIAN_FRONTEND=noninteractive dpkg-reconfigure libdvd-pkg \
  && rm -rf /var/lib/apt/lists/* \
  && pip install --no-cache-dir apprise

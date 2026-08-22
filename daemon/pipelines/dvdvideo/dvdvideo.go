@@ -73,6 +73,10 @@ type Deps struct {
 	URLsForTrigger   func(ctx context.Context, trigger string) []string
 	SubsLang         string        // e.g. "eng"; empty → no --subtitle-lang-list flag
 	MetadataStore    MetadataStore // optional; pipeline persists scan title list when set
+	// MKVSubs pulls text-based subtitle tracks out of .mkv outputs
+	// (movie and TV alike) as sidecar files when the profile's
+	// extract_text_subtitles option is set. nil disables the feature.
+	MKVSubs pipelines.MKVSubtitleTool
 	// ShouldEject gates the rip-end eject step; nil = always eject.
 	ShouldEject func(ctx context.Context) bool
 
@@ -627,6 +631,7 @@ func (h *Handler) runTranscodeHandBrake(ctx context.Context, result pipelines.Ri
 		if ext == "mp4" {
 			args = append(args, "--optimize")
 		}
+		args = append(args, pipelines.ResolutionAndAudioArgs(prof)...)
 		env := map[string]string{
 			"HB_TITLE_IDX":      strconv.Itoa(titleIdx),
 			"HB_TOTAL_TITLES":   strconv.Itoa(len(encodeTitles)),
@@ -663,6 +668,8 @@ func (h *Handler) runTranscodeHandBrake(ctx context.Context, result pipelines.Ri
 		sink.OnLog(state.LogLevelInfo, "move: → %s", p)
 	}
 	sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
+
+	h.extractSubtitleSidecars(ctx, moved, prof, sink)
 
 	pipelines.RunNotifyStep(ctx, sink)
 	return nil
@@ -725,8 +732,31 @@ func (h *Handler) runTranscodeMakeMKV(ctx context.Context, result pipelines.RipR
 		sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
 	}
 
+	h.extractSubtitleSidecars(ctx, moved, prof, sink)
+
 	pipelines.RunNotifyStep(ctx, sink)
 	return nil
+}
+
+// extractSubtitleSidecars pulls text-based subtitle tracks out of each
+// .mkv in moved as sidecar files, when the profile's
+// extract_text_subtitles option is set and a MKVSubs tool is
+// configured. Non-.mkv outputs (the legacy engine's --optimize mp4
+// path) are skipped -- mkvextract needs a Matroska container. Movie
+// and TV-series profiles share this: both flow through the same
+// move step regardless of disc_type.
+func (h *Handler) extractSubtitleSidecars(ctx context.Context, moved []string, prof *state.Profile, sink pipelines.EventSink) {
+	if h.deps.MKVSubs == nil || !pipelines.ExtractTextSubtitlesFromProfile(prof) {
+		return
+	}
+	for _, p := range moved {
+		if strings.ToLower(filepath.Ext(p)) != ".mkv" {
+			continue
+		}
+		if _, err := pipelines.ExtractTextSubtitleSidecars(ctx, h.deps.MKVSubs, p, sink); err != nil {
+			sink.OnLog(state.LogLevelWarn, "subtitle sidecar: %s: %v", filepath.Base(p), err)
+		}
+	}
 }
 
 // transcodeMakeMKVRips HandBrake-encodes each MakeMKV rip into a
@@ -771,6 +801,7 @@ func (h *Handler) transcodeMakeMKVRips(ctx context.Context, rippedFiles []string
 			"--markers",
 			"--all-subtitles",
 		}
+		args = append(args, pipelines.ResolutionAndAudioArgs(prof)...)
 		sink.OnLog(state.LogLevelInfo, "HandBrake: encoding %s", filepath.Base(rippedFile))
 		encStart := time.Now()
 		if err := hb.Run(ctx, args, nil, spoolDir, pipelines.NewStepSink(sink, state.StepTranscode)); err != nil {
