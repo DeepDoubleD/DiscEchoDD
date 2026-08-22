@@ -45,3 +45,4 @@ docker-compose.override.yml
 
 # Claude Code per-project cache (scheduled-task locks, transcripts)
 .claude/
+CLAUDE.md
