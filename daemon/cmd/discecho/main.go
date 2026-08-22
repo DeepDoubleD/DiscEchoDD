@@ -116,10 +116,11 @@ func main() {
 		MinInterval: time.Second,
 	})
 	sysCNFProber := identify.NewSystemCNFProber(cfg.IsoInfoBin)
+	bdProber := identify.NewBDProber(identify.BDProberConfig{BDInfoBin: cfg.BDInfoBin})
 	classifier := identify.NewClassifier(identify.ClassifierConfig{
 		CDInfoBin:       cfg.CDInfoBin,
 		FSProber:        identify.NewFSProber(identify.FSProberConfig{IsoInfoBin: cfg.IsoInfoBin}),
-		BDProber:        identify.NewBDProber(identify.BDProberConfig{BDInfoBin: cfg.BDInfoBin}),
+		BDProber:        bdProber,
 		SystemCNFProber: sysCNFProber,
 		CDGameProber:    identify.NewDevCDGameProber(),
 	})
@@ -211,6 +212,7 @@ func main() {
 
 	pipeReg.Register(bdmv.New(bdmv.Deps{
 		Prober:         dvdProber, // re-used for volume-label reading
+		BDProber:       bdProber,  // preferred: real disc-library title from bdmt_*.xml
 		TMDB:           tmdbClient,
 		MakeMKVScanner: makeMKV,
 		MakeMKVRipper:  makeMKV,
@@ -225,6 +227,7 @@ func main() {
 
 	pipeReg.Register(uhd.New(uhd.Deps{
 		Prober:         dvdProber,
+		BDProber:       bdProber, // preferred: real disc-library title from bdmt_*.xml
 		TMDB:           tmdbClient,
 		MakeMKVScanner: makeMKV,
 		MakeMKVRipper:  makeMKV,

@@ -33,6 +33,16 @@ func (f *fakeProber) Probe(_ context.Context, _ string) (*identify.DVDInfo, erro
 	return f.info, f.err
 }
 
+// fakeBDProber returns a fixed BDInfo (disc-library metadata name).
+type fakeBDProber struct {
+	info *identify.BDInfo
+	err  error
+}
+
+func (f *fakeBDProber) Probe(_ context.Context, _ string) (*identify.BDInfo, error) {
+	return f.info, f.err
+}
+
 // fakeTMDB returns canned candidates.
 type fakeTMDB struct {
 	cands []state.Candidate
@@ -179,6 +189,27 @@ func TestBDMVHandler_Identify_HappyPath(t *testing.T) {
 	}
 	if disc.Type != state.DiscTypeBDMV {
 		t.Errorf("disc.Type = %s, want BDMV", disc.Type)
+	}
+}
+
+// TestBDMVHandler_Identify_PrefersDiscLibraryName reproduces the live
+// bug: a UDF-only Blu-ray whose ISO9660/UDF volume label is the generic
+// placeholder "VOLUME_ID" must not search TMDB with that label when
+// bd_info's disc-library metadata gives the real title.
+func TestBDMVHandler_Identify_PrefersDiscLibraryName(t *testing.T) {
+	h := bdmv.New(bdmv.Deps{
+		Prober:   &fakeProber{info: &identify.DVDInfo{VolumeLabel: "VOLUME_ID"}},
+		BDProber: &fakeBDProber{info: &identify.BDInfo{DiscName: "V For Vendetta"}},
+		TMDB: &fakeTMDB{cands: []state.Candidate{
+			{Source: "TMDB", Title: "V for Vendetta", Year: 2005, Confidence: 100, TMDBID: 752, MediaType: "movie"},
+		}},
+	})
+	disc, _, err := h.Identify(context.Background(), &state.Drive{ID: "d1", DevPath: "/dev/sr0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disc.Title != "V for Vendetta" {
+		t.Errorf("disc.Title = %q, want %q (disc-library name should win over the generic volume label)", disc.Title, "V for Vendetta")
 	}
 }
 

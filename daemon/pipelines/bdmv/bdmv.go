@@ -41,6 +41,7 @@ type MakeMKVRipper interface {
 // Deps bundles the handler's dependencies for mock injection.
 type Deps struct {
 	Prober         identify.DVDProber // re-used for volume-label reading
+	BDProber       identify.BDProber  // optional: disc-library metadata name, preferred over the volume label when present
 	TMDB           identify.TMDBClient
 	MakeMKVScanner MakeMKVScanner
 	MakeMKVRipper  MakeMKVRipper
@@ -96,7 +97,8 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 	}
 	disc := &state.Disc{Type: state.DiscTypeBDMV, DriveID: drv.ID}
 
-	q := identify.NormaliseDVDLabel(info.VolumeLabel)
+	label := identify.BDSearchLabel(ctx, h.deps.BDProber, drv.DevPath, info.VolumeLabel)
+	q := identify.NormaliseDVDLabel(label)
 	if q == "" {
 		return disc, nil, pipelines.ErrNoCandidates
 	}

@@ -16,6 +16,15 @@ type BDInfo struct {
 	Profile       string
 	HasAACS2      bool
 	AACSEncrypted bool
+	// DiscName is bd_info's "Disc name" field, read from the disc's own
+	// BDMV/META/DL/bdmt_*.xml. Retail Blu-rays populate this with the
+	// real title for on-screen menus; unlike VolumeID (the raw
+	// ISO9660/UDF volume label), it's rarely a generic authoring-tool
+	// placeholder, so identify should prefer it as the TMDB search
+	// query when present. Empty when the disc carries no library
+	// metadata (bd_info omits the whole "Disc library metadata"
+	// section in that case).
+	DiscName string
 }
 
 // BDProber reads disc-level metadata from a Blu-ray.
@@ -55,6 +64,10 @@ func (p *bdInfoProber) Probe(ctx context.Context, devPath string) (*BDInfo, erro
 //	Profile             : Profile 5
 //	AACS encrypted      : yes
 //	AACS2 disc          : yes        ← UHD marker
+//	Disc name           : V For Vendetta  ← from bdmt_*.xml, in the
+//	                                        "Disc library metadata"
+//	                                        section bd_info prints when
+//	                                        present
 //
 // Returns an error only on empty input. Lines that don't match are
 // ignored, so older bd_info versions still parse without spurious
@@ -82,9 +95,31 @@ func ParseBDInfoOutput(s string) (*BDInfo, error) {
 			info.AACSEncrypted = parseYesNo(val)
 		case "aacs2 disc":
 			info.HasAACS2 = parseYesNo(val)
+		case "disc name":
+			info.DiscName = val
 		}
 	}
 	return info, nil
+}
+
+// BDSearchLabel picks the best available TMDB search query for a BD/UHD
+// disc: bd_info's disc-library "Disc name" (from bdmt_*.xml) when a
+// BDProber is configured and reports one, otherwise volLabel (the raw
+// ISO9660/UDF volume label read by the DVDProber both pipelines already
+// call). Disc name wins because retail Blu-rays populate it with the
+// real title for on-screen menus, while the volume label is frequently
+// a generic authoring-tool placeholder (e.g. "VOLUME_ID") that produces
+// a confident-looking but wrong TMDB match. bd is nil-safe so callers
+// that don't wire a BDProber keep the old volume-label-only behaviour.
+func BDSearchLabel(ctx context.Context, bd BDProber, devPath, volLabel string) string {
+	if bd != nil {
+		if info, err := bd.Probe(ctx, devPath); err == nil && info != nil {
+			if name := strings.TrimSpace(info.DiscName); name != "" {
+				return name
+			}
+		}
+	}
+	return volLabel
 }
 
 func splitBDInfoLine(line string) (string, string, bool) {
