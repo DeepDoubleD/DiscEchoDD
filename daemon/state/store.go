@@ -562,23 +562,6 @@ func (s *Store) UpdateDiscRuntime(ctx context.Context, id string, runtimeSec int
 	return nil
 }
 
-// DiscHasAnyJob reports whether any job (in any state) references the
-// disc. Used by the Skip / delete affordance to refuse removing discs
-// that already have job history — a delete would leave those job rows
-// pointing at a non-existent disc_id.
-func (s *Store) DiscHasAnyJob(ctx context.Context, discID string) (bool, error) {
-	if discID == "" {
-		return false, nil
-	}
-	var n int
-	err := s.db.Conn().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM jobs WHERE disc_id = ?`, discID).Scan(&n)
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
 // DiscHasActiveJob reports whether the disc currently has a job in any
 // non-terminal state (queued / identifying / running / paused). Used by
 // POST /api/discs/{id}/start to refuse a duplicate start when a previous
@@ -603,8 +586,10 @@ func (s *Store) DiscHasActiveJob(ctx context.Context, discID string) (bool, erro
 }
 
 // DeleteDisc removes a disc row by id. Returns ErrNotFound when no row
-// matches. Does NOT cascade-delete jobs — callers must check via
-// DiscHasAnyJob first.
+// matches. jobs.disc_id is ON DELETE CASCADE (foreign keys are enabled
+// on this connection, see db.go), so any job history for the disc is
+// removed with it — callers should check DiscHasActiveJob first to
+// avoid deleting out from under a job that's still in flight.
 func (s *Store) DeleteDisc(ctx context.Context, id string) error {
 	res, err := s.db.Conn().ExecContext(ctx,
 		`DELETE FROM discs WHERE id = ?`, id)

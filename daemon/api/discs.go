@@ -389,13 +389,23 @@ func (h *Handlers) resolveEpisodeMap(ctx context.Context, disc *state.Disc, seas
 func (h *Handlers) DeleteDisc(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	hasJob, err := h.Store.DiscHasAnyJob(r.Context(), id)
+	// Only refuse while a job is actually in flight (queued / identifying
+	// / running / paused) -- deleting out from under a live worker would
+	// leave it writing into a spool dir whose disc row just vanished.
+	// Terminal job history (done / failed / cancelled / interrupted) does
+	// NOT block deletion: jobs.disc_id is ON DELETE CASCADE with foreign
+	// keys enabled, so the job rows clean up safely, and this is the only
+	// way the dashboard's Skip button can ever dismiss a disc whose most
+	// recent rip failed or was cancelled -- otherwise that card lingers
+	// forever with Start/Pick/Search/Skip all refusing to do anything,
+	// which previously left a full DB wipe as the only escape hatch.
+	hasActiveJob, err := h.Store.DiscHasActiveJob(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if hasJob {
-		writeError(w, http.StatusConflict, "disc has job history; cannot delete")
+	if hasActiveJob {
+		writeError(w, http.StatusConflict, "disc has a job in progress; cancel it first")
 		return
 	}
 
