@@ -139,15 +139,22 @@
       (j.state === 'failed' || j.state === 'cancelled' || j.state === 'interrupted'),
   );
 
-  // Auto-confirm fires in batch mode for two cases:
-  //   1. A high-confidence candidate (Redump 100, BootCodeIndex 90, MB ≥50).
-  //   2. A DATA disc — title is the ISO9660 volume label, which the user
-  //      chose when burning. Skip if they want to bail.
-  // …but never for a disc that already failed a rip (loop guard above).
+  // Auto-confirm fires in batch mode only for a high-confidence
+  // candidate (Redump 100, BootCodeIndex 90, MB ≥50) — never for a disc
+  // that already failed a rip (loop guard above).
+  //
+  // DATA never auto-confirms, full stop, even in batch mode. It's the
+  // classifier's catch-all fallback: sometimes a real unlabeled data
+  // disc, but sometimes a console/format the probes don't recognise yet
+  // (confirmed live — a misclassified Xbox 360 disc auto-ripped via
+  // plain ddrescue and hung for 3+ hours retrying permanently-erroring
+  // copy-protected sectors it could never get past). A DATA card always
+  // waits for an explicit Start click.
   $: autoConfirmAllowed =
     $operationMode === 'batch' &&
     !priorFailedRip &&
-    (topConfidence >= AUTO_CONFIRM_MIN_CONFIDENCE || liveDisc.type === 'DATA');
+    liveDisc.type !== 'DATA' &&
+    topConfidence >= AUTO_CONFIRM_MIN_CONFIDENCE;
 
   function profileForCandidate(c: Candidate): string {
     const enabled = $profiles.filter((p) => p.enabled);
@@ -234,17 +241,12 @@
   async function autoConfirm(): Promise<void> {
     if (starting || cancelled || !autoConfirmAllowed) return;
     cancelled = true;
-    let profileId: string;
-    let candidateIndex: number | undefined;
-    if (liveDisc.type === 'DATA') {
-      profileId = profileTouched && chosenProfileID ? chosenProfileID : dataProfileID();
-      candidateIndex = undefined;
-    } else {
-      const c = candidates[selectedIndex] ?? candidates[0];
-      if (!c) return;
-      profileId = profileTouched && chosenProfileID ? chosenProfileID : profileForCandidate(c);
-      candidateIndex = candidates[selectedIndex] ? selectedIndex : 0;
-    }
+    // DATA is excluded from autoConfirmAllowed above, so this only ever
+    // runs for a disc with real candidates.
+    const c = candidates[selectedIndex] ?? candidates[0];
+    if (!c) return;
+    const profileId = profileTouched && chosenProfileID ? chosenProfileID : profileForCandidate(c);
+    const candidateIndex = candidates[selectedIndex] ? selectedIndex : 0;
     if (!profileId) return;
     starting = true;
     try {
