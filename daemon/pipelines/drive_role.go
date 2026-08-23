@@ -28,19 +28,30 @@ const (
 )
 
 // PreferredDriveRole returns the drive role a disc type should be read
-// on, or "" when the type has no established preference (DVD/VCD/DATA
-// all read fine on either drive in this station, so routing them would
-// just add friction with no accuracy or capability benefit).
+// on, or "" when the type has no established preference. DVD/DATA read
+// fine on either drive in this station, so routing them would just add
+// friction with no accuracy or capability benefit -- the Plextor reads
+// a plain movie DVD just as well as the OmniDrive-flashed drives.
+//
+// The split is by physical media, not by "is it a game": every
+// CD-form-factor format (Audio CD, PSX, Saturn, Dreamcast's GD-ROM,
+// Sega CD, 3DO, PC-FX, Jaguar CD, CD-i, PC Engine CD, Neo Geo CD, CD32,
+// FM Towns, Pippin, VCD) goes to the Plextor for the same C2/subchannel
+// accuracy reason PSX does; every DVD/BD-form-factor format (PS2,
+// Xbox/Xbox 360's XGD DVD media, Wii, GameCube, PS3/PS4's BD-ROM once
+// those pipelines exist, BDMV, UHD) goes to the OmniDrive-flashed
+// drives, and BDMV/UHD specifically can ONLY go there since the
+// Plextor has no Blu-ray hardware at all.
 func PreferredDriveRole(dt state.DiscType) DriveRole {
 	switch dt {
-	case state.DiscTypeAudioCD, state.DiscTypePSX:
-		return DriveRoleCDPS1
-	case state.DiscTypeBDMV, state.DiscTypeUHD,
-		state.DiscTypePS2, state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeSAT,
+	case state.DiscTypeAudioCD, state.DiscTypePSX, state.DiscTypeSAT,
 		state.DiscTypeDC, state.DiscTypeSegaCD, state.DiscType3DO,
 		state.DiscTypePCFX, state.DiscTypeJaguarCD, state.DiscTypeCDi,
 		state.DiscTypePCECD, state.DiscTypeNeoCD, state.DiscTypeCD32,
-		state.DiscTypeFMTowns, state.DiscTypePippin:
+		state.DiscTypeFMTowns, state.DiscTypePippin, state.DiscTypeVCD:
+		return DriveRoleCDPS1
+	case state.DiscTypeBDMV, state.DiscTypeUHD,
+		state.DiscTypePS2, state.DiscTypeXBOX, state.DiscTypeXBOX360:
 		return DriveRoleBDConsole
 	default:
 		return ""

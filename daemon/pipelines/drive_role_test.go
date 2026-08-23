@@ -12,17 +12,32 @@ func TestPreferredDriveRole(t *testing.T) {
 		dt   state.DiscType
 		want pipelines.DriveRole
 	}{
+		// CD-form-factor: Plextor, for the same C2/subchannel accuracy
+		// reason PSX gets it -- not just "is it a game".
 		{state.DiscTypeAudioCD, pipelines.DriveRoleCDPS1},
 		{state.DiscTypePSX, pipelines.DriveRoleCDPS1},
+		{state.DiscTypeSAT, pipelines.DriveRoleCDPS1},
+		{state.DiscTypeDC, pipelines.DriveRoleCDPS1},
+		{state.DiscTypeSegaCD, pipelines.DriveRoleCDPS1},
+		{state.DiscType3DO, pipelines.DriveRoleCDPS1},
+		{state.DiscTypePCFX, pipelines.DriveRoleCDPS1},
+		{state.DiscTypeJaguarCD, pipelines.DriveRoleCDPS1},
+		{state.DiscTypeCDi, pipelines.DriveRoleCDPS1},
+		{state.DiscTypePCECD, pipelines.DriveRoleCDPS1},
+		{state.DiscTypeNeoCD, pipelines.DriveRoleCDPS1},
+		{state.DiscTypeCD32, pipelines.DriveRoleCDPS1},
+		{state.DiscTypeFMTowns, pipelines.DriveRoleCDPS1},
+		{state.DiscTypePippin, pipelines.DriveRoleCDPS1},
+		{state.DiscTypeVCD, pipelines.DriveRoleCDPS1},
+		// DVD/BD-form-factor: OmniDrive-flashed drives only.
 		{state.DiscTypeBDMV, pipelines.DriveRoleBDConsole},
 		{state.DiscTypeUHD, pipelines.DriveRoleBDConsole},
 		{state.DiscTypePS2, pipelines.DriveRoleBDConsole},
 		{state.DiscTypeXBOX, pipelines.DriveRoleBDConsole},
-		{state.DiscTypeSAT, pipelines.DriveRoleBDConsole},
-		{state.DiscTypeDC, pipelines.DriveRoleBDConsole},
-		// No established preference: works fine on either drive.
+		{state.DiscTypeXBOX360, pipelines.DriveRoleBDConsole},
+		// No established preference: a plain movie DVD (or unclassified
+		// data disc) works fine on either drive, so nothing is enforced.
 		{state.DiscTypeDVD, ""},
-		{state.DiscTypeVCD, ""},
 		{state.DiscTypeData, ""},
 	}
 	for _, c := range cases {
