@@ -26,6 +26,16 @@ func (f *fakeXbox360Prober) Probe(_ context.Context, _ string) (*identify.Xbox36
 	return f.info, f.err
 }
 
+// fakeFSProber stubs identify.FSProber.
+type fakeFSProber struct {
+	files []string
+	err   error
+}
+
+func (f *fakeFSProber) List(_ context.Context, _ string) ([]string, error) {
+	return f.files, f.err
+}
+
 type fakeRedumper struct {
 	err error
 }
@@ -183,6 +193,69 @@ func TestIdentify_NoProberConfigured(t *testing.T) {
 	}
 	if disc == nil || disc.Type != state.DiscTypeXBOX360 {
 		t.Fatalf("want a typed XBOX360 disc, got %+v", disc)
+	}
+}
+
+// TestIdentify_TOCHashDedupFingerprint is the coverage for the real
+// bug this exists to fix: without a stable pre-rip identifier, every
+// insertion of the same physical Xbox 360 disc (a slow drive's
+// multi-uevent-per-insertion burst, or a deliberate eject-and-
+// reinsert of a disc already ripped) would create a brand-new disc
+// row instead of discflow's persistDisc dedup recognising it. The
+// filesystem listing is stable across reads of the same disc and
+// distinct across different discs, so hashing it fills that gap the
+// same way DATA discs use a (volume_label, size) fingerprint.
+func TestIdentify_TOCHashDedupFingerprint(t *testing.T) {
+	sameDiscListing := []string{"/_SYSTEMU", "/_SYSTEMU/584E07D2", "/AUDIO_TS", "/VIDEO_TS"}
+	otherDiscListing := []string{"/_SYSTEMU", "/_SYSTEMU/4D5307E6", "/AUDIO_TS", "/VIDEO_TS"}
+
+	h1 := xbox360.New(xbox360.Deps{FSProber: &fakeFSProber{files: sameDiscListing}})
+	disc1, _, _ := h1.Identify(context.Background(), &state.Drive{ID: "d1", DevPath: "/dev/sr1"})
+	if disc1.TOCHash == "" {
+		t.Fatal("want a non-empty TOCHash when FSProber is configured")
+	}
+
+	// Re-reading the exact same physical disc (same listing, possibly
+	// out of order -- isoinfo enumeration order isn't guaranteed
+	// stable) must produce the identical hash.
+	shuffled := []string{"/VIDEO_TS", "/_SYSTEMU/584E07D2", "/AUDIO_TS", "/_SYSTEMU"}
+	h2 := xbox360.New(xbox360.Deps{FSProber: &fakeFSProber{files: shuffled}})
+	disc2, _, _ := h2.Identify(context.Background(), &state.Drive{ID: "d1", DevPath: "/dev/sr1"})
+	if disc2.TOCHash != disc1.TOCHash {
+		t.Errorf("same disc, different enumeration order: hash changed (%q vs %q)", disc1.TOCHash, disc2.TOCHash)
+	}
+
+	// A different disc (different /_SYSTEMU payload) must hash differently.
+	h3 := xbox360.New(xbox360.Deps{FSProber: &fakeFSProber{files: otherDiscListing}})
+	disc3, _, _ := h3.Identify(context.Background(), &state.Drive{ID: "d1", DevPath: "/dev/sr1"})
+	if disc3.TOCHash == disc1.TOCHash {
+		t.Error("different discs produced the same TOCHash")
+	}
+}
+
+// TestIdentify_TOCHashEmptyWithoutFSProber covers the degrade-gracefully
+// cases: no FSProber wired, or the listing call itself fails. Neither
+// should abort Identify -- they just mean no dedup fingerprint for
+// this particular insertion.
+func TestIdentify_TOCHashEmptyWithoutFSProber(t *testing.T) {
+	h := xbox360.New(xbox360.Deps{})
+	disc, _, err := h.Identify(context.Background(), &state.Drive{ID: "d1"})
+	if !errors.Is(err, pipelines.ErrNoCandidates) {
+		t.Fatalf("want ErrNoCandidates, got %v", err)
+	}
+	if disc.TOCHash != "" {
+		t.Errorf("TOCHash = %q, want empty with no FSProber configured", disc.TOCHash)
+	}
+}
+
+func TestIdentify_TOCHashEmptyOnFSProberError(t *testing.T) {
+	h := xbox360.New(xbox360.Deps{FSProber: &fakeFSProber{err: errors.New("isoinfo crashed")}})
+	disc, _, err := h.Identify(context.Background(), &state.Drive{ID: "d1"})
+	if !errors.Is(err, pipelines.ErrNoCandidates) {
+		t.Fatalf("want ErrNoCandidates, got %v", err)
+	}
+	if disc.TOCHash != "" {
+		t.Errorf("TOCHash = %q, want empty when the fs listing call fails", disc.TOCHash)
 	}
 }
 

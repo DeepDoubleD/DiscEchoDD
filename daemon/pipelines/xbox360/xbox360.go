@@ -30,13 +30,17 @@ package xbox360
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/identify"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
@@ -85,8 +89,14 @@ type RedumperRipper interface {
 
 // Deps bundles the handler's dependencies.
 type Deps struct {
-	Redumper       RedumperRipper
-	Xbox360Prober  Xbox360Prober
+	Redumper      RedumperRipper
+	Xbox360Prober Xbox360Prober
+	// FSProber lists the disc's filesystem so Identify can derive a
+	// stable pre-rip dedup fingerprint (see fsListingIdentityHash) --
+	// optional; nil means no TOCHash, and every insertion of the same
+	// physical disc creates a fresh disc row (see the fingerprint doc
+	// comment for why that matters).
+	FSProber       identify.FSProber
 	RedumpDB       *identify.RedumpDB
 	Tools          *tools.Registry // looked up: apprise, eject
 	LibraryRoot    string
@@ -118,8 +128,25 @@ func (h *Handler) DiscType() state.DiscType { return state.DiscTypeXBOX360 }
 // lookup does the real identification once the ISO exists. A prober
 // failure or nil Xbox360Prober is therefore not an error worth
 // aborting over: it's the normal path, not a fault.
+//
+// Also sets disc.TOCHash from the filesystem listing (see
+// fsListingIdentityHash) whenever FSProber is configured, regardless
+// of whether the XEX probe succeeds. Without this, discflow's
+// persistDisc dedup (keyed on TOCHash or a pre-rip MetadataID, neither
+// of which a real Xbox 360 disc has otherwise) can't recognise "this
+// is the same physical disc still in the drive" -- every uevent for
+// the same insertion, or every eject-and-reinsert of a disc already
+// ripped, would otherwise create a brand new disc row.
 func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, []state.Candidate, error) {
 	disc := &state.Disc{Type: state.DiscTypeXBOX360, DriveID: drv.ID}
+
+	if h.deps.FSProber != nil {
+		if files, err := h.deps.FSProber.List(ctx, drv.DevPath); err != nil {
+			slog.Warn("xbox360: fs listing failed; no dedup fingerprint for this insertion", "dev", drv.DevPath, "err", err)
+		} else {
+			disc.TOCHash = fsListingIdentityHash(files)
+		}
+	}
 
 	if h.deps.Xbox360Prober == nil {
 		return disc, nil, pipelines.ErrNoCandidates
@@ -350,4 +377,20 @@ func (h *Handler) md5Identify(path string, disc *state.Disc) {
 		Region:     entry.Region,
 		Confidence: 100,
 	}}
+}
+
+// fsListingIdentityHash returns a stable pre-rip identifier derived
+// from a disc's filesystem listing -- the same role
+// pipelines/data.preRipIdentityHash plays for DATA discs, sha256'd
+// instead of relying on a volume label (Xbox 360 discs don't carry a
+// meaningful one). The listing is sorted before joining so it doesn't
+// matter what order isoinfo happened to enumerate entries in; the same
+// physical disc always produces the same hash, and a different Xbox
+// 360 game (whose /_SYSTEMU payload differs) produces a different one.
+func fsListingIdentityHash(files []string) string {
+	sorted := append([]string(nil), files...)
+	sort.Strings(sorted)
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "xbox360:v1:%s", strings.Join(sorted, "\n"))
+	return hex.EncodeToString(h.Sum(nil))
 }

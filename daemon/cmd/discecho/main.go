@@ -134,9 +134,10 @@ func main() {
 	// pipeline's own Identify() as a best-effort bonus path.
 	xboxProber := &xbox.IsoinfoXboxProber{Bin: cfg.IsoInfoBin}
 	xbox360Prober := &xbox360.IsoinfoXbox360Prober{Bin: cfg.IsoInfoBin}
+	fsProber := identify.NewFSProber(identify.FSProberConfig{IsoInfoBin: cfg.IsoInfoBin})
 	classifier := identify.NewClassifier(identify.ClassifierConfig{
 		CDInfoBin:       cfg.CDInfoBin,
-		FSProber:        identify.NewFSProber(identify.FSProberConfig{IsoInfoBin: cfg.IsoInfoBin}),
+		FSProber:        fsProber,
 		BDProber:        bdProber,
 		SystemCNFProber: sysCNFProber,
 		CDGameProber:    identify.NewDevCDGameProber(),
@@ -413,6 +414,7 @@ func main() {
 	pipeReg.Register(xbox360.New(xbox360.Deps{
 		Redumper:       redumperTool,
 		Xbox360Prober:  xbox360Prober,
+		FSProber:       fsProber,
 		RedumpDB:       redumpDB,
 		Tools:          toolReg,
 		LibraryRoot:    cfg.LibraryGames,
