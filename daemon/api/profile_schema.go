@@ -77,6 +77,13 @@ var engineSchemas = map[string]EngineSchema{
 			// movie profile seeds it. season feeds per-title output paths.
 			"dvd_selection_mode": {Type: OptString},
 			"season":             {Type: OptInt},
+			// extract_text_subtitles pulls text-based subtitle tracks
+			// (ASS/SSA/SRT) out of the moved .mkv as sidecar files via
+			// mkvextract; content_type ("movie" | "tv") picks LibraryRoot
+			// vs LibraryTV at move time. Both apply even without a
+			// transcode step.
+			"extract_text_subtitles": {Type: OptBool},
+			"content_type":           {Type: OptString},
 		},
 		StepCount: 6,
 	},
@@ -99,6 +106,17 @@ var engineSchemas = map[string]EngineSchema{
 			"quality_rf":         {Type: OptInt},
 			"encoder_preset":     {Type: OptString},
 			"season":             {Type: OptInt},
+			// max_height caps output resolution (e.g. 1080), preserving
+			// aspect ratio, never upscaling. stereo_audio encodes every
+			// kept audio track (--all-audio keeps all of them, e.g.
+			// Japanese + English) down to 2.0 AAC. extract_text_subtitles
+			// pulls text-based subtitle tracks out as sidecar files.
+			// content_type ("movie" | "tv") picks LibraryRoot vs LibraryTV
+			// at move time.
+			"max_height":             {Type: OptInt},
+			"stereo_audio":           {Type: OptBool},
+			"extract_text_subtitles": {Type: OptBool},
+			"content_type":           {Type: OptString},
 		},
 		StepCount: 7,
 	},
@@ -107,15 +125,19 @@ var engineSchemas = map[string]EngineSchema{
 		Containers:  []string{"MP4", "MKV"},
 		VideoCodecs: []string{"x265", "x264", "nvenc_h265", "nvenc_h264", "av1"},
 		Options: map[string]OptionSchema{
-			"min_title_seconds":  {Type: OptInt},
-			"season":             {Type: OptInt},
-			"dvd_selection_mode": {Type: OptString},
-			"quality_rf":         {Type: OptInt},
-			"encoder_preset":     {Type: OptString},
-			"show_title_picker":  {Type: OptBool},
-			"include_extras":     {Type: OptBool},
-			"min_extra_seconds":  {Type: OptInt},
-			"extras_max_ratio":   {Type: OptInt},
+			"min_title_seconds":      {Type: OptInt},
+			"season":                 {Type: OptInt},
+			"dvd_selection_mode":     {Type: OptString},
+			"quality_rf":             {Type: OptInt},
+			"encoder_preset":         {Type: OptString},
+			"show_title_picker":      {Type: OptBool},
+			"include_extras":         {Type: OptBool},
+			"min_extra_seconds":      {Type: OptInt},
+			"extras_max_ratio":       {Type: OptInt},
+			"max_height":             {Type: OptInt},
+			"stereo_audio":           {Type: OptBool},
+			"extract_text_subtitles": {Type: OptBool},
+			"content_type":           {Type: OptString},
 		},
 		StepCount: 7,
 	},
