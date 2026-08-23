@@ -204,6 +204,25 @@ func TestMakeMKVProgressStream_LogsPRGCAsLog(t *testing.T) {
 	}
 }
 
+// TestMakeMKVProgressStream_LogsMSGAsLog reproduces a live diagnostic
+// gap: MSG: lines (e.g. mid-rip disc-read/BD+/AACS errors) were being
+// dropped on the floor during Rip() because ParseMakeMKVProgressStream
+// only matched PRGV/PRGC prefixes, unlike Scan()'s parser. A rip that
+// died mid-stream left nothing in the job log but "Saving to MKV
+// file" and silence — the real error was there on stdout the whole
+// time, just never forwarded.
+func TestMakeMKVProgressStream_LogsMSGAsLog(t *testing.T) {
+	sink := &captureSink{}
+	in := bytes.NewBufferString(`MSG:5055,0,1,"Error 'Scsi error - MEDIUM ERROR:L-EC uncorrectable error' occurred while reading '/dev/sr1' at offset '123456789'","%1"` + "\n")
+	tools.ParseMakeMKVProgressStream(in, sink)
+	if len(sink.logs) != 1 {
+		t.Fatalf("want 1 log, got %d", len(sink.logs))
+	}
+	if !strings.Contains(sink.logs[0], "MEDIUM ERROR") {
+		t.Errorf("log missing MSG text, got %q", sink.logs[0])
+	}
+}
+
 func TestNewMakeMKV_Defaults(t *testing.T) {
 	m := tools.NewMakeMKV("", "")
 	if m == nil {

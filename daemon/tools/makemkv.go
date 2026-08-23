@@ -225,14 +225,19 @@ func ParseMakeMKVInfo(s string) ([]MakeMKVTitle, error) {
 	return out, nil
 }
 
-// ParseMakeMKVProgressStream reads PRGV/PRGC lines and emits sink
+// ParseMakeMKVProgressStream reads PRGV/PRGC/MSG lines and emits sink
 // events. PRGV carries `current,total,max` — `current` is per
 // sub-operation (resets each phase), `total` is the per-title file
 // progress (monotonic 0→max over the title's rip). We use `total/max`
 // so the bar is monotonic for a single title and tracks the file size
 // the user is actually waiting on. PRGC → log line with the operation
 // label ("Saving to MKV file"). PRGT is ignored (mirrors PRGC for our
-// single-title rips).
+// single-title rips). MSG lines (mirrors Scan's handling) surface
+// errors/warnings that MakeMKV emits mid-rip — e.g. BD+/AACS failures
+// or read errors — which previously vanished silently: this stream
+// only matched PRGV/PRGC, so any MSG line (often the ONLY explanation
+// for a rip dying partway through) was dropped on the floor and every
+// failure log showed nothing but "Saving to MKV file" then silence.
 //
 // ETA seconds is extrapolated from wall-clock elapsed vs the percent
 // delta, mirroring redumper's approach. Speed is left empty — MakeMKV
@@ -266,6 +271,10 @@ func ParseMakeMKVProgressStream(r io.Reader, sink Sink) {
 					// format, so a literal '%' in a future MakeMKV label
 					// would render as %!<verb>(MISSING) and corrupt logs.
 					sink.Log(state.LogLevelInfo, "%s", label)
+				}
+			case strings.HasPrefix(line, "MSG:"):
+				if msg := parseMakeMKVMessage(strings.TrimPrefix(line, "MSG:")); msg != "" {
+					sink.Log(state.LogLevelInfo, "%s", msg)
 				}
 			}
 		}
