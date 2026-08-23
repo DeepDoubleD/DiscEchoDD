@@ -6,6 +6,109 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+This release closes out the three bugs CLAUDE.md flagged as the fork's
+first priority, then adds three new game consoles on top.
+
+### Added
+- **Xbox 360 (XGD2/XGD3) support.** Requires an OmniDrive-flashed drive
+  (the same ASUS BW-16D1HT/Panasonic UJ-260 flash already used for
+  Blu-ray) and redumper's `--dvd-raw` read path — no separate Kreon
+  hardware needed. Identified via the disc's decoy DVD-Video layer's
+  `/_SYSTEMU` folder at classify time, then a post-rip Redump MD5 lookup
+  (the XEX Execution ID that would give a pre-rip title lives behind
+  XGD2/3's security sectors, unreachable even through an OmniDrive).
+  Fixed two dormant bugs surfaced while wiring this in: `LoadRedumpDir`
+  only descended into per-console subdirectories, so Tier-1 Redump
+  matching had likely never actually run for *any* console on a
+  flat-layout dat directory; and `ClassifierConfig.XboxProber` was never
+  wired into `main.go`, so original Xbox discs always fell through to
+  DATA instead of the Xbox pipeline.
+- **Wii support**, same OmniDrive requirement. Wii discs return no
+  readable TOC at all under stock or OmniDrive firmware — confirmed
+  live, not assumed — so there's no pre-rip identification; select
+  "Wii" from the manual disc-type override, rip, and title/year resolve
+  from a post-rip Redump MD5 lookup, same as Xbox 360.
+- **PlayStation 3 support.** Unlike every other console here, PS3 discs
+  are stock-mountable Blu-ray media with per-file encryption, not a
+  drive-level lockout — no special firmware needed. Reads
+  `/PS3_GAME/PARAM.SFO` via a real read-only mount for a genuine pre-rip
+  title, then decrypts via a vendored, first-party-CLI-wrapped copy of
+  [13xforever/ps3-disc-dumper](https://github.com/13xforever/ps3-disc-dumper)
+  (MIT), which auto-fetches a matching disc key or IRD file from public
+  IRD libraries. Output is a decrypted directory tree, not an ISO, so
+  there's no Redump MD5 verification step the way the other consoles
+  have. **Verified via a real Docker build only — not yet tested
+  against an actual PS3 disc.**
+- **Job kill-switch**: `POST /api/jobs/cancel-all` plus a confirm-gated
+  "Cancel all active jobs" button in Settings → System, for clearing a
+  wedged job queue without restarting the daemon.
+- **Automatic drive-role routing**: a disc landing in a drive that can't
+  serve it properly (e.g. a BD/console disc in the CD-only Plextor) is
+  now ejected immediately after classify, with an explanation of which
+  drive it belongs on, instead of silently attempting (and failing, or
+  succeeding without Redump's accuracy guarantees) on the wrong
+  hardware.
+- Per-console output folders: every game-disc profile's default output
+  path is now prefixed with the console's name, so rips land in
+  `games/<Console>/<Title>/...` instead of one flat directory mixing
+  every system together.
+- Per-row delete on the disc history page.
+
+### Fixed
+- **Blu-ray/UHD misidentification chain** — the fork's #1 priority bug,
+  reproduced and root-caused live against several real discs rather
+  than guessed at:
+  - `classify.go` now trusts udev's `ID_CDROM_MEDIA_BD` for BD media
+    detection instead of falling through to DATA when `bd_info`
+    doesn't behave as expected (needed `udev` installed in the image).
+  - `bdmv.Handler.Identify()` no longer hard-fails a UDF-only disc with
+    no ISO9660 bridge (e.g. many real Blu-rays) when `isoinfo` can't
+    read it — falls back to udev's `ID_FS_LABEL`.
+  - TMDB search now prefers the disc's own `BDMV/META/DL/bdmt_*.xml`
+    library title over the raw volume label, which is frequently just
+    the authoring placeholder `VOLUME_ID` and carries no real signal.
+  - Match confidence is now the actual title-similarity score, not a
+    fixed ladder by sort rank — a low-signal query could previously
+    report an unrelated title at a false 100% confidence.
+  - Exact-similarity TMDB ties (e.g. a disc labeled "WATCHMEN" matching
+    the 2009 film, the 2019 series, and a 2001 short all equally) now
+    break toward the caller's known media type instead of TMDB's
+    recency-biased popularity ranking.
+- **Stale `current_disc_id` in the UI**, two rounds: the dashboard could
+  show a phantom "already ripped, re-rip?" card for a drive that had
+  actually ejected and gone idle. `current_disc_id` is server-computed
+  and was never included in `drive.changed` SSE payloads; patched via
+  the `disc.detected`/`disc.deleted`/`job.done`/`job.failed` handlers
+  instead.
+- **Wrong profile auto-selected** when more than one enabled profile
+  matched a disc type — there was no concept of a preferred profile,
+  just `.find()` in array order. `RetryTranscode` now accepts an
+  optional profile override so a bad pick can be corrected without
+  re-ripping the disc from scratch.
+- **Silently dropped disc-insert events**: the daemon's udev watcher
+  would crash and reconnect on any uevent whose value legitimately
+  contained an `=` (observed constantly on an OmniDrive-flashed drive),
+  losing real disc-insert events during the multi-second reconnect
+  window. Fixed by replacing the netlink transport with a small,
+  from-scratch implementation (`daemon/drive/udev_netlink_linux.go`) —
+  this also removed a GPL-3.0 dependency that had been statically
+  compiled into the (MIT) daemon binary.
+- Two dormant CHECK-constraint and dedup bugs found while adding Xbox
+  360: `discs.type`'s CHECK constraint silently rejected 11 of the
+  disc types added since it was written (every one of them, including
+  Xbox 360, could never actually persist a disc row); and Xbox 360
+  discs had no TOC hash or pre-rip metadata ID to dedup on, so a
+  multi-event insertion burst or a deliberate re-insert could mint a
+  duplicate disc row for the same physical disc.
+- Failed/cancelled/interrupted discs now clear on eject like completed
+  ones already did — previously only a disc with zero job history was
+  cleared, so a failed or cancelled rip left its card stuck asking for
+  a decision indefinitely after the physical disc was gone.
+- `Orchestrator.Close` now cancels in-flight jobs before waiting on
+  them, matching `Compute.Close` — previously a worker mid-rip blocked
+  shutdown for the rip's full duration, hanging on SIGTERM until Docker
+  force-killed the process.
+
 ## [0.33.2] - 2026-05-24
 
 ### Fixed
