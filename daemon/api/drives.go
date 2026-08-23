@@ -90,6 +90,9 @@ func (h *Handlers) EjectDrive(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if err := h.Store.UpdateDriveTrayOpen(r.Context(), drv.ID, true); err != nil {
+		slog.Warn("eject: update tray_open", "err", err, "drive_id", drv.ID)
+	}
 	// Drop the disc bound to this drive if it's safe to (no job in
 	// flight) and sensible to (jobless, failed, cancelled, or interrupted
 	// -- not a completed rip worth keeping) so the dashboard's computed
@@ -97,6 +100,49 @@ func (h *Handlers) EjectDrive(w http.ResponseWriter, r *http.Request) {
 	// decision" card after eject. Errors here are non-fatal: the eject
 	// itself already succeeded.
 	dropClearableDiscOnDrive(r.Context(), h.Store, h.Broadcaster, drv.ID)
+	if h.Broadcaster != nil {
+		h.Broadcaster.Publish(state.Event{
+			Name:    "drive.changed",
+			Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
+		})
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// CloseTrayDrive shells out to `eject -t` for the drive's dev_path,
+// retracting an open tray -- there was previously no way to do this
+// from the UI at all; Eject only ever opens the tray, so a second
+// press of the same button did nothing. Returns 503 if the daemon was
+// built without a TrayCloser (tests/edge configs). Does not check for
+// an active job the way EjectDrive does: closing an idle/empty tray is
+// harmless, and a tray can only be open if nothing is actively ripping
+// (the drive must have been idle to accept the original Eject).
+func (h *Handlers) CloseTrayDrive(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	drv, err := h.Store.GetDrive(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "drive not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if h.TrayCloser == nil {
+		writeError(w, http.StatusServiceUnavailable, "tray close not configured")
+		return
+	}
+	if drv.DevPath == "" {
+		writeError(w, http.StatusUnprocessableEntity, "drive has no dev_path")
+		return
+	}
+	if err := h.TrayCloser(r.Context(), drv.DevPath); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.Store.UpdateDriveTrayOpen(r.Context(), drv.ID, false); err != nil {
+		slog.Warn("close-tray: update tray_open", "err", err, "drive_id", drv.ID)
+	}
 	if h.Broadcaster != nil {
 		h.Broadcaster.Publish(state.Event{
 			Name:    "drive.changed",

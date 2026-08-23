@@ -1,0 +1,11 @@
+ALTER TABLE drives ADD COLUMN tray_open INTEGER NOT NULL DEFAULT 0;
+-- tray_open tracks whether the drive's tray is currently open, so the
+-- dashboard can show tray status and offer a "Close Tray" action
+-- distinct from "Eject" (which only ever opens it -- there was no way
+-- to retract the tray from the UI at all before this). Best-effort:
+-- set true on a successful Eject, false on a successful close-tray
+-- action or a udev media-change event that reports media present
+-- (which can only happen with the tray closed). A tray closed by
+-- physically pressing the drive's own button, with no disc present,
+-- won't be observed and leaves this stale until the next software
+-- action -- acceptable for a status hint, not a safety-critical value.

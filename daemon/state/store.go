@@ -115,7 +115,7 @@ func unmarshalOptions(s string) (map[string]any, error) {
 func (s *Store) GetDrive(ctx context.Context, id string) (*Drive, error) {
 	row := s.db.Conn().QueryRowContext(ctx, `
 		SELECT id, model, bus, dev_path, state, last_seen_at, notes, last_error,
-		       read_offset, read_offset_source
+		       read_offset, read_offset_source, tray_open
 		FROM drives WHERE id = ?`, id)
 	return scanDrive(row)
 }
@@ -124,7 +124,7 @@ func (s *Store) GetDrive(ctx context.Context, id string) (*Drive, error) {
 func (s *Store) ListDrives(ctx context.Context) ([]Drive, error) {
 	rows, err := s.db.Conn().QueryContext(ctx, `
 		SELECT id, model, bus, dev_path, state, last_seen_at, notes, last_error,
-		       read_offset, read_offset_source
+		       read_offset, read_offset_source, tray_open
 		FROM drives ORDER BY dev_path`)
 	if err != nil {
 		return nil, err
@@ -277,14 +277,16 @@ func (s *Store) ReleaseDriveFromIdentify(ctx context.Context, id string, to Driv
 func scanDrive(r rowScanner) (*Drive, error) {
 	var d Drive
 	var state, lastSeenStr string
+	var trayOpen int
 	if err := r.Scan(&d.ID, &d.Model, &d.Bus, &d.DevPath, &state, &lastSeenStr,
-		&d.Notes, &d.LastError, &d.ReadOffset, &d.ReadOffsetSource); err != nil {
+		&d.Notes, &d.LastError, &d.ReadOffset, &d.ReadOffsetSource, &trayOpen); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
 	d.State = DriveState(state)
+	d.TrayOpen = trayOpen != 0
 	t, err := parseTime(lastSeenStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse last_seen_at: %w", err)
@@ -292,6 +294,26 @@ func scanDrive(r rowScanner) (*Drive, error) {
 	d.LastSeenAt = t
 	d.LastErrorTip = DriveErrorTip(d.LastError)
 	return &d, nil
+}
+
+// UpdateDriveTrayOpen sets the drive's best-effort tray-status hint --
+// see migration 022_drive_tray_open.sql for what keeps this accurate
+// and what doesn't. Returns ErrNotFound if id has no row.
+func (s *Store) UpdateDriveTrayOpen(ctx context.Context, id string, open bool) error {
+	v := 0
+	if open {
+		v = 1
+	}
+	res, err := s.db.Conn().ExecContext(ctx,
+		`UPDATE drives SET tray_open = ? WHERE id = ?`, v, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // UpdateDriveReadOffset persists a drive's calibration. source is one of

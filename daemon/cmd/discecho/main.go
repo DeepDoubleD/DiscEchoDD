@@ -524,6 +524,9 @@ func main() {
 		Ejector: func(ctx context.Context, devPath string) error {
 			return ejectTool.Run(ctx, []string{devPath}, nil, "", tools.NopSink{})
 		},
+		TrayCloser: func(ctx context.Context, devPath string) error {
+			return ejectTool.Run(ctx, []string{"-t", devPath}, nil, "", tools.NopSink{})
+		},
 	}
 
 	embedFS, err := embed.FS()

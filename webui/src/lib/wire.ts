@@ -68,6 +68,14 @@ export interface Drive {
   // AccurateRip verification.
   read_offset: number;
   read_offset_source?: '' | 'manual' | 'auto';
+  // Best-effort tray-status hint -- see the daemon's
+  // 022_drive_tray_open.sql migration for what does and doesn't keep
+  // this accurate. Not a live hardware read. Optional like
+  // read_offset_source above: always sent by the real API, but marked
+  // optional so existing test fixtures predating this field don't all
+  // need updating -- undefined reads the same as false everywhere it's
+  // used.
+  tray_open?: boolean;
 }
 
 // AccurateRipSummary lives inside JobStep.notes.accuraterip for the

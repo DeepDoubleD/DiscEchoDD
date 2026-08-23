@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,6 +10,17 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/drive"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
+
+// erroringClassifier lets an insert uevent reach the classify call
+// (past the tray_open update this test cares about) without needing a
+// real classifier wired up; the resulting classify failure is exactly
+// what a real drive reports for select/settle races and is already
+// handled by the disc-flow (drive → error, no panic).
+type erroringClassifier struct{}
+
+func (erroringClassifier) Classify(_ context.Context, _ string) (state.DiscType, error) {
+	return "", errors.New("no classifier configured in test")
+}
 
 func newDiscFlowTestStore(t *testing.T) *state.Store {
 	t.Helper()
@@ -31,6 +43,48 @@ func ejectUevent() drive.Uevent {
 			"SUBSYSTEM": "block", "ID_CDROM": "1",
 			"DISK_MEDIA_CHANGE": "1", "DEVNAME": "sr0",
 		},
+	}
+}
+
+// insertUevent mirrors what udev emits when media is loaded: a
+// media-change uevent with ID_CDROM_MEDIA=1.
+func insertUevent() drive.Uevent {
+	return drive.Uevent{
+		Action: "change", Subsystem: "block", DevName: "sr0",
+		Properties: map[string]string{
+			"SUBSYSTEM": "block", "ID_CDROM": "1", "ID_CDROM_MEDIA": "1",
+			"DISK_MEDIA_CHANGE": "1", "DEVNAME": "sr0",
+		},
+	}
+}
+
+// TestDiscFlow_Insert_ClosesTrayStatus covers the other half of the
+// tray-status feature: media present can only be reported with the
+// tray physically closed, so an insert uevent must clear tray_open
+// regardless of how the tray actually got closed (our own close-tray
+// action, the drive's own button, or an auto-closing tray).
+func TestDiscFlow_Insert_ClosesTrayStatus(t *testing.T) {
+	store := newDiscFlowTestStore(t)
+	ctx := context.Background()
+	drv := &state.Drive{DevPath: "/dev/sr0", Model: "X", Bus: "sr0", State: state.DriveStateIdle, LastSeenAt: time.Now()}
+	if err := store.UpsertDrive(ctx, drv); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateDriveTrayOpen(ctx, drv.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	bc := state.NewBroadcaster()
+	t.Cleanup(bc.Close)
+	df := &discFlow{store: store, bc: bc, classifier: erroringClassifier{}, identifyDur: 5 * time.Second}
+	df.handle(insertUevent())
+
+	got, err := store.GetDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrayOpen {
+		t.Error("want tray_open=false after an insert uevent")
 	}
 }
 

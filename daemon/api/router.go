@@ -52,6 +52,7 @@ func NewRouter(h *Handlers, static http.Handler) http.Handler {
 			authed.Get("/drives", h.ListDrives)
 			authed.Get("/drives/{id}", h.GetDrive)
 			authed.Post("/drives/{id}/eject", h.EjectDrive)
+			authed.Post("/drives/{id}/close-tray", h.CloseTrayDrive)
 			authed.Patch("/drives/{id}/offset", h.PatchDriveOffset)
 
 			authed.Get("/jobs", h.ListJobs)

@@ -559,14 +559,22 @@ export async function deleteJob(jobID: string): Promise<void> {
 // skipDisc removes the disc row server-side so the awaiting-decision
 // card is dismissed permanently — without this, the row stays in the
 // DB and AwaitingDecisionList re-derives the card on every page load.
-// The daemon refuses to delete a disc that has any job history, so
-// this is only callable on truly orphan rows.
+// The daemon refuses to delete a disc with a job still in flight, but
+// allows it once that job is terminal (done/failed/cancelled/
+// interrupted) — Skip works on any card that isn't actively ripping.
 export async function skipDisc(discID: string): Promise<void> {
   await apiDelete(`/api/discs/${discID}`);
 }
 
 export async function ejectDrive(driveID: string): Promise<void> {
   await apiPost<void>(`/api/drives/${driveID}/eject`);
+}
+
+// closeTrayDrive retracts an open tray (`eject -t`) -- the counterpart
+// Eject never had: it only ever opens the tray, so there was previously
+// no way to close it back from the UI at all.
+export async function closeTrayDrive(driveID: string): Promise<void> {
+  await apiPost<void>(`/api/drives/${driveID}/close-tray`);
 }
 
 // ----- History --------------------------------------------------------------

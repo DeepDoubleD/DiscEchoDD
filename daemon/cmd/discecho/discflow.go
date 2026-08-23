@@ -119,6 +119,13 @@ func (df *discFlow) handle(ev drive.Uevent) {
 		return
 	}
 	slog.Info("disc inserted", "dev", devPath)
+	// Media present can only be reported with the tray closed -- true
+	// regardless of whether it got there via our own close-tray action,
+	// the physical drive button, or the tray auto-closing on some
+	// drives when media is detected.
+	if err := df.store.UpdateDriveTrayOpen(ctx, drv.ID, false); err != nil {
+		slog.Warn("disc-flow: update tray_open on insert", "err", err, "drive_id", drv.ID)
+	}
 	if recent, err := df.store.HasRecentJobOnDrive(ctx, drv.ID, discFlowCooldown); err != nil {
 		slog.Warn("disc-flow: HasRecentJobOnDrive", "err", err)
 	} else if recent {

@@ -103,6 +103,9 @@ func TestEjectDrive_FiresEjectorAndReturnsToIdle(t *testing.T) {
 	if got.State != state.DriveStateIdle {
 		t.Errorf("post-eject state %s want idle", got.State)
 	}
+	if !got.TrayOpen {
+		t.Error("want tray_open=true after a successful eject")
+	}
 }
 
 func TestEjectDrive_NoEjectorReturns503(t *testing.T) {
@@ -136,6 +139,79 @@ func TestEjectDrive_EjectorFailureRestoresIdle(t *testing.T) {
 	got, _ := h.Store.GetDrive(context.Background(), d.ID)
 	if got.State != state.DriveStateIdle {
 		t.Errorf("post-failed-eject state %s want idle", got.State)
+	}
+}
+
+// TestCloseTrayDrive_FiresTrayCloserAndClearsTrayOpen covers the fix
+// for the live bug: Eject only ever ran plain `eject` (open), so a
+// second press of the same button did nothing -- there was no way to
+// retract the tray from the UI at all. close-tray must call the
+// closer with -t semantics and flip tray_open back to false.
+func TestCloseTrayDrive_FiresTrayCloserAndClearsTrayOpen(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	if err := h.Store.UpdateDriveTrayOpen(context.Background(), d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	gotDev := ""
+	h.TrayCloser = func(_ context.Context, dev string) error {
+		called = true
+		gotDev = dev
+		return nil
+	}
+
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/close-tray", h.CloseTrayDrive)
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/close-tray", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+	if !called {
+		t.Fatal("tray closer not called")
+	}
+	if gotDev != d.DevPath {
+		t.Errorf("tray closer got dev %q want %q", gotDev, d.DevPath)
+	}
+	got, err := h.Store.GetDrive(context.Background(), d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrayOpen {
+		t.Error("want tray_open=false after a successful close-tray")
+	}
+}
+
+func TestCloseTrayDrive_NoTrayCloserReturns503(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	// h.TrayCloser is nil by default in apitestServer.
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/close-tray", h.CloseTrayDrive)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/close-tray", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status %d want 503", w.Code)
+	}
+}
+
+func TestCloseTrayDrive_CloserFailureReturns500(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	h.TrayCloser = func(_ context.Context, _ string) error { return errors.New("boom") }
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/close-tray", h.CloseTrayDrive)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/close-tray", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status %d want 500", w.Code)
 	}
 }
 
