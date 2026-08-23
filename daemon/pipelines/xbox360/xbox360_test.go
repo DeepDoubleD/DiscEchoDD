@@ -147,13 +147,42 @@ func TestIdentify_RedumpMiss(t *testing.T) {
 	}
 }
 
+// TestIdentify_ProbeError covers the expected case on a real disc: the
+// XEX probe fails (default.xex isn't reachable via a stock read). This
+// must be graceful, not fatal -- a typed, non-nil disc plus
+// ErrNoCandidates, the same shape any other unidentified disc gets, so
+// discflow can still persist an awaiting-decision card and the drive
+// doesn't get incorrectly flipped to an error state.
 func TestIdentify_ProbeError(t *testing.T) {
 	h := xbox360.New(xbox360.Deps{
 		Xbox360Prober: &fakeXbox360Prober{err: identify.ErrNotXbox360},
 	})
-	_, _, err := h.Identify(context.Background(), &state.Drive{ID: "d1"})
-	if err == nil {
-		t.Fatal("want error when the probe fails")
+	disc, cands, err := h.Identify(context.Background(), &state.Drive{ID: "d1"})
+	if !errors.Is(err, pipelines.ErrNoCandidates) {
+		t.Fatalf("want ErrNoCandidates, got %v", err)
+	}
+	if disc == nil {
+		t.Fatal("want a non-nil typed disc even when the probe fails")
+	}
+	if disc.Type != state.DiscTypeXBOX360 {
+		t.Errorf("disc.Type = %s, want XBOX360", disc.Type)
+	}
+	if cands != nil {
+		t.Errorf("want nil candidates, got %v", cands)
+	}
+}
+
+// TestIdentify_NoProberConfigured covers a Handler built without an
+// Xbox360Prober at all (Deps{} zero value) -- must be as graceful as a
+// probe error, not a hard failure.
+func TestIdentify_NoProberConfigured(t *testing.T) {
+	h := xbox360.New(xbox360.Deps{})
+	disc, _, err := h.Identify(context.Background(), &state.Drive{ID: "d1"})
+	if !errors.Is(err, pipelines.ErrNoCandidates) {
+		t.Fatalf("want ErrNoCandidates, got %v", err)
+	}
+	if disc == nil || disc.Type != state.DiscTypeXBOX360 {
+		t.Fatalf("want a typed XBOX360 disc, got %+v", disc)
 	}
 }
 
@@ -231,6 +260,86 @@ func TestRun_HappyPath(t *testing.T) {
 		if st == state.StepTranscode || st == state.StepCompress {
 			t.Errorf("step %s should not have started for Xbox 360", st)
 		}
+	}
+}
+
+// TestRun_PostRipMD5Identify is the coverage for the real, primary
+// identification path: Identify's pre-rip XEX probe fails on every
+// actual disc (confirmed live -- see the package doc), so disc.Title
+// and disc.MetadataID both start empty here, exactly like a genuine
+// classify -> identify -> awaiting_decision -> start flow would leave
+// them. RunTranscode must still land the file at the correctly-titled
+// path, sourced entirely from hashing the ripped ISO and matching it
+// against the Redump dat by MD5.
+func TestRun_PostRipMD5Identify(t *testing.T) {
+	libRoot := t.TempDir()
+	workRoot := t.TempDir()
+
+	// fakeRedumper always writes the literal bytes "ISO"; its MD5 is
+	// precomputed so the dat entry actually matches at lookup time.
+	const isoMD5 = "5b512ee8a59deb284ad0a6a035ba10b1"
+	db := xbox360DB(t, 0x4D5307E6, "Halo 3", "USA", isoMD5)
+
+	h := xbox360.New(xbox360.Deps{
+		Redumper:    &fakeRedumper{},
+		RedumpDB:    db,
+		Tools:       newRegistry(),
+		LibraryRoot: libRoot,
+		WorkRoot:    workRoot,
+	})
+	prof := &state.Profile{
+		ID:                 "p-xbox360",
+		Name:               "Xbox360-ISO",
+		OutputPathTemplate: "{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso",
+	}
+	// Unidentified going in -- no Title, no MetadataID, no Candidates.
+	disc := &state.Disc{ID: "disc-3", Type: state.DiscTypeXBOX360}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatal(err)
+	}
+
+	want := filepath.Join(libRoot, "Halo 3 (USA)", "Halo 3 (USA).iso")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("expected file at %s (post-rip MD5 identify should have filled the title): %v", want, err)
+	}
+	if disc.Title != "Halo 3" {
+		t.Errorf("disc.Title = %q, want Halo 3 (post-rip identify should mutate disc in place)", disc.Title)
+	}
+}
+
+// TestRun_PostRipMD5Identify_NoMatch covers the miss case: no Redump
+// entry for this MD5, so the disc stays unidentified and the output
+// path template falls back to whatever empty/default rendering
+// RenderOutputPath produces for an empty Title — this must not error
+// or panic, just produce a best-effort path.
+func TestRun_PostRipMD5Identify_NoMatch(t *testing.T) {
+	libRoot := t.TempDir()
+	db := xbox360DB(t, 0x4D530001, "Some Other Game", "USA", "deadbeefdeadbeefdeadbeefdeadbeef")
+
+	h := xbox360.New(xbox360.Deps{
+		Redumper:    &fakeRedumper{},
+		RedumpDB:    db,
+		Tools:       newRegistry(),
+		LibraryRoot: libRoot,
+		WorkRoot:    t.TempDir(),
+	})
+	prof := &state.Profile{
+		ID:                 "p-xbox360",
+		Name:               "Xbox360-ISO",
+		OutputPathTemplate: "{{.Title}}.iso",
+	}
+	disc := &state.Disc{ID: "disc-4", Type: state.DiscTypeXBOX360}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatal(err)
+	}
+	if disc.Title != "" {
+		t.Errorf("disc.Title = %q, want unchanged empty (no MD5 match)", disc.Title)
 	}
 }
 

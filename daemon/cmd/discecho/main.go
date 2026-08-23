@@ -119,12 +119,19 @@ func main() {
 	sysCNFProber := identify.NewSystemCNFProber(cfg.IsoInfoBin)
 	bdProber := identify.NewBDProber(identify.BDProberConfig{BDInfoBin: cfg.BDInfoBin})
 	mkvSubs := tools.NewMKVToolNix(cfg.MKVMergeBin, cfg.MKVExtractBin)
-	// Constructed here (not inline in pipeReg.Register below) so the same
-	// instances can also be wired into the classifier -- previously
-	// ClassifierConfig.XboxProber/Xbox360Prober were left unset entirely,
-	// which meant RefineDiscType's Xbox/Xbox 360 branches were dead code:
-	// a disc of either type always fell through to DATA classification
-	// and never reached the xbox/xbox360 pipeline handler at all.
+	// xboxProber constructed here (not inline in pipeReg.Register below)
+	// so the same instance can also be wired into the classifier --
+	// previously ClassifierConfig.XboxProber was left unset entirely,
+	// which meant RefineDiscType's Xbox branch was dead code: an Xbox
+	// disc always fell through to DATA classification and never reached
+	// the xbox pipeline handler at all.
+	//
+	// xbox360Prober has no classifier-side use: Xbox 360 discs are
+	// classified by the /_SYSTEMU marker alone (see RefineDiscType) --
+	// default.xex isn't reachable via a stock filesystem read on a real
+	// disc, confirmed live, so a pre-rip XEX probe at classify time would
+	// never succeed. The prober is still useful inside the xbox360
+	// pipeline's own Identify() as a best-effort bonus path.
 	xboxProber := &xbox.IsoinfoXboxProber{Bin: cfg.IsoInfoBin}
 	xbox360Prober := &xbox360.IsoinfoXbox360Prober{Bin: cfg.IsoInfoBin}
 	classifier := identify.NewClassifier(identify.ClassifierConfig{
@@ -134,7 +141,6 @@ func main() {
 		SystemCNFProber: sysCNFProber,
 		CDGameProber:    identify.NewDevCDGameProber(),
 		XboxProber:      xboxProber,
-		Xbox360Prober:   xbox360Prober,
 	})
 
 	// urlsForTrigger is shared by every pipeline — looks up the

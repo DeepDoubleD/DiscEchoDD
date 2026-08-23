@@ -252,7 +252,6 @@ type ClassifierConfig struct {
 	SystemCNFProber SystemCNFProber // default NewSystemCNFProber("") — distinguishes PSX vs PS2
 	SaturnProber    SaturnProber    // optional — detects Sega Saturn via IP.BIN
 	XboxProber      XboxProber      // optional — detects Xbox via default.xbe
-	Xbox360Prober   Xbox360Prober   // optional — detects Xbox 360 via default.xex
 	DCProber        DCProber        // optional — detects Dreamcast via GD-ROM TOC heuristic
 	CDGameProber    CDGameProber    // optional — detects CD consoles via data-track magic
 
@@ -287,7 +286,6 @@ func NewClassifier(c ClassifierConfig) Classifier {
 		sysCNF:    c.SystemCNFProber,
 		saturn:    c.SaturnProber,
 		xbox:      c.XboxProber,
-		xbox360:   c.Xbox360Prober,
 		dc:        c.DCProber,
 		cdGame:    c.CDGameProber,
 		runner:    defaultCDInfoRunner,
@@ -302,7 +300,6 @@ type multiProbeClassifier struct {
 	sysCNF    SystemCNFProber
 	saturn    SaturnProber
 	xbox      XboxProber
-	xbox360   Xbox360Prober
 	dc        DCProber
 	cdGame    CDGameProber
 	runner    cdInfoRunner
@@ -341,7 +338,7 @@ func (c *multiProbeClassifier) Classify(ctx context.Context, devPath string) (st
 		// permanently mis-labelled. See retryingSystemCNFProber.
 		sysCNF = &retryingSystemCNFProber{inner: c.sysCNF, backoff: c.backoff}
 	}
-	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.xbox360, c.dc, c.cdGame, devPath), nil
+	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.dc, c.cdGame, devPath), nil
 }
 
 func (c *multiProbeClassifier) runCDInfo(ctx context.Context, devPath string) ([]byte, error) {
@@ -510,6 +507,8 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 //
 // Decision tree:
 //   - AUDIO_CD → AUDIO_CD (passthrough)
+//   - DATA + /_SYSTEMU → XBOX360 (checked before /VIDEO_TS: every retail
+//     Xbox 360 disc is also a valid DVD-Video, so this must win first)
 //   - DATA + /VIDEO_TS → DVD
 //   - DATA + /MPEGAV|/VCD (VCD) or /MPEG2|/SVCD (SVCD) → VCD
 //   - DATA + /BDMV/index.bdmv:
@@ -520,14 +519,13 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 //     SYSTEM.CNF readable + !IsPS2 → PSX
 //     SYSTEM.CNF unreadable → DATA
 //   - DATA + /default.xbe + xbox probe ok → XBOX
-//   - DATA + /default.xex + xbox360 probe ok → XBOX360
 //   - saturn probe ok (raw sector 0) → SAT
 //   - dc probe ok (TOC heuristic) → DC
 //   - cdGame probe ok (data-track magic) → SegaCD / 3DO / PC-FX / Jaguar / CD-i
 //   - else → DATA
 //
 // Probes that error are logged and treated as a negative result.
-func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, xbox360 Xbox360Prober, dc DCProber, cdGame CDGameProber, devPath string) state.DiscType {
+func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, dc DCProber, cdGame CDGameProber, devPath string) state.DiscType {
 	if base == state.DiscTypeAudioCD {
 		return state.DiscTypeAudioCD
 	}
@@ -552,6 +550,22 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 	if err != nil {
 		slog.Warn("classify: fs probe failed", "dev", devPath, "err", err)
 		return base
+	}
+	// Xbox 360 (XGD2/XGD3): every retail disc is deliberately mastered as
+	// a valid, playable DVD-Video too (a stock drive/PC sees a "this game
+	// is for Xbox 360" branded video instead of the real game data,
+	// which lives behind security sectors only a raw-read-capable drive
+	// like an OmniDrive-flashed one can reach) -- confirmed live against
+	// a real disc, which carries /_SYSTEMU, /AUDIO_TS, AND a fully
+	// populated /VIDEO_TS with real .VOB/.IFO files. /default.xex is
+	// NOT reachable via a stock filesystem read (it lives in the
+	// security-sector region), so /_SYSTEMU -- Microsoft's own reserved
+	// system folder, not something any legitimate DVD-Video disc would
+	// carry -- is the only reliable marker, and this check must run
+	// before the /VIDEO_TS one below or every Xbox 360 disc misclassifies
+	// as a plain DVD.
+	if hasPath(files, "/_SYSTEMU") {
+		return state.DiscTypeXBOX360
 	}
 	if hasPath(files, "/VIDEO_TS") {
 		return state.DiscTypeDVD
@@ -613,22 +627,9 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 			return state.DiscTypeXBOX
 		}
 	}
-	// Xbox 360: /default.xex at root signals a candidate; XEX Execution
-	// ID probe confirms. Security-sector protection (the reason these
-	// discs need an OmniDrive-flashed drive at rip time) doesn't block
-	// a normal filesystem read of default.xex — it's an additional
-	// layer on top of an otherwise-standard UDF/ISO9660 filesystem, not
-	// full-disc encryption.
-	if hasPath(files, "/default.xex") && xbox360 != nil {
-		info, err := xbox360.Probe(ctx, devPath)
-		if err != nil {
-			if !errors.Is(err, ErrNotXbox360) {
-				slog.Warn("classify: xbox360 probe failed", "dev", devPath, "err", err)
-			}
-		} else if info != nil {
-			return state.DiscTypeXBOX360
-		}
-	}
+	// Xbox 360 is classified above (/_SYSTEMU, before the /VIDEO_TS
+	// check) since default.xex is never reachable via a stock read on a
+	// real disc — see the comment there.
 	// Saturn: probe raw sector 0 regardless of fs listing; Saturn discs
 	// often have no ISO9660 filesystem so files may be empty.
 	if saturn != nil {
