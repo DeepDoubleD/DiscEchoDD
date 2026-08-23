@@ -62,6 +62,7 @@ type Deps struct {
 	MakeMKVRipper  MakeMKVRipper
 	Tools          *tools.Registry // looked up: apprise, eject
 	LibraryRoot    string
+	LibraryTV      string // used instead of LibraryRoot when the profile's content_type is "tv"
 	WorkRoot       string
 	LibraryProbe   func(string) error
 	URLsForTrigger func(ctx context.Context, trigger string) []string
@@ -207,7 +208,7 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	sink.OnStepDone(state.StepIdentify, nil)
 
 	sink.OnStepStart(state.StepRip)
-	if err := h.deps.LibraryProbe(h.deps.LibraryRoot); err != nil {
+	if err := h.deps.LibraryProbe(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof)); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
@@ -416,9 +417,10 @@ func (h *Handler) moveMultiTitle(srcs []string, disc *state.Disc, prof *state.Pr
 			rendered[i] = strings.TrimSuffix(r, ext) + fmt.Sprintf("-title%02d", i+1) + ext
 		}
 	}
+	root := pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof)
 	moved := make([]string, 0, len(srcs))
 	for i, src := range srcs {
-		dst := filepath.Join(h.deps.LibraryRoot, rendered[i])
+		dst := filepath.Join(root, rendered[i])
 		if err := pipelines.AtomicMove(src, dst); err != nil {
 			return moved, err
 		}

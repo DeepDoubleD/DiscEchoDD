@@ -58,6 +58,43 @@ func TestStringOption(t *testing.T) {
 	}
 }
 
+func TestIsTVProfile(t *testing.T) {
+	cases := []struct {
+		name string
+		opts map[string]any
+		want bool
+	}{
+		{"unset → movie", map[string]any{}, false},
+		{"content_type movie", map[string]any{"content_type": "movie"}, false},
+		{"content_type tv", map[string]any{"content_type": "tv"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := pipelines.IsTVProfile(&state.Profile{Options: c.opts})
+			if got != c.want {
+				t.Errorf("IsTVProfile = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestLibraryRootFor(t *testing.T) {
+	movie := &state.Profile{Options: map[string]any{"content_type": "movie"}}
+	tv := &state.Profile{Options: map[string]any{"content_type": "tv"}}
+
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", movie); got != "/library/movies" {
+		t.Errorf("movie profile: got %q, want /library/movies", got)
+	}
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", tv); got != "/library/tv" {
+		t.Errorf("tv profile: got %q, want /library/tv", got)
+	}
+	// A deployment that hasn't configured LibraryTV must still work --
+	// fall back to the movies root rather than writing to "".
+	if got := pipelines.LibraryRootFor("/library/movies", "", tv); got != "/library/movies" {
+		t.Errorf("tv profile, unconfigured TV root: got %q, want fallback to /library/movies", got)
+	}
+}
+
 func TestMaxHeightFromProfile(t *testing.T) {
 	cases := []struct {
 		name string

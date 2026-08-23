@@ -78,6 +78,26 @@ func ExtrasMaxRatioFromProfile(prof *state.Profile) float64 {
 	return float64(pct) / 100.0
 }
 
+// IsTVProfile reports whether a profile's content_type option is "tv"
+// (default "movie"). Explicit rather than inferred from other options
+// (e.g. DVD-Video's "season") because BDMV/UHD profiles have no such
+// signal today and this needs to work the same across all three
+// pipelines.
+func IsTVProfile(prof *state.Profile) bool {
+	return StringOption(prof, "content_type", "movie") == "tv"
+}
+
+// LibraryRootFor picks between a pipeline's movies and TV library
+// roots based on IsTVProfile. Falls back to moviesRoot when tvRoot is
+// empty, so a deployment that hasn't configured a separate TV path
+// still works.
+func LibraryRootFor(moviesRoot, tvRoot string, prof *state.Profile) string {
+	if IsTVProfile(prof) && tvRoot != "" {
+		return tvRoot
+	}
+	return moviesRoot
+}
+
 // MaxHeightFromProfile returns the profile's resolution cap in pixels
 // (e.g. 1080), or 0 when unset/not positive -- 0 means "no cap, keep
 // the disc's native resolution".

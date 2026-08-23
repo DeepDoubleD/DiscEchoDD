@@ -68,6 +68,7 @@ type Deps struct {
 	MakeMKVRipper    MakeMKVRipper
 	Tools            *tools.Registry
 	LibraryRoot      string
+	LibraryTV        string // used instead of LibraryRoot when the profile's content_type is "tv"
 	WorkRoot         string
 	LibraryProbe     func(string) error
 	URLsForTrigger   func(ctx context.Context, trigger string) []string
@@ -229,7 +230,7 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	sink.OnStepDone(state.StepIdentify, nil)
 
 	sink.OnStepStart(state.StepRip)
-	if err := h.deps.LibraryProbe(h.deps.LibraryRoot); err != nil {
+	if err := h.deps.LibraryProbe(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof)); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
@@ -718,7 +719,7 @@ func (h *Handler) runTranscodeMakeMKV(ctx context.Context, result pipelines.RipR
 	}
 
 	sink.OnStepStart(state.StepMove)
-	moved, err := pipelines.MoveMovieOutputs(h.deps.LibraryRoot, moveSources, disc, prof)
+	moved, err := pipelines.MoveMovieOutputs(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof), moveSources, disc, prof)
 	if err != nil {
 		sink.OnStepFailed(state.StepMove, err)
 		return fmt.Errorf("move: %w", err)
@@ -1113,7 +1114,7 @@ func (h *Handler) moveOutputs(transcoded []string, encodeTitles []tools.HandBrak
 				rel += "." + ext
 			}
 		}
-		dst := filepath.Join(h.deps.LibraryRoot, rel)
+		dst := filepath.Join(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof), rel)
 		if err := pipelines.AtomicMove(src, dst); err != nil {
 			return moved, err
 		}
