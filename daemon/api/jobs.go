@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -116,6 +117,16 @@ func (h *Handlers) CancelAllJobs(w http.ResponseWriter, r *http.Request) {
 //	410 spool dir is gone — only path forward is to re-rip the disc
 //	422 job is not a transcode job, or has no spool_path
 //	503 compute pool not configured
+// retryTranscodeRequest is the optional body for POST
+// /jobs/{id}/retry-transcode. ProfileID, when set, swaps the job onto a
+// different profile before re-queuing -- lets a retry redo the encode
+// with a different profile (e.g. the wrong one auto-selected the first
+// time) without re-ripping the disc from scratch. Omitted/empty keeps
+// the job's existing profile, matching the original no-body behaviour.
+type retryTranscodeRequest struct {
+	ProfileID string `json:"profile_id"`
+}
+
 func (h *Handlers) RetryTranscode(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	job, err := h.Store.GetJob(r.Context(), id)
@@ -148,7 +159,37 @@ func (h *Handlers) RetryTranscode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "compute pool not configured")
 		return
 	}
-	if err := h.Store.ResetTranscodeJob(r.Context(), id); err != nil {
+
+	// A body is optional (existing no-body retry callers keep working
+	// unchanged); an empty/missing body is not an error.
+	var req retryTranscodeRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	newProfileID := ""
+	if req.ProfileID != "" && req.ProfileID != job.ProfileID {
+		disc, err := h.Store.GetDisc(r.Context(), job.DiscID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		newProf, err := h.Store.GetProfile(r.Context(), req.ProfileID)
+		if err != nil {
+			if errors.Is(err, state.ErrNotFound) {
+				writeError(w, http.StatusUnprocessableEntity, "profile not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !newProf.Enabled || newProf.DiscType != disc.Type {
+			writeError(w, http.StatusUnprocessableEntity, "profile does not match this disc's type or is disabled")
+			return
+		}
+		newProfileID = req.ProfileID
+	}
+
+	if err := h.Store.ResetTranscodeJob(r.Context(), id, newProfileID); err != nil {
 		// The pre-checks above already guard kind/state, but ResetTranscodeJob
 		// re-checks inside its transaction; a lost race (e.g. a double-clicked
 		// retry, or the job finishing between the read and the reset) surfaces

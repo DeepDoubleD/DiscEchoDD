@@ -1547,8 +1547,16 @@ func (s *Store) ActiveSpoolReferences(ctx context.Context) (ripIDs []string, tra
 // kind=transcode and state in {failed, interrupted}; returns
 // ErrInvalidJobKindForRetry / ErrInvalidJobStateForRetry otherwise.
 //
+// newProfileID, when non-empty, also swaps the job onto a different
+// profile before re-queuing -- lets a retry redo the encode with a
+// different profile (e.g. the wrong one auto-selected the first time)
+// without re-ripping the disc from scratch. The caller is responsible
+// for validating the profile (same disc_type, enabled) before calling;
+// this method trusts it, matching UpdateDiscType/UpdateDiscMetadata's
+// no-validation-in-the-store convention elsewhere in this file.
+//
 // One transaction so the UI never sees a half-reset job.
-func (s *Store) ResetTranscodeJob(ctx context.Context, id string) error {
+func (s *Store) ResetTranscodeJob(ctx context.Context, id, newProfileID string) error {
 	tx, err := s.db.Conn().BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1588,6 +1596,12 @@ func (s *Store) ResetTranscodeJob(ctx context.Context, id string) error {
 		       error_message = ''
 		 WHERE id = ?`, id); err != nil {
 		return err
+	}
+	if newProfileID != "" {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE jobs SET profile_id = ? WHERE id = ?`, newProfileID, id); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE job_steps

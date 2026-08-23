@@ -17,6 +17,12 @@ RUN pnpm build
 FROM golang:1.25-bookworm AS daemon-build
 WORKDIR /src
 COPY daemon/go.mod daemon/go.sum ./daemon/
+# internal/thirdparty/go-udev is a local-path `replace` target (a
+# patched fork, see its netlink/uevent.go doc comment), not a real
+# downloadable module -- `go mod download` needs it present on disk
+# before it can resolve go.mod, so it has to land ahead of the full
+# source copy below, not after.
+COPY daemon/internal/thirdparty/go-udev/ ./daemon/internal/thirdparty/go-udev/
 WORKDIR /src/daemon
 RUN go mod download
 COPY daemon/ ./
