@@ -58,13 +58,17 @@ func TestApplyRankConfidence_RanksJackassCandidatesCorrectly(t *testing.T) {
 		{Title: "The Making of 'Jackass 3D'", Confidence: 8, TMDBID: 936730},
 		{Title: "Jackass 3D", Confidence: 75, TMDBID: 16290},
 	}
-	applyRankConfidence(cands, "Jackass 3")
+	applyRankConfidence(cands, "Jackass 3", "")
 	if cands[0].Title != "Jackass Volume Three" {
 		t.Errorf("top match: want Jackass Volume Three, got %q (full order: %v)",
 			cands[0].Title, titlesOf(cands))
 	}
-	if cands[0].Confidence != 100 {
-		t.Errorf("rank-0 confidence: want 100, got %d", cands[0].Confidence)
+	// Confidence is round(TitleSimilarity*100), not a fixed rank ladder:
+	// query {jackass, three} vs title {jackass, volume, three} shares 2
+	// of 3 union tokens = 67%, not a blind 100% — "Volume" is real
+	// signal the old ladder threw away.
+	if cands[0].Confidence != 67 {
+		t.Errorf("rank-0 confidence: want 67, got %d", cands[0].Confidence)
 	}
 }
 

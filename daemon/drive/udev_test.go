@@ -102,3 +102,26 @@ func TestParseUevent_Empty(t *testing.T) {
 		t.Errorf("empty payload: want ok=false")
 	}
 }
+
+func TestParseUevent_ValueContainingEquals(t *testing.T) {
+	// Regression: an OmniDrive-flashed ASUS BW-16D1HT's uevents include a
+	// property whose VALUE itself contains "=" (observed live on a real
+	// drive). ParseUevent must split each line on the FIRST "=" only —
+	// splitting on every "=" would either corrupt the value or, in the
+	// vendored go-udev library this replaced, abort parsing the entire
+	// event and silently drop the disc-insert notification.
+	payload := "ACTION=change\nSUBSYSTEM=block\nDEVNAME=sr1\n" +
+		"ID_CDROM=1\nDISK_MEDIA_CHANGE=1\n" +
+		"ID_MODEL_ENC=BW-16D1HT\\x20OmniDrive\\x20fw=v3.09\n"
+	ev, ok := drive.ParseUevent(payload)
+	if !ok {
+		t.Fatalf("ParseUevent: want ok=true")
+	}
+	if !ev.IsOpticalMediaChange() {
+		t.Fatalf("want IsOpticalMediaChange true")
+	}
+	want := "BW-16D1HT\\x20OmniDrive\\x20fw=v3.09"
+	if got := ev.Properties["ID_MODEL_ENC"]; got != want {
+		t.Errorf("ID_MODEL_ENC = %q, want %q (only the first '=' should split)", got, want)
+	}
+}

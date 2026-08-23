@@ -115,7 +115,7 @@ func unmarshalOptions(s string) (map[string]any, error) {
 func (s *Store) GetDrive(ctx context.Context, id string) (*Drive, error) {
 	row := s.db.Conn().QueryRowContext(ctx, `
 		SELECT id, model, bus, dev_path, state, last_seen_at, notes, last_error,
-		       read_offset, read_offset_source
+		       read_offset, read_offset_source, tray_open
 		FROM drives WHERE id = ?`, id)
 	return scanDrive(row)
 }
@@ -124,7 +124,7 @@ func (s *Store) GetDrive(ctx context.Context, id string) (*Drive, error) {
 func (s *Store) ListDrives(ctx context.Context) ([]Drive, error) {
 	rows, err := s.db.Conn().QueryContext(ctx, `
 		SELECT id, model, bus, dev_path, state, last_seen_at, notes, last_error,
-		       read_offset, read_offset_source
+		       read_offset, read_offset_source, tray_open
 		FROM drives ORDER BY dev_path`)
 	if err != nil {
 		return nil, err
@@ -277,14 +277,16 @@ func (s *Store) ReleaseDriveFromIdentify(ctx context.Context, id string, to Driv
 func scanDrive(r rowScanner) (*Drive, error) {
 	var d Drive
 	var state, lastSeenStr string
+	var trayOpen int
 	if err := r.Scan(&d.ID, &d.Model, &d.Bus, &d.DevPath, &state, &lastSeenStr,
-		&d.Notes, &d.LastError, &d.ReadOffset, &d.ReadOffsetSource); err != nil {
+		&d.Notes, &d.LastError, &d.ReadOffset, &d.ReadOffsetSource, &trayOpen); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
 	d.State = DriveState(state)
+	d.TrayOpen = trayOpen != 0
 	t, err := parseTime(lastSeenStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse last_seen_at: %w", err)
@@ -292,6 +294,26 @@ func scanDrive(r rowScanner) (*Drive, error) {
 	d.LastSeenAt = t
 	d.LastErrorTip = DriveErrorTip(d.LastError)
 	return &d, nil
+}
+
+// UpdateDriveTrayOpen sets the drive's best-effort tray-status hint --
+// see migration 022_drive_tray_open.sql for what keeps this accurate
+// and what doesn't. Returns ErrNotFound if id has no row.
+func (s *Store) UpdateDriveTrayOpen(ctx context.Context, id string, open bool) error {
+	v := 0
+	if open {
+		v = 1
+	}
+	res, err := s.db.Conn().ExecContext(ctx,
+		`UPDATE drives SET tray_open = ? WHERE id = ?`, v, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // UpdateDriveReadOffset persists a drive's calibration. source is one of
@@ -562,23 +584,6 @@ func (s *Store) UpdateDiscRuntime(ctx context.Context, id string, runtimeSec int
 	return nil
 }
 
-// DiscHasAnyJob reports whether any job (in any state) references the
-// disc. Used by the Skip / delete affordance to refuse removing discs
-// that already have job history — a delete would leave those job rows
-// pointing at a non-existent disc_id.
-func (s *Store) DiscHasAnyJob(ctx context.Context, discID string) (bool, error) {
-	if discID == "" {
-		return false, nil
-	}
-	var n int
-	err := s.db.Conn().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM jobs WHERE disc_id = ?`, discID).Scan(&n)
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
 // DiscHasActiveJob reports whether the disc currently has a job in any
 // non-terminal state (queued / identifying / running / paused). Used by
 // POST /api/discs/{id}/start to refuse a duplicate start when a previous
@@ -602,9 +607,35 @@ func (s *Store) DiscHasActiveJob(ctx context.Context, discID string) (bool, erro
 	return n > 0, nil
 }
 
+// ListActiveJobIDs returns the ids of every job in a non-terminal state
+// (queued / identifying / running / paused), across all discs and
+// drives. Used by the kill-switch (POST /api/jobs/cancel-all) to find
+// every job worth cancelling without the caller needing to know which
+// drives currently have something in flight.
+func (s *Store) ListActiveJobIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.Conn().QueryContext(ctx, `
+		SELECT id FROM jobs
+		WHERE state IN ('queued','identifying','running','paused')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // DeleteDisc removes a disc row by id. Returns ErrNotFound when no row
-// matches. Does NOT cascade-delete jobs — callers must check via
-// DiscHasAnyJob first.
+// matches. jobs.disc_id is ON DELETE CASCADE (foreign keys are enabled
+// on this connection, see db.go), so any job history for the disc is
+// removed with it — callers should check DiscHasActiveJob first to
+// avoid deleting out from under a job that's still in flight.
 func (s *Store) DeleteDisc(ctx context.Context, id string) error {
 	res, err := s.db.Conn().ExecContext(ctx,
 		`DELETE FROM discs WHERE id = ?`, id)
@@ -618,17 +649,22 @@ func (s *Store) DeleteDisc(ctx context.Context, id string) error {
 	return nil
 }
 
-// OrphanDiscOnDrive returns the id of the most-recent disc bound to driveID
-// that has no job history (the truly-orphan awaiting-decision case).
-// Returns "" + nil when nothing matches.
+// ClearableDiscOnDrive returns the id of the most-recent disc bound to
+// driveID that's both safe and sensible to auto-clear on eject (physical
+// removal or the explicit Eject button):
 //
-// Used by the eject paths (API + udev removal branch) to clean up so the
-// dashboard's computed Drive.CurrentDiscID stops resolving to a phantom
-// disc after the user ejects without ripping. Discs with any job history
-// (including failed/cancelled/interrupted retry-intent rows) are left
-// alone — those are already excluded from CurrentDiscByDrive when
-// terminal, and active jobs would have refused the eject upstream.
-func (s *Store) OrphanDiscOnDrive(ctx context.Context, driveID string) (string, error) {
+//   - safe: no job currently in flight (DiscHasActiveJob) -- deleting
+//     out from under a live worker would leave it writing into a spool
+//     dir whose disc row just vanished.
+//   - sensible: its lifecycle state is one that otherwise leaves the
+//     dashboard stuck "asking for a decision" -- awaiting-decision (no
+//     jobs at all), failed, cancelled, or interrupted. A disc whose
+//     latest job succeeded (done / awaiting-encode) is left alone; that's
+//     real completed/in-progress work worth keeping in history, not a
+//     dead-end prompt.
+//
+// Returns "" + nil when nothing matches.
+func (s *Store) ClearableDiscOnDrive(ctx context.Context, driveID string) (string, error) {
 	if driveID == "" {
 		return "", nil
 	}
@@ -636,7 +672,6 @@ func (s *Store) OrphanDiscOnDrive(ctx context.Context, driveID string) (string, 
 	err := s.db.Conn().QueryRowContext(ctx, `
 		SELECT id FROM discs
 		WHERE drive_id = ?
-		  AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.disc_id = discs.id)
 		ORDER BY created_at DESC
 		LIMIT 1`, driveID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -644,6 +679,22 @@ func (s *Store) OrphanDiscOnDrive(ctx context.Context, driveID string) (string, 
 	}
 	if err != nil {
 		return "", err
+	}
+	hasActive, err := s.DiscHasActiveJob(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if hasActive {
+		return "", nil
+	}
+	states, err := s.LifecycleStates(ctx, []string{id})
+	if err != nil {
+		return "", err
+	}
+	switch states[id] {
+	case DiscLifecycleAwaitingDecision, DiscLifecycleFailed, DiscLifecycleCancelled, DiscLifecycleInterrupted:
+	default:
+		return "", nil
 	}
 	return id, nil
 }
@@ -1496,8 +1547,16 @@ func (s *Store) ActiveSpoolReferences(ctx context.Context) (ripIDs []string, tra
 // kind=transcode and state in {failed, interrupted}; returns
 // ErrInvalidJobKindForRetry / ErrInvalidJobStateForRetry otherwise.
 //
+// newProfileID, when non-empty, also swaps the job onto a different
+// profile before re-queuing -- lets a retry redo the encode with a
+// different profile (e.g. the wrong one auto-selected the first time)
+// without re-ripping the disc from scratch. The caller is responsible
+// for validating the profile (same disc_type, enabled) before calling;
+// this method trusts it, matching UpdateDiscType/UpdateDiscMetadata's
+// no-validation-in-the-store convention elsewhere in this file.
+//
 // One transaction so the UI never sees a half-reset job.
-func (s *Store) ResetTranscodeJob(ctx context.Context, id string) error {
+func (s *Store) ResetTranscodeJob(ctx context.Context, id, newProfileID string) error {
 	tx, err := s.db.Conn().BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1537,6 +1596,12 @@ func (s *Store) ResetTranscodeJob(ctx context.Context, id string) error {
 		       error_message = ''
 		 WHERE id = ?`, id); err != nil {
 		return err
+	}
+	if newProfileID != "" {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE jobs SET profile_id = ? WHERE id = ?`, newProfileID, id); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE job_steps

@@ -68,11 +68,16 @@ type Deps struct {
 	MakeMKVRipper    MakeMKVRipper
 	Tools            *tools.Registry
 	LibraryRoot      string
+	LibraryTV        string // used instead of LibraryRoot when the profile's content_type is "tv"
 	WorkRoot         string
 	LibraryProbe     func(string) error
 	URLsForTrigger   func(ctx context.Context, trigger string) []string
 	SubsLang         string        // e.g. "eng"; empty → no --subtitle-lang-list flag
 	MetadataStore    MetadataStore // optional; pipeline persists scan title list when set
+	// MKVSubs pulls text-based subtitle tracks out of .mkv outputs
+	// (movie and TV alike) as sidecar files when the profile's
+	// extract_text_subtitles option is set. nil disables the feature.
+	MKVSubs pipelines.MKVSubtitleTool
 	// ShouldEject gates the rip-end eject step; nil = always eject.
 	ShouldEject func(ctx context.Context) bool
 
@@ -133,7 +138,10 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 		return disc, nil, pipelines.ErrNoCandidates
 	}
 
-	cands, err := h.deps.TMDB.SearchBoth(ctx, q)
+	// No media-type preference: DVD serves real movie AND real
+	// season/box-set profiles, with no way at identify-time (before the
+	// user picks a profile) to tell which one this disc is for.
+	cands, err := h.deps.TMDB.SearchBoth(ctx, q, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("tmdb search: %w", err)
 	}
@@ -225,7 +233,7 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	sink.OnStepDone(state.StepIdentify, nil)
 
 	sink.OnStepStart(state.StepRip)
-	if err := h.deps.LibraryProbe(h.deps.LibraryRoot); err != nil {
+	if err := h.deps.LibraryProbe(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof)); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
@@ -338,6 +346,15 @@ func (h *Handler) runRipMakeMKV(ctx context.Context, drv *state.Drive, disc *sta
 	default:
 		sink.OnLog(state.LogLevelInfo, "MakeMKV: scan complete, picked title %d (%s)",
 			picked[0].ID, pipelines.HumanDuration(time.Duration(picked[0].DurationSec)*time.Second))
+	}
+
+	var neededBytes int64
+	for _, t := range picked {
+		neededBytes += t.SizeBytes
+	}
+	if err := pipelines.CheckSpoolSpace(ripDir, neededBytes); err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, err
 	}
 
 	ripStart := time.Now()
@@ -627,6 +644,7 @@ func (h *Handler) runTranscodeHandBrake(ctx context.Context, result pipelines.Ri
 		if ext == "mp4" {
 			args = append(args, "--optimize")
 		}
+		args = append(args, pipelines.ResolutionAndAudioArgs(prof)...)
 		env := map[string]string{
 			"HB_TITLE_IDX":      strconv.Itoa(titleIdx),
 			"HB_TOTAL_TITLES":   strconv.Itoa(len(encodeTitles)),
@@ -663,6 +681,8 @@ func (h *Handler) runTranscodeHandBrake(ctx context.Context, result pipelines.Ri
 		sink.OnLog(state.LogLevelInfo, "move: → %s", p)
 	}
 	sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
+
+	h.extractSubtitleSidecars(ctx, moved, prof, sink)
 
 	pipelines.RunNotifyStep(ctx, sink)
 	return nil
@@ -711,7 +731,7 @@ func (h *Handler) runTranscodeMakeMKV(ctx context.Context, result pipelines.RipR
 	}
 
 	sink.OnStepStart(state.StepMove)
-	moved, err := pipelines.MoveMovieOutputs(h.deps.LibraryRoot, moveSources, disc, prof)
+	moved, err := pipelines.MoveMovieOutputs(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof), moveSources, disc, prof)
 	if err != nil {
 		sink.OnStepFailed(state.StepMove, err)
 		return fmt.Errorf("move: %w", err)
@@ -725,8 +745,31 @@ func (h *Handler) runTranscodeMakeMKV(ctx context.Context, result pipelines.RipR
 		sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
 	}
 
+	h.extractSubtitleSidecars(ctx, moved, prof, sink)
+
 	pipelines.RunNotifyStep(ctx, sink)
 	return nil
+}
+
+// extractSubtitleSidecars pulls text-based subtitle tracks out of each
+// .mkv in moved as sidecar files, when the profile's
+// extract_text_subtitles option is set and a MKVSubs tool is
+// configured. Non-.mkv outputs (the legacy engine's --optimize mp4
+// path) are skipped -- mkvextract needs a Matroska container. Movie
+// and TV-series profiles share this: both flow through the same
+// move step regardless of disc_type.
+func (h *Handler) extractSubtitleSidecars(ctx context.Context, moved []string, prof *state.Profile, sink pipelines.EventSink) {
+	if h.deps.MKVSubs == nil || !pipelines.ExtractTextSubtitlesFromProfile(prof) {
+		return
+	}
+	for _, p := range moved {
+		if strings.ToLower(filepath.Ext(p)) != ".mkv" {
+			continue
+		}
+		if _, err := pipelines.ExtractTextSubtitleSidecars(ctx, h.deps.MKVSubs, p, sink); err != nil {
+			sink.OnLog(state.LogLevelWarn, "subtitle sidecar: %s: %v", filepath.Base(p), err)
+		}
+	}
 }
 
 // transcodeMakeMKVRips HandBrake-encodes each MakeMKV rip into a
@@ -771,6 +814,7 @@ func (h *Handler) transcodeMakeMKVRips(ctx context.Context, rippedFiles []string
 			"--markers",
 			"--all-subtitles",
 		}
+		args = append(args, pipelines.ResolutionAndAudioArgs(prof)...)
 		sink.OnLog(state.LogLevelInfo, "HandBrake: encoding %s", filepath.Base(rippedFile))
 		encStart := time.Now()
 		if err := hb.Run(ctx, args, nil, spoolDir, pipelines.NewStepSink(sink, state.StepTranscode)); err != nil {
@@ -1082,7 +1126,7 @@ func (h *Handler) moveOutputs(transcoded []string, encodeTitles []tools.HandBrak
 				rel += "." + ext
 			}
 		}
-		dst := filepath.Join(h.deps.LibraryRoot, rel)
+		dst := filepath.Join(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof), rel)
 		if err := pipelines.AtomicMove(src, dst); err != nil {
 			return moved, err
 		}

@@ -5,6 +5,7 @@
     bootCodeCounts,
     integrations as integrationsStore,
     fetchIntegration,
+    cancelAllJobs,
   } from '$lib/store';
   import { apiGet, apiPut, apiPatch, apiPost } from '$lib/api';
   import { pushToast } from '$lib/toasts';
@@ -358,6 +359,31 @@
     offsetError = { ...offsetError, [d.id]: '' };
   }
 
+  // Kill-switch: cancels every active job (queued/identifying/running/
+  // paused) across every drive in one call. For a wedged job that a
+  // per-job Stop button can't reach, or for clearing several stuck
+  // jobs at once instead of hunting each one down individually.
+  let cancellingAll = false;
+
+  async function onCancelAllJobs(): Promise<void> {
+    if (
+      !confirm(
+        'Cancel every active job across all drives? In-progress rips and transcodes will be stopped; partial output may be left behind.',
+      )
+    ) {
+      return;
+    }
+    cancellingAll = true;
+    try {
+      const n = await cancelAllJobs();
+      pushToast('success', n > 0 ? `Cancelled ${n} active job(s).` : 'No active jobs to cancel.');
+    } catch (e) {
+      pushToast('error', (e as Error).message);
+    } finally {
+      cancellingAll = false;
+    }
+  }
+
   async function saveOffset(d: Drive): Promise<void> {
     const draft = offsetDraft[d.id];
     if (draft === null || draft === undefined || Number.isNaN(draft)) {
@@ -395,6 +421,23 @@
 </script>
 
 <div class="space-y-7">
+  <FormSection title="Jobs" sub="Kill-switch for a wedged job queue.">
+    <div class="flex items-center justify-between gap-3 px-4 py-3">
+      <div class="text-[11px] text-text-3">
+        Stops every queued, identifying, running, or paused job across every drive.
+      </div>
+      <button
+        type="button"
+        on:click={onCancelAllJobs}
+        disabled={cancellingAll}
+        class="rounded-md border border-error/40 bg-error/10 px-3 py-1.5 text-[12px] font-semibold text-error disabled:opacity-50"
+        data-testid="cancel-all-jobs"
+      >
+        {cancellingAll ? 'Cancelling…' : 'Cancel all active jobs'}
+      </button>
+    </div>
+  </FormSection>
+
   <FormSection title="Drives" sub="Connected optical drives. DiscEcho watches /dev/sr* by default.">
     {#if $drives.length === 0}
       <div class="px-4 py-3 text-[12px] text-text-3">No drives detected.</div>

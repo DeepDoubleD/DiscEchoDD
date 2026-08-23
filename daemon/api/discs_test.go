@@ -469,23 +469,31 @@ func TestDeleteDisc_RemovesOrphanRow(t *testing.T) {
 	}
 }
 
-func TestDeleteDisc_RefusesWhenJobExists(t *testing.T) {
+// TestDeleteDisc_RefusesWhileJobActive_ThenSucceedsOnceTerminal
+// reproduces the live bug: a disc whose only job failed/cancelled could
+// never be deleted (Skip/dismiss always 409'd), leaving it stuck on the
+// dashboard forever with Start/Pick/Search/Skip all refusing to do
+// anything -- previously a full DB wipe was the only escape hatch. The
+// guard must block deletion only while a job is genuinely in flight,
+// and allow it once that job reaches a terminal state.
+func TestDeleteDisc_RefusesWhileJobActive_ThenSucceedsOnceTerminal(t *testing.T) {
 	reg := pipelines.NewRegistry()
-	reg.Register(&stubDiscHandler{})
+	stub := &stubDiscHandler{gate: make(chan struct{})}
+	reg.Register(stub)
 	h := apitestServerWithOrch(t, reg)
 	drv := seedDrive(t, h)
 	prof := seedProfile(t, h)
 	disc := seedDisc(t, h, drv.ID)
 
-	// Submit a job so the disc has history.
 	if _, err := h.Orchestrator.Submit(context.Background(), disc.ID, prof.ID); err != nil {
 		t.Fatal(err)
 	}
-	// Wait for the orchestrator stub to finish so cleanup doesn't race.
+	// Wait for the job to actually reach `running` before asserting the
+	// active-refusal case, so this isn't racing the worker pickup.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		jobs, _ := h.Store.ListJobs(context.Background(), state.JobFilter{})
-		if len(jobs) == 1 && (jobs[0].State == state.JobStateDone || jobs[0].State == state.JobStateFailed) {
+		jobsList, _ := h.Store.ListJobs(context.Background(), state.JobFilter{})
+		if len(jobsList) == 1 && jobsList[0].State == state.JobStateRunning {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -493,15 +501,44 @@ func TestDeleteDisc_RefusesWhenJobExists(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Delete("/api/discs/{id}", h.DeleteDisc)
+
 	req := httptest.NewRequest(http.MethodDelete, "/api/discs/"+disc.ID, nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
-
 	if w.Code != http.StatusConflict {
-		t.Errorf("want 409 Conflict for disc-with-job; got %d body=%s", w.Code, w.Body.String())
+		t.Errorf("want 409 Conflict while job is active; got %d body=%s", w.Code, w.Body.String())
 	}
 	if _, err := h.Store.GetDisc(context.Background(), disc.ID); err != nil {
-		t.Errorf("disc must remain after failed delete: %v", err)
+		t.Errorf("disc must remain while job is active: %v", err)
+	}
+
+	// Let the job finish, then retry: delete must now succeed, and the
+	// cascade must take its job row with it (ON DELETE CASCADE).
+	close(stub.gate)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		jobsList, _ := h.Store.ListJobs(context.Background(), state.JobFilter{})
+		if len(jobsList) == 1 && jobsList[0].State == state.JobStateDone {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/discs/"+disc.ID, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("want 204 once job is terminal; got %d body=%s", w.Code, w.Body.String())
+	}
+	if _, err := h.Store.GetDisc(context.Background(), disc.ID); err == nil {
+		t.Errorf("disc still present after delete")
+	}
+	jobsList, err := h.Store.ListJobs(context.Background(), state.JobFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobsList) != 0 {
+		t.Errorf("want job row cascade-deleted with its disc, got %d remaining", len(jobsList))
 	}
 }
 
@@ -633,7 +670,7 @@ func (f *fakeTMDBForAPI) SearchMovie(_ context.Context, _ string) ([]state.Candi
 func (f *fakeTMDBForAPI) SearchTV(_ context.Context, _ string) ([]state.Candidate, error) {
 	return nil, nil
 }
-func (f *fakeTMDBForAPI) SearchBoth(_ context.Context, _ string) ([]state.Candidate, error) {
+func (f *fakeTMDBForAPI) SearchBoth(_ context.Context, _ string, _ string) ([]state.Candidate, error) {
 	return f.cands, nil
 }
 func (f *fakeTMDBForAPI) MovieRuntime(_ context.Context, _ int) (int, error) { return 0, nil }

@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(PublishTrimmed)' == 'true'">
+    <DefineConstants>TRIMMED</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\*Disc?Keys*.zip" Visible="True" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WmiLight" Version="7.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\IrdLibraryClient\IrdLibraryClient.csproj" />
+  </ItemGroup>
+
+</Project>

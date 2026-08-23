@@ -33,6 +33,16 @@ func (f *fakeProber) Probe(_ context.Context, _ string) (*identify.DVDInfo, erro
 	return f.info, f.err
 }
 
+// fakeBDProber returns a fixed BDInfo (disc-library metadata name).
+type fakeBDProber struct {
+	info *identify.BDInfo
+	err  error
+}
+
+func (f *fakeBDProber) Probe(_ context.Context, _ string) (*identify.BDInfo, error) {
+	return f.info, f.err
+}
+
 // fakeTMDB returns canned candidates.
 type fakeTMDB struct {
 	cands []state.Candidate
@@ -45,7 +55,7 @@ func (f *fakeTMDB) SearchMovie(_ context.Context, _ string) ([]state.Candidate, 
 func (f *fakeTMDB) SearchTV(_ context.Context, _ string) ([]state.Candidate, error) {
 	return f.cands, f.err
 }
-func (f *fakeTMDB) SearchBoth(_ context.Context, _ string) ([]state.Candidate, error) {
+func (f *fakeTMDB) SearchBoth(_ context.Context, _ string, _ string) ([]state.Candidate, error) {
 	return f.cands, f.err
 }
 func (f *fakeTMDB) MovieRuntime(_ context.Context, _ int) (int, error) { return 0, nil }
@@ -179,6 +189,27 @@ func TestBDMVHandler_Identify_HappyPath(t *testing.T) {
 	}
 	if disc.Type != state.DiscTypeBDMV {
 		t.Errorf("disc.Type = %s, want BDMV", disc.Type)
+	}
+}
+
+// TestBDMVHandler_Identify_PrefersDiscLibraryName reproduces the live
+// bug: a UDF-only Blu-ray whose ISO9660/UDF volume label is the generic
+// placeholder "VOLUME_ID" must not search TMDB with that label when
+// bd_info's disc-library metadata gives the real title.
+func TestBDMVHandler_Identify_PrefersDiscLibraryName(t *testing.T) {
+	h := bdmv.New(bdmv.Deps{
+		Prober:   &fakeProber{info: &identify.DVDInfo{VolumeLabel: "VOLUME_ID"}},
+		BDProber: &fakeBDProber{info: &identify.BDInfo{DiscName: "V For Vendetta"}},
+		TMDB: &fakeTMDB{cands: []state.Candidate{
+			{Source: "TMDB", Title: "V for Vendetta", Year: 2005, Confidence: 100, TMDBID: 752, MediaType: "movie"},
+		}},
+	})
+	disc, _, err := h.Identify(context.Background(), &state.Drive{ID: "d1", DevPath: "/dev/sr0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disc.Title != "V for Vendetta" {
+		t.Errorf("disc.Title = %q, want %q (disc-library name should win over the generic volume label)", disc.Title, "V for Vendetta")
 	}
 }
 
@@ -352,6 +383,203 @@ func TestBDMVHandler_Run_HappyPath(t *testing.T) {
 		if starts[i] != wantOrder[i] {
 			t.Errorf("step %d = %s, want %s", i, starts[i], wantOrder[i])
 		}
+	}
+}
+
+func TestBDMVHandler_Run_ResolutionAndAudioArgsAppended(t *testing.T) {
+	libRoot := t.TempDir()
+	workRoot := t.TempDir()
+
+	reg, _, _, hb := newRegistry()
+	h := bdmv.New(bdmv.Deps{
+		MakeMKVScanner: &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+			{ID: 1, DurationSec: 7000, SourceFile: "00800.mpls"},
+		}},
+		MakeMKVRipper: &fakeMakeMKV{stubName: "title_t01.mkv"},
+		Tools:         reg,
+		LibraryRoot:   libRoot,
+		WorkRoot:      workRoot,
+	})
+	prof := &state.Profile{
+		ID:                 "p-bd",
+		DiscType:           state.DiscTypeBDMV,
+		OutputPathTemplate: "{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv",
+		Options: map[string]any{
+			"min_title_seconds": float64(3600),
+			"max_height":        float64(1080),
+			"stereo_audio":      true,
+		},
+	}
+	disc := &state.Disc{ID: "disc-1", Type: state.DiscTypeBDMV, Title: "Movie", Year: 2020}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(hb.calls) != 1 {
+		t.Fatalf("want 1 HandBrake call, got %d", len(hb.calls))
+	}
+	args := hb.calls[0]
+	for _, want := range []string{
+		"--maxHeight", "1080", "--maxWidth", "1920",
+		"--aencoder", "av_aac", "--mixdown", "stereo", "--ab", "160",
+	} {
+		found := false
+		for _, a := range args {
+			if a == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("HandBrake args missing %q: %v", want, args)
+		}
+	}
+}
+
+// TestBDMVHandler_Run_QualityRFAndEncoderPresetApplied reproduces a
+// live gap: the profile editor's quality_preset tiers (e.g.
+// "archival") resolve to options.quality_rf + options.encoder_preset,
+// but BDMV's transcode step used to hardcode "--quality 19" and never
+// pass --encoder-preset at all, so no tier selection had any effect on
+// a Blu-ray encode. This asserts both options now flow through to the
+// actual HandBrake call.
+func TestBDMVHandler_Run_QualityRFAndEncoderPresetApplied(t *testing.T) {
+	libRoot := t.TempDir()
+	workRoot := t.TempDir()
+
+	reg, _, _, hb := newRegistry()
+	h := bdmv.New(bdmv.Deps{
+		MakeMKVScanner: &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+			{ID: 1, DurationSec: 7000, SourceFile: "00800.mpls"},
+		}},
+		MakeMKVRipper: &fakeMakeMKV{stubName: "title_t01.mkv"},
+		Tools:         reg,
+		LibraryRoot:   libRoot,
+		WorkRoot:      workRoot,
+	})
+	prof := &state.Profile{
+		ID:                 "p-bd-archival",
+		DiscType:           state.DiscTypeBDMV,
+		OutputPathTemplate: "{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv",
+		Options: map[string]any{
+			"min_title_seconds": float64(3600),
+			"quality_rf":        float64(18),
+			"encoder_preset":    "slower",
+		},
+	}
+	disc := &state.Disc{ID: "disc-1", Type: state.DiscTypeBDMV, Title: "Movie", Year: 2020}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(hb.calls) != 1 {
+		t.Fatalf("want 1 HandBrake call, got %d", len(hb.calls))
+	}
+	args := hb.calls[0]
+	for _, want := range []string{"--quality", "18", "--encoder-preset", "slower"} {
+		found := false
+		for _, a := range args {
+			if a == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("HandBrake args missing %q: %v", want, args)
+		}
+	}
+}
+
+// fakeMKVSubsForBDMV is a scripted pipelines.MKVSubtitleTool.
+type fakeMKVSubsForBDMV struct {
+	tracksCalls []string // mkvPath per Tracks() call
+	tracks      []tools.MKVTrack
+}
+
+func (f *fakeMKVSubsForBDMV) Tracks(_ context.Context, path string) ([]tools.MKVTrack, error) {
+	f.tracksCalls = append(f.tracksCalls, path)
+	return f.tracks, nil
+}
+
+func (f *fakeMKVSubsForBDMV) ExtractTrack(_ context.Context, _ string, _ int, _ string) error {
+	return nil
+}
+
+func TestBDMVHandler_Run_ExtractsSubtitleSidecarsWhenEnabled(t *testing.T) {
+	libRoot := t.TempDir()
+	workRoot := t.TempDir()
+
+	reg, _, _, _ := newRegistry()
+	mkvSubs := &fakeMKVSubsForBDMV{tracks: []tools.MKVTrack{
+		{ID: 0, Type: "subtitles", CodecID: "S_TEXT/UTF8", Language: "eng"},
+	}}
+	h := bdmv.New(bdmv.Deps{
+		MakeMKVScanner: &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+			{ID: 1, DurationSec: 7000, SourceFile: "00800.mpls"},
+		}},
+		MakeMKVRipper: &fakeMakeMKV{stubName: "title_t01.mkv"},
+		Tools:         reg,
+		LibraryRoot:   libRoot,
+		WorkRoot:      workRoot,
+		MKVSubs:       mkvSubs,
+	})
+	prof := &state.Profile{
+		ID:                 "p-bd",
+		DiscType:           state.DiscTypeBDMV,
+		OutputPathTemplate: "{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv",
+		Options: map[string]any{
+			"min_title_seconds":      float64(3600),
+			"extract_text_subtitles": true,
+		},
+	}
+	disc := &state.Disc{ID: "disc-1", Type: state.DiscTypeBDMV, Title: "Anime Movie", Year: 2021}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(libRoot, "Anime Movie (2021)", "Anime Movie (2021).mkv")
+	if len(mkvSubs.tracksCalls) != 1 || mkvSubs.tracksCalls[0] != want {
+		t.Errorf("Tracks() calls = %v, want exactly [%s]", mkvSubs.tracksCalls, want)
+	}
+}
+
+func TestBDMVHandler_Run_SkipsSubtitleSidecarsWhenDisabled(t *testing.T) {
+	libRoot := t.TempDir()
+	workRoot := t.TempDir()
+
+	reg, _, _, _ := newRegistry()
+	mkvSubs := &fakeMKVSubsForBDMV{}
+	h := bdmv.New(bdmv.Deps{
+		MakeMKVScanner: &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+			{ID: 1, DurationSec: 7000, SourceFile: "00800.mpls"},
+		}},
+		MakeMKVRipper: &fakeMakeMKV{stubName: "title_t01.mkv"},
+		Tools:         reg,
+		LibraryRoot:   libRoot,
+		WorkRoot:      workRoot,
+		MKVSubs:       mkvSubs, // configured, but profile doesn't opt in
+	})
+	prof := &state.Profile{
+		ID:                 "p-bd",
+		DiscType:           state.DiscTypeBDMV,
+		OutputPathTemplate: "{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv",
+		Options:            map[string]any{"min_title_seconds": float64(3600)},
+	}
+	disc := &state.Disc{ID: "disc-1", Type: state.DiscTypeBDMV, Title: "Movie", Year: 2020}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(mkvSubs.tracksCalls) != 0 {
+		t.Errorf("want no sidecar extraction when extract_text_subtitles is unset, got calls: %v", mkvSubs.tracksCalls)
 	}
 }
 

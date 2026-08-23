@@ -40,9 +40,35 @@ func (p *isoinfoProber) Probe(ctx context.Context, devPath string) (*DVDInfo, er
 	cmd := exec.CommandContext(ctx, p.bin, "-d", "-i", devPath)
 	out, err := cmd.Output()
 	if err != nil {
+		// isoinfo only reads the ISO9660 bridge volume descriptor. Many
+		// Blu-rays (and some DVDs) are UDF-only with no ISO9660 bridge,
+		// so isoinfo exits nonzero even though the disc is perfectly
+		// readable. Fall back to udev's blkid-derived ID_FS_LABEL, the
+		// same property classify.go already trusts for BD media detection,
+		// rather than failing the whole identify pipeline over a label.
+		if label, ok := udevFSLabel(ctx, devPath); ok {
+			return &DVDInfo{VolumeLabel: label}, nil
+		}
 		return nil, fmt.Errorf("isoinfo: %w", err)
 	}
 	return ParseIsoInfoOutput(string(out))
+}
+
+// udevFSLabel reads ID_FS_LABEL for devPath via udevadm. ok is false only
+// when udevadm itself fails or reports no filesystem at all (device not
+// probed) — a present-but-empty label is a valid, ok=true result.
+func udevFSLabel(ctx context.Context, devPath string) (label string, ok bool) {
+	cmd := exec.CommandContext(ctx, "udevadm", "info", "--query=property", "--name="+devPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, found := strings.CutPrefix(line, "ID_FS_LABEL="); found {
+			return strings.TrimSpace(v), true
+		}
+	}
+	return "", false
 }
 
 // ParseIsoInfoOutput extracts DVDInfo fields from `isoinfo -d` stdout.

@@ -224,36 +224,58 @@ func redumpStatus(s *settings.Settings) string {
 // display order, human label, and the on-disk Redump subdirectory name. The
 // subdir is both globbed by redumpDatInventory and shown in the UI so the
 // folder a user must create can never diverge from the folder we look in.
+//
+// filePrefix additionally matches a dat file dropped flat in the Redump
+// root (no subfolder at all) — the layout Redump's own bulk-download
+// tooling produces by default, e.g. "Sony - PlayStation - Datfile
+// (10914) (....dat". Only set for the systems this has been confirmed
+// against live; a blank filePrefix just falls back to subdir-only
+// detection, so an unset entry is never worse than before.
 var gameDiscSystems = []struct {
-	sys    state.DiscType
-	label  string
-	subdir string
+	sys        state.DiscType
+	label      string
+	subdir     string
+	filePrefix string
 }{
-	{state.DiscTypePSX, "PlayStation", "psx"},
-	{state.DiscTypePS2, "PlayStation 2", "ps2"},
-	{state.DiscTypeSAT, "Saturn", "saturn"},
-	{state.DiscTypeDC, "Dreamcast", "dc"},
-	{state.DiscTypeXBOX, "Xbox", "xbox"},
-	{state.DiscTypeSegaCD, "Sega CD", "sega-cd"},
-	{state.DiscType3DO, "3DO", "3do"},
-	{state.DiscTypePCFX, "PC-FX", "pc-fx"},
-	{state.DiscTypeJaguarCD, "Atari Jaguar CD", "jaguar-cd"},
-	{state.DiscTypeCDi, "Philips CD-i", "cdi"},
-	{state.DiscTypePCECD, "PC Engine CD", "pc-engine-cd"},
-	{state.DiscTypeNeoCD, "Neo Geo CD", "neo-geo-cd"},
-	{state.DiscTypeCD32, "Amiga CD32", "cd32"},
-	{state.DiscTypeFMTowns, "FM Towns", "fm-towns"},
-	{state.DiscTypePippin, "Bandai Pippin", "pippin"},
+	{state.DiscTypePSX, "PlayStation", "psx", "Sony - PlayStation - "},
+	{state.DiscTypePS2, "PlayStation 2", "ps2", "Sony - PlayStation 2 - "},
+	{state.DiscTypeSAT, "Saturn", "saturn", "Sega - Saturn - "},
+	{state.DiscTypeDC, "Dreamcast", "dc", "Sega - Dreamcast - "},
+	{state.DiscTypeXBOX, "Xbox", "xbox", "Microsoft - Xbox - "},
+	{state.DiscTypeXBOX360, "Xbox 360", "xbox360", "Microsoft - Xbox 360 - "},
+	{state.DiscTypeWII, "Wii", "wii", "Nintendo - Wii - "},
+	{state.DiscTypePS3, "PlayStation 3", "ps3", "Sony - PlayStation 3 - "},
+	{state.DiscTypeSegaCD, "Sega CD", "sega-cd", "Sega - Mega CD & Sega CD - "},
+	{state.DiscType3DO, "3DO", "3do", ""},
+	{state.DiscTypePCFX, "PC-FX", "pc-fx", ""},
+	{state.DiscTypeJaguarCD, "Atari Jaguar CD", "jaguar-cd", ""},
+	{state.DiscTypeCDi, "Philips CD-i", "cdi", ""},
+	{state.DiscTypePCECD, "PC Engine CD", "pc-engine-cd", ""},
+	{state.DiscTypeNeoCD, "Neo Geo CD", "neo-geo-cd", ""},
+	{state.DiscTypeCD32, "Amiga CD32", "cd32", ""},
+	{state.DiscTypeFMTowns, "FM Towns", "fm-towns", ""},
+	{state.DiscTypePippin, "Bandai Pippin", "pippin", ""},
 }
 
-// redumpDatInventory returns the per-system count of *.dat files under
-// the Redump root directory. Used by the Settings → System tile to
-// show which Redump dats are loaded vs missing.
+// redumpDatInventory returns the per-system count of *.dat files
+// matching each system — both under its Redump subdirectory and, when
+// filePrefix is set, dropped flat in the root directory itself. Used
+// by the Settings → System tile to show which Redump dats are loaded
+// vs missing.
 func redumpDatInventory(rootDir string) map[state.DiscType]int {
 	out := make(map[state.DiscType]int, len(gameDiscSystems))
+	flat, _ := filepath.Glob(filepath.Join(rootDir, "*.dat"))
 	for _, gs := range gameDiscSystems {
 		matches, _ := filepath.Glob(filepath.Join(rootDir, gs.subdir, "*.dat"))
-		out[gs.sys] = len(matches)
+		n := len(matches)
+		if gs.filePrefix != "" {
+			for _, f := range flat {
+				if strings.HasPrefix(filepath.Base(f), gs.filePrefix) {
+					n++
+				}
+			}
+		}
+		out[gs.sys] = n
 	}
 	return out
 }
@@ -282,6 +304,9 @@ func (h *Handlers) buildGameDiscsInfo() *GameDiscsInfo {
 		// (Xbox uses publisher codes, not XBE IDs; the CD consoles are MD5-only).
 		switch {
 		case gs.sys == state.DiscTypeXBOX ||
+			gs.sys == state.DiscTypeXBOX360 ||
+			gs.sys == state.DiscTypeWII ||
+			gs.sys == state.DiscTypePS3 ||
 			gs.sys == state.DiscTypeSegaCD ||
 			gs.sys == state.DiscType3DO ||
 			gs.sys == state.DiscTypePCFX ||

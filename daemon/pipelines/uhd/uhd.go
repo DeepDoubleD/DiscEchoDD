@@ -52,11 +52,17 @@ type MakeMKVRipper interface {
 // Deps bundles the handler's dependencies for mock injection.
 type Deps struct {
 	Prober         identify.DVDProber
+	BDProber       identify.BDProber // optional: disc-library metadata name, preferred over the volume label when present
 	TMDB           identify.TMDBClient
+	// MKVSubs pulls text-based subtitle tracks out of the moved output
+	// as sidecar files when the profile's extract_text_subtitles option
+	// is set. nil disables the feature regardless of profile options.
+	MKVSubs pipelines.MKVSubtitleTool
 	MakeMKVScanner MakeMKVScanner
 	MakeMKVRipper  MakeMKVRipper
 	Tools          *tools.Registry // looked up: apprise, eject
 	LibraryRoot    string
+	LibraryTV      string // used instead of LibraryRoot when the profile's content_type is "tv"
 	WorkRoot       string
 	LibraryProbe   func(string) error
 	URLsForTrigger func(ctx context.Context, trigger string) []string
@@ -108,11 +114,14 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 	}
 	disc := &state.Disc{Type: state.DiscTypeUHD, DriveID: drv.ID}
 
-	q := identify.NormaliseDVDLabel(info.VolumeLabel)
+	label := identify.BDSearchLabel(ctx, h.deps.BDProber, drv.DevPath, info.VolumeLabel)
+	q := identify.NormaliseDVDLabel(label)
 	if q == "" {
 		return disc, nil, pipelines.ErrNoCandidates
 	}
-	cands, err := h.deps.TMDB.SearchBoth(ctx, q)
+	// "movie": same reasoning as BDMV -- a single UHD disc is
+	// essentially never a full TV season release.
+	cands, err := h.deps.TMDB.SearchBoth(ctx, q, "movie")
 	if err != nil {
 		return nil, nil, fmt.Errorf("tmdb search: %w", err)
 	}
@@ -201,7 +210,7 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	sink.OnStepDone(state.StepIdentify, nil)
 
 	sink.OnStepStart(state.StepRip)
-	if err := h.deps.LibraryProbe(h.deps.LibraryRoot); err != nil {
+	if err := h.deps.LibraryProbe(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof)); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
@@ -232,6 +241,14 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	}
 	ripDir := filepath.Join(spoolDir, "rip")
 	if err := os.MkdirAll(ripDir, 0o755); err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, err
+	}
+	var neededBytes int64
+	for _, t := range picked {
+		neededBytes += t.SizeBytes
+	}
+	if err := pipelines.CheckSpoolSpace(ripDir, neededBytes); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, err
 	}
@@ -309,6 +326,14 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 		sink.OnStepDone(state.StepMove, map[string]any{"path": moved[0]})
 	} else {
 		sink.OnStepDone(state.StepMove, map[string]any{"paths": moved})
+	}
+
+	if h.deps.MKVSubs != nil && pipelines.ExtractTextSubtitlesFromProfile(prof) {
+		for _, p := range moved {
+			if _, err := pipelines.ExtractTextSubtitleSidecars(ctx, h.deps.MKVSubs, p, sink); err != nil {
+				sink.OnLog(state.LogLevelWarn, "subtitle sidecar: %s: %v", filepath.Base(p), err)
+			}
+		}
 	}
 
 	pipelines.RunNotifyStep(ctx, sink)
@@ -402,9 +427,10 @@ func (h *Handler) moveMultiTitle(srcs []string, disc *state.Disc, prof *state.Pr
 			rendered[i] = strings.TrimSuffix(r, ext) + fmt.Sprintf("-title%02d", i+1) + ext
 		}
 	}
+	root := pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof)
 	moved := make([]string, 0, len(srcs))
 	for i, src := range srcs {
-		dst := filepath.Join(h.deps.LibraryRoot, rendered[i])
+		dst := filepath.Join(root, rendered[i])
 		if err := pipelines.AtomicMove(src, dst); err != nil {
 			return moved, err
 		}

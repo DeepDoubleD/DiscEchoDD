@@ -11,8 +11,8 @@ import (
 )
 
 // TestSuperviseWatch_RestartsAfterExit is the regression for the
-// permanently-deaf-daemon bug: the go-udev netlink monitor stops on
-// its first read error (e.g. ENOBUFS when a uevent burst overflows the
+// permanently-deaf-daemon bug: the netlink read goroutine stops on its
+// first read error (e.g. ENOBUFS when a uevent burst overflows the
 // socket buffer), so without supervision one transient failure left
 // the daemon unable to see any further disc insertions. superviseWatch
 // must reconnect after every non-shutdown exit.

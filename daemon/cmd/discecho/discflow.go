@@ -39,6 +39,11 @@ type discFlow struct {
 	pipelines   *pipelines.Registry
 	identifyDur time.Duration
 	igdb        identify.IGDBClient
+	// eject, when non-nil, physically ejects a disc that landed in the
+	// wrong-role drive (see pipelines.WrongDriveMessage) before
+	// handler.Identify would otherwise run against it. Nil is a no-op
+	// (tests / configurations that don't wire drive-role routing).
+	eject func(ctx context.Context, devPath string) error
 }
 
 // HandleManual fires the same disc-flow as a real udev uevent for the
@@ -106,11 +111,12 @@ func (df *discFlow) handle(ev drive.Uevent) {
 		if err := df.store.UpdateDriveState(ctx, drv.ID, state.DriveStateIdle); err != nil {
 			slog.Warn("disc-flow: settle drive idle on eject", "err", err, "drive_id", drv.ID)
 		}
-		// Mirror the API eject path: drop the orphan awaiting-decision disc
-		// so the dashboard's computed Drive.CurrentDiscID stops resolving
-		// to a phantom card after a physical eject. Discs with job history
-		// (failed/cancelled retry-intent) are kept.
-		df.dropOrphanDiscOnDrive(ctx, drv.ID)
+		// Mirror the API eject path: drop the disc bound to this drive if
+		// it's safe (no job in flight) and sensible (jobless, failed,
+		// cancelled, or interrupted -- not a completed rip) to clear, so
+		// the dashboard's computed Drive.CurrentDiscID stops resolving to
+		// a phantom "asking for a decision" card after a physical eject.
+		df.dropClearableDiscOnDrive(ctx, drv.ID)
 		df.bc.Publish(state.Event{
 			Name:    "drive.changed",
 			Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
@@ -118,6 +124,13 @@ func (df *discFlow) handle(ev drive.Uevent) {
 		return
 	}
 	slog.Info("disc inserted", "dev", devPath)
+	// Media present can only be reported with the tray closed -- true
+	// regardless of whether it got there via our own close-tray action,
+	// the physical drive button, or the tray auto-closing on some
+	// drives when media is detected.
+	if err := df.store.UpdateDriveTrayOpen(ctx, drv.ID, false); err != nil {
+		slog.Warn("disc-flow: update tray_open on insert", "err", err, "drive_id", drv.ID)
+	}
 	if recent, err := df.store.HasRecentJobOnDrive(ctx, drv.ID, discFlowCooldown); err != nil {
 		slog.Warn("disc-flow: HasRecentJobOnDrive", "err", err)
 	} else if recent {
@@ -145,11 +158,72 @@ func (df *discFlow) handle(ev drive.Uevent) {
 
 	dt, err := df.classifier.Classify(ctx, devPath)
 	if err != nil {
+		// A totally unreadable disc on a BD/console (OmniDrive-flashed)
+		// drive isn't necessarily broken media -- confirmed live against
+		// a real Wii disc: a stock read gets nothing at all (not even a
+		// TOC; cd-info fails outright), unlike every other format this
+		// classifier handles, which get at least a partial stock read.
+		// Without this fallback the disc silently vanishes into a drive
+		// error with no card at all, leaving no way to manually flag it
+		// as Wii/GameCube -- the same OVERRIDE_TYPES dropdown every other
+		// hard-to-classify format (CD32, FM Towns, Pippin) already uses.
+		// A non-BDConsole drive (e.g. the Plextor) keeps the old
+		// behaviour: a totally unreadable disc there is a real error,
+		// not an OmniDrive-only-format candidate.
+		if pipelines.DriveRoleForModel(drv.Model) == pipelines.DriveRoleBDConsole {
+			slog.Info("classify failed on BD/console drive; creating DATA card for manual override",
+				"dev", devPath, "err", err)
+			disc := &state.Disc{Type: state.DiscTypeData, DriveID: drv.ID}
+			if perr := df.persistDisc(ctx, disc, nil); perr != nil {
+				slog.Warn("persist unreadable-disc fallback", "err", perr)
+				df.recordDriveError(drv.ID, err.Error())
+				df.releaseDriveState(drv.ID, state.DriveStateError)
+				return
+			}
+			df.bc.Publish(state.Event{Name: "disc.detected", Payload: map[string]any{"disc": disc}})
+			df.bc.Publish(state.Event{
+				Name:    "disc.identified",
+				Payload: map[string]any{"disc": disc, "candidates": []state.Candidate{}},
+			})
+			if df.releaseDriveState(drv.ID, state.DriveStateIdle) {
+				df.bc.Publish(state.Event{
+					Name:    "drive.changed",
+					Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
+				})
+			}
+			return
+		}
 		slog.Warn("classify failed", "dev", devPath, "err", err)
 		df.recordDriveError(drv.ID, err.Error())
 		df.releaseDriveState(drv.ID, state.DriveStateError)
 		return
 	}
+	// Drive-role routing: some disc types have an established best
+	// drive in this station (see pipelines.WrongDriveMessage) -- a
+	// PS1/audio CD wants the Redump-certified Plextor, a BD/console
+	// disc needs the LibreDrive-flashed ASUS (the Plextor has no
+	// Blu-ray hardware at all for BDMV/UHD). Catch the mismatch here,
+	// before handler.Identify spins up a scan on hardware that either
+	// can't read the disc at all or won't produce a certifiable dump,
+	// and eject with an explanation instead.
+	if msg, mismatch := pipelines.WrongDriveMessage(dt, drv.Model); mismatch {
+		slog.Info("disc-flow: wrong drive for disc type, ejecting",
+			"dev", devPath, "disc_type", dt, "drive_model", drv.Model)
+		if df.eject != nil {
+			if ejErr := df.eject(ctx, devPath); ejErr != nil {
+				slog.Warn("disc-flow: eject wrong-drive disc failed", "err", ejErr)
+			}
+		}
+		df.recordDriveError(drv.ID, msg)
+		if df.releaseDriveState(drv.ID, state.DriveStateIdle) {
+			df.bc.Publish(state.Event{
+				Name:    "drive.changed",
+				Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
+			})
+		}
+		return
+	}
+
 	handler, ok := df.pipelines.Get(dt)
 	if !ok {
 		slog.Info("no handler for disc type; skipping", "type", dt)
@@ -290,22 +364,23 @@ func (df *discFlow) reuseDiscRow(ctx context.Context, existing, disc *state.Disc
 	return nil
 }
 
-// dropOrphanDiscOnDrive deletes the awaiting-decision (no jobs) disc
-// bound to driveID and broadcasts disc.deleted so the webui drops it
-// from its $discs map. No-op when nothing matches. Idempotent — safe to
-// race against the API EjectDrive path (which calls the same cleanup
-// helper in daemon/api on the user's button click).
-func (df *discFlow) dropOrphanDiscOnDrive(ctx context.Context, driveID string) {
-	discID, err := df.store.OrphanDiscOnDrive(ctx, driveID)
+// dropClearableDiscOnDrive deletes the disc bound to driveID if
+// ClearableDiscOnDrive says it's safe and sensible to (see its doc
+// comment), and broadcasts disc.deleted so the webui drops it from its
+// $discs map. No-op when nothing matches. Idempotent — safe to race
+// against the API EjectDrive path (which calls the same cleanup helper
+// in daemon/api on the user's button click).
+func (df *discFlow) dropClearableDiscOnDrive(ctx context.Context, driveID string) {
+	discID, err := df.store.ClearableDiscOnDrive(ctx, driveID)
 	if err != nil {
-		slog.Warn("disc-flow: lookup orphan disc on eject", "err", err, "drive_id", driveID)
+		slog.Warn("disc-flow: lookup clearable disc on eject", "err", err, "drive_id", driveID)
 		return
 	}
 	if discID == "" {
 		return
 	}
 	if err := df.store.DeleteDisc(ctx, discID); err != nil && !errors.Is(err, state.ErrNotFound) {
-		slog.Warn("disc-flow: delete orphan disc on eject", "err", err, "disc_id", discID)
+		slog.Warn("disc-flow: delete clearable disc on eject", "err", err, "disc_id", discID)
 		return
 	}
 	df.bc.Publish(state.Event{

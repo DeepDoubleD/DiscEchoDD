@@ -32,6 +32,11 @@ func TestDriveErrorTip(t *testing.T) {
 			want:   []string{"Integrations", "MakeMKV"},
 		},
 		{
+			name:   "wrong drive",
+			errMsg: "wrong drive: Audio CD / PS1 disc in a Blu-ray / console drive -- this disc reads best on the Audio CD / PS1 drive.",
+			want:   []string{"ejected automatically", "re-insert"},
+		},
+		{
 			name:   "unknown error has no tip",
 			errMsg: "some unrelated failure",
 			want:   nil,

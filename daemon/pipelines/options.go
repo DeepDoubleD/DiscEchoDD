@@ -1,6 +1,10 @@
 package pipelines
 
-import "github.com/jumpingmushroom/DiscEcho/daemon/state"
+import (
+	"strconv"
+
+	"github.com/jumpingmushroom/DiscEcho/daemon/state"
+)
 
 // IntOption reads an integer-valued key from a profile's Options blob,
 // returning def when the key is absent or not a whole number. JSON
@@ -72,4 +76,72 @@ func ExtrasMaxRatioFromProfile(prof *state.Profile) float64 {
 		pct = 90
 	}
 	return float64(pct) / 100.0
+}
+
+// IsTVProfile reports whether a profile's content_type option is "tv"
+// (default "movie"). Explicit rather than inferred from other options
+// (e.g. DVD-Video's "season") because BDMV/UHD profiles have no such
+// signal today and this needs to work the same across all three
+// pipelines.
+func IsTVProfile(prof *state.Profile) bool {
+	return StringOption(prof, "content_type", "movie") == "tv"
+}
+
+// LibraryRootFor picks between a pipeline's movies and TV library
+// roots based on IsTVProfile. Falls back to moviesRoot when tvRoot is
+// empty, so a deployment that hasn't configured a separate TV path
+// still works.
+func LibraryRootFor(moviesRoot, tvRoot string, prof *state.Profile) string {
+	if IsTVProfile(prof) && tvRoot != "" {
+		return tvRoot
+	}
+	return moviesRoot
+}
+
+// MaxHeightFromProfile returns the profile's resolution cap in pixels
+// (e.g. 1080), or 0 when unset/not positive -- 0 means "no cap, keep
+// the disc's native resolution".
+func MaxHeightFromProfile(prof *state.Profile) int {
+	h := IntOption(prof, "max_height", 0)
+	if h <= 0 {
+		return 0
+	}
+	return h
+}
+
+// StereoAudioFromProfile reports whether every audio track should be
+// encoded down to a 2.0 stereo mix, rather than passed through at its
+// native channel layout.
+func StereoAudioFromProfile(prof *state.Profile) bool {
+	return BoolOption(prof, "stereo_audio", false)
+}
+
+// stereoAudioEncoder is the HandBrake audio encoder paired with
+// --mixdown stereo. Stereo mixdown requires an actual encode pass (a
+// codec-copy track can't be remixed), so this can't be "copy" -- av_aac
+// is ffmpeg's built-in AAC encoder, always present in an ffmpeg-linked
+// HandBrake build, unlike platform encoders like ca_aac (macOS-only).
+const stereoAudioEncoder = "av_aac"
+
+// stereoAudioBitrateKbps is a solid, unremarkable default for a 2.0 AAC
+// mix -- not exposed as a profile option to keep the option surface
+// small; revisit if someone actually needs a different bitrate.
+const stereoAudioBitrateKbps = 160
+
+// ResolutionAndAudioArgs returns the extra HandBrake CLI args a
+// profile's max_height / stereo_audio options add on top of a
+// pipeline's existing --all-audio (kept as-is: multiple audio tracks,
+// e.g. Japanese + English, must survive so a player can switch between
+// them -- this only changes how each surviving track is encoded, never
+// how many are kept).
+func ResolutionAndAudioArgs(prof *state.Profile) []string {
+	var args []string
+	if h := MaxHeightFromProfile(prof); h > 0 {
+		args = append(args, "--maxHeight", strconv.Itoa(h), "--maxWidth", strconv.Itoa(h*16/9))
+	}
+	if StereoAudioFromProfile(prof) {
+		args = append(args, "--aencoder", stereoAudioEncoder, "--mixdown", "stereo",
+			"--ab", strconv.Itoa(stereoAudioBitrateKbps))
+	}
+	return args
 }

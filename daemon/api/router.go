@@ -52,9 +52,13 @@ func NewRouter(h *Handlers, static http.Handler) http.Handler {
 			authed.Get("/drives", h.ListDrives)
 			authed.Get("/drives/{id}", h.GetDrive)
 			authed.Post("/drives/{id}/eject", h.EjectDrive)
+			authed.Post("/drives/{id}/close-tray", h.CloseTrayDrive)
 			authed.Patch("/drives/{id}/offset", h.PatchDriveOffset)
 
 			authed.Get("/jobs", h.ListJobs)
+			// /jobs/cancel-all must come before /jobs/{id} so chi's route
+			// matcher prefers the literal segment over the param.
+			authed.Post("/jobs/cancel-all", h.CancelAllJobs)
 			authed.Get("/jobs/{id}", h.GetJob)
 			authed.Delete("/jobs/{id}", h.DeleteJob)
 			authed.Get("/jobs/{id}/logs", h.ListJobLogs)

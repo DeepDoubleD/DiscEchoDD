@@ -50,6 +50,8 @@ type Settings struct {
 	MakeMKVDataDir       string
 	MakeMKVBetaKey       string
 	BDInfoBin            string
+	MKVMergeBin          string
+	MKVExtractBin        string
 	RedumperBin          string
 	CHDManBin            string
 	RedumpDataDir        string
@@ -57,6 +59,8 @@ type Settings struct {
 	VCDXRipBin           string
 	IGDBClientID         string
 	IGDBClientSecret     string
+	PS3DumperBin         string
+	PS3KeyCacheDir       string
 }
 
 // Load reads env vars, seeds default rows, and returns a *Settings.
@@ -87,11 +91,15 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 		MakeMKVDataDir:       firstNonEmpty(getenv("DISCECHO_MAKEMKV_DATA"), filepath.Join(firstNonEmpty(getenv("DISCECHO_DATA"), "/var/lib/discecho"), "MakeMKV")),
 		MakeMKVBetaKey:       getenv("DISCECHO_MAKEMKV_BETA_KEY"),
 		BDInfoBin:            firstNonEmpty(getenv("DISCECHO_BDINFO_BIN"), "bd_info"),
+		MKVMergeBin:          firstNonEmpty(getenv("DISCECHO_MKVMERGE_BIN"), "mkvmerge"),
+		MKVExtractBin:        firstNonEmpty(getenv("DISCECHO_MKVEXTRACT_BIN"), "mkvextract"),
 		RedumperBin:          firstNonEmpty(getenv("DISCECHO_REDUMPER_BIN"), "redumper"),
 		CHDManBin:            firstNonEmpty(getenv("DISCECHO_CHDMAN_BIN"), "chdman"),
 		RedumpDataDir:        firstNonEmpty(getenv("DISCECHO_REDUMP_DIR"), filepath.Join(firstNonEmpty(getenv("DISCECHO_DATA"), "/var/lib/discecho"), "redump")),
 		DDRescueBin:          firstNonEmpty(getenv("DISCECHO_DDRESCUE_BIN"), "ddrescue"),
 		VCDXRipBin:           firstNonEmpty(getenv("DISCECHO_VCDXRIP_BIN"), "vcdxrip"),
+		PS3DumperBin:         firstNonEmpty(getenv("DISCECHO_PS3DUMPER_BIN"), "ps3dumper-cli"),
+		PS3KeyCacheDir:       firstNonEmpty(getenv("DISCECHO_PS3_KEYCACHE_DIR"), filepath.Join(firstNonEmpty(getenv("DISCECHO_DATA"), "/var/lib/discecho"), "ps3-keys")),
 		IGDBClientID:         getenv("DISCECHO_IGDB_CLIENT_ID"),
 		IGDBClientSecret:     getenv("DISCECHO_IGDB_CLIENT_SECRET"),
 	}
@@ -121,6 +129,12 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 	if err := seedBDMVProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed BDMV profile: %w", err)
 	}
+	if err := seedBlurayDDProfiles(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed Blu-Ray DD profiles: %w", err)
+	}
+	if err := seedDVDDDProfiles(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed DVD DD profiles: %w", err)
+	}
 	if err := seedUHDProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed UHD profile: %w", err)
 	}
@@ -138,6 +152,15 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 	}
 	if err := seedXboxProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed Xbox profile: %w", err)
+	}
+	if err := seedXbox360Profile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed Xbox 360 profile: %w", err)
+	}
+	if err := seedWiiProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed Wii profile: %w", err)
+	}
+	if err := seedPS3Profile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed PS3 profile: %w", err)
 	}
 	if err := seedSegaCDProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed SegaCD profile: %w", err)
@@ -319,12 +342,19 @@ const (
 	dvdSeriesMakeMKVProfileName      = "DVD-Series (MakeMKV)"
 	bdProfileName                    = "BD-1080p"
 	bdExtrasProfileName              = "BD-1080p + Extras"
+	blurayDDMovieProfileName         = "Blu-Ray DD (Movies)"
+	blurayDDTVProfileName            = "Blu-Ray DD (TV)"
+	dvdDDMovieProfileName            = "DVD DD (Movies)"
+	dvdDDTVProfileName               = "DVD DD (TV)"
 	uhdProfileName                   = "UHD-Remux"
 	psxProfileName                   = "PSX-CHD"
 	ps2ProfileName                   = "PS2-CHD"
 	saturnProfileName                = "Saturn-CHD"
 	dcProfileName                    = "DC-CHD"
 	xboxProfileName                  = "XBOX-ISO"
+	xbox360ProfileName               = "XBOX360-ISO"
+	wiiProfileName                   = "WII-ISO"
+	ps3ProfileName                   = "PS3-DECRYPTED"
 	dataProfileName                  = "Data-ISO"
 	vcdProfileName                   = "VCD-MPEG"
 	segaCDProfileName                = "SegaCD-CHD"
@@ -694,6 +724,167 @@ func seedBDMVProfile(ctx context.Context, store *state.Store) error {
 	return nil
 }
 
+// seedBlurayDDProfiles adds the user's personal Blu-Ray defaults:
+// NVENC on the Quadro, archival-tier quality (RF 18 / "slower" —
+// closes most of the gap with software x265 at NVENC's speed and
+// concurrency), 1080p cap, every audio track kept but downmixed to
+// 2.0 (Japanese + English etc. all survive, just no multichannel),
+// and every text subtitle track pulled to a sidecar file so Jellyfin
+// can switch tracks with nothing burned in. "DD" in the name marks
+// these as the user's own tuned defaults, distinct from the generic
+// BD-1080p/NVENC starter profiles.
+func seedBlurayDDProfiles(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeBDMV)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for _, p := range existing {
+		have[p.Name] = true
+	}
+	now := time.Now()
+	if !have[blurayDDMovieProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:      state.DiscTypeBDMV,
+			Name:          blurayDDMovieProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "archival",
+			Container:     "MKV",
+			VideoCodec:    "nvenc_h265",
+			QualityPreset: "archival",
+			HDRPipeline:   "passthrough",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"content_type":           "movie",
+				"min_title_seconds":      3600,
+				"quality_rf":             18,
+				"encoder_preset":         "slower",
+				"max_height":             1080,
+				"stereo_audio":           true,
+				"extract_text_subtitles": true,
+			},
+			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	if !have[blurayDDTVProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:      state.DiscTypeBDMV,
+			Name:          blurayDDTVProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "archival",
+			Container:     "MKV",
+			VideoCodec:    "nvenc_h265",
+			QualityPreset: "archival",
+			HDRPipeline:   "passthrough",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"content_type":           "tv",
+				"min_title_seconds":      600,
+				"season":                 1,
+				"show_title_picker":      true,
+				"quality_rf":             18,
+				"encoder_preset":         "slower",
+				"max_height":             1080,
+				"stereo_audio":           true,
+				"extract_text_subtitles": true,
+			},
+			OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}} - S{{printf "%02d" .Season}}E{{printf "%02d" .EpisodeNumber}}{{if .EpisodeTitle}} - {{.EpisodeTitle}}{{end}}.mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedDVDDDProfiles is seedBlurayDDProfiles' DVD counterpart — same
+// NVENC/archival/1080p/stereo/subtitle-sidecar defaults, routed
+// through the DVD pipeline's MakeMKV+HandBrake engine instead of
+// BDMV's.
+func seedDVDDDProfiles(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeDVD)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for _, p := range existing {
+		have[p.Name] = true
+	}
+	now := time.Now()
+	if !have[dvdDDMovieProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:      state.DiscTypeDVD,
+			Name:          dvdDDMovieProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "archival",
+			Container:     "MKV",
+			VideoCodec:    "nvenc_h265",
+			QualityPreset: "archival",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"content_type":           "movie",
+				"dvd_selection_mode":     "main_feature",
+				"quality_rf":             18,
+				"encoder_preset":         "slower",
+				"max_height":             1080,
+				"stereo_audio":           true,
+				"extract_text_subtitles": true,
+			},
+			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	if !have[dvdDDTVProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:      state.DiscTypeDVD,
+			Name:          dvdDDTVProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "archival",
+			Container:     "MKV",
+			VideoCodec:    "nvenc_h265",
+			QualityPreset: "archival",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"content_type":           "tv",
+				"dvd_selection_mode":     "per_title",
+				"min_title_seconds":      600,
+				"season":                 1,
+				"quality_rf":             18,
+				"encoder_preset":         "slower",
+				"max_height":             1080,
+				"stereo_audio":           true,
+				"extract_text_subtitles": true,
+			},
+			OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}} - S{{printf "%02d" .Season}}E{{printf "%02d" .EpisodeNumber}}{{if .EpisodeTitle}} - {{.EpisodeTitle}}{{end}}.mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func seedUHDProfile(ctx context.Context, store *state.Store) error {
 	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeUHD)
 	if err != nil {
@@ -746,7 +937,7 @@ func seedPSXProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `PlayStation/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -775,7 +966,7 @@ func seedPS2Profile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `PlayStation 2/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -804,7 +995,7 @@ func seedSaturnProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `Sega Saturn/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          6,
 		CreatedAt:          now,
@@ -833,7 +1024,7 @@ func seedDCProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `Dreamcast/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          6,
 		CreatedAt:          now,
@@ -862,7 +1053,98 @@ func seedXboxProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso`,
+		OutputPathTemplate: `Xbox/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso`,
+		Enabled:            true,
+		StepCount:          5,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedXbox360Profile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeXBOX360)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == xbox360ProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypeXBOX360,
+		Name:               xbox360ProfileName,
+		Engine:             "redumper",
+		Format:             "ISO",
+		Preset:             "",
+		Container:          "ISO",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `Xbox 360/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso`,
+		Enabled:            true,
+		StepCount:          5,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedWiiProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeWII)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == wiiProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypeWII,
+		Name:               wiiProfileName,
+		Engine:             "redumper",
+		Format:             "ISO",
+		Preset:             "",
+		Container:          "ISO",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `Wii/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso`,
+		Enabled:            true,
+		StepCount:          5,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedPS3Profile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypePS3)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == ps3ProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:      state.DiscTypePS3,
+		Name:          ps3ProfileName,
+		Engine:        "ps3dumper-cli",
+		Format:        "DECRYPTED",
+		Preset:        "",
+		Container:     "",
+		QualityPreset: "",
+		DrivePolicy:   "any",
+		Options:       map[string]any{},
+		// A ps3dumper-cli dump is a decrypted folder tree (PS3_GAME/,
+		// PS3_UPDATE/, ...), not a single file -- {{.Title}} names the
+		// folder itself, matching how RPCS3 expects to be pointed at
+		// a title's decrypted directory.
+		OutputPathTemplate: `PS3/{{.Title}}`,
 		Enabled:            true,
 		StepCount:          5,
 		CreatedAt:          now,
@@ -954,7 +1236,7 @@ func seedSegaCDProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `Sega CD/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -983,7 +1265,7 @@ func seed3DOProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `3DO/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -1012,7 +1294,7 @@ func seedPCFXProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `PC-FX/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -1041,7 +1323,7 @@ func seedJaguarCDProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `Atari Jaguar CD/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -1070,7 +1352,7 @@ func seedCDiProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `Philips CD-i/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -1099,7 +1381,7 @@ func seedPCECDProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `PC Engine CD/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -1128,7 +1410,7 @@ func seedNeoCDProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `Neo Geo CD/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -1157,7 +1439,7 @@ func seedCD32Profile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `Amiga CD32/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -1186,7 +1468,7 @@ func seedFMTownsProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `FM Towns/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,
@@ -1215,7 +1497,7 @@ func seedPippinProfile(ctx context.Context, store *state.Store) error {
 		QualityPreset:      "",
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
-		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
+		OutputPathTemplate: `Bandai Pippin/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).chd`,
 		Enabled:            true,
 		StepCount:          7,
 		CreatedAt:          now,

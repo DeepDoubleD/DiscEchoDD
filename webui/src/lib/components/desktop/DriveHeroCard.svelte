@@ -7,7 +7,7 @@
   import { ripSubStepLabel } from '$lib/ripSubStepLabel';
   import { formatProgress } from '$lib/formatProgress';
   import { createEventDispatcher } from 'svelte';
-  import { cancelJob, ejectDrive, reidentify, jobs, discs, startDisc } from '$lib/store';
+  import { cancelJob, ejectDrive, closeTrayDrive, reidentify, jobs, discs, startDisc } from '$lib/store';
   import { lastDoneJobForDisc } from '$lib/components/lastDoneJobForDisc';
   import { lastEncodingDiscForDrive, activeTranscodeJob } from '$lib/discLifecycle';
   import EncodingChip from '$lib/components/EncodingChip.svelte';
@@ -27,13 +27,14 @@
   $: canStop = hasActiveJob && !!job;
   $: canEject = !hasActiveJob && drive.state !== 'ejecting';
   $: canReidentify = !!disc && !hasActiveJob && drive.state === 'idle';
+  $: canCloseTray = drive.tray_open && !hasActiveJob && drive.state !== 'ejecting';
 
   // Most recent done job for the currently-inserted disc. Drives the
   // "already ripped, re-rip?" affordance below.
   $: lastDoneJob = lastDoneJobForDisc($jobs, disc?.id);
   $: canRerip = drive.state === 'idle' && !!disc && !!lastDoneJob && !hasActiveJob;
 
-  let busy: 'cancel' | 'eject' | 'reid' | 'rerip' | null = null;
+  let busy: 'cancel' | 'eject' | 'closeTray' | 'reid' | 'rerip' | null = null;
   let errMsg = '';
 
   // Caption shown below the model name when no disc is bound. The
@@ -76,6 +77,18 @@
     errMsg = '';
     try {
       await ejectDrive(drive.id);
+    } catch (e) {
+      errMsg = (e as Error).message;
+    } finally {
+      busy = null;
+    }
+  }
+
+  async function onCloseTray(): Promise<void> {
+    busy = 'closeTray';
+    errMsg = '';
+    try {
+      await closeTrayDrive(drive.id);
     } catch (e) {
       errMsg = (e as Error).message;
     } finally {
@@ -143,6 +156,15 @@
         >
           {drive.state}
         </div>
+        {#if drive.tray_open}
+          <span
+            class="rounded px-1 py-0.5 font-mono text-[10px] tracking-[0.14em]"
+            style="background: var(--surface-2); color: var(--warn)"
+            data-testid="drive-tray-open"
+          >
+            TRAY OPEN
+          </span>
+        {/if}
         {#if queuedCount > 0}
           <span
             class="rounded px-1 py-0.5 font-mono text-[10px] tracking-[0.14em]"
@@ -207,7 +229,7 @@
     {/if}
   </button>
 
-  {#if canStop || canEject || canReidentify || canRerip}
+  {#if canStop || canEject || canCloseTray || canReidentify || canRerip}
     <div class="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
       {#if canStop}
         <button
@@ -247,6 +269,16 @@
           data-testid="drive-eject"
         >
           {busy === 'eject' ? 'Ejecting…' : 'Eject'}
+        </button>
+      {/if}
+      {#if canCloseTray}
+        <button
+          class="min-h-[36px] flex-1 rounded-xl border border-border bg-surface-2 px-3 text-[13px] font-medium text-text-2 disabled:opacity-50"
+          on:click|stopPropagation={onCloseTray}
+          disabled={busy !== null}
+          data-testid="drive-close-tray"
+        >
+          {busy === 'closeTray' ? 'Closing…' : 'Close Tray'}
         </button>
       {/if}
     </div>

@@ -57,3 +57,112 @@ func TestStringOption(t *testing.T) {
 		t.Errorf("nil profile: got %q, want def", got)
 	}
 }
+
+func TestIsTVProfile(t *testing.T) {
+	cases := []struct {
+		name string
+		opts map[string]any
+		want bool
+	}{
+		{"unset → movie", map[string]any{}, false},
+		{"content_type movie", map[string]any{"content_type": "movie"}, false},
+		{"content_type tv", map[string]any{"content_type": "tv"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := pipelines.IsTVProfile(&state.Profile{Options: c.opts})
+			if got != c.want {
+				t.Errorf("IsTVProfile = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestLibraryRootFor(t *testing.T) {
+	movie := &state.Profile{Options: map[string]any{"content_type": "movie"}}
+	tv := &state.Profile{Options: map[string]any{"content_type": "tv"}}
+
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", movie); got != "/library/movies" {
+		t.Errorf("movie profile: got %q, want /library/movies", got)
+	}
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", tv); got != "/library/tv" {
+		t.Errorf("tv profile: got %q, want /library/tv", got)
+	}
+	// A deployment that hasn't configured LibraryTV must still work --
+	// fall back to the movies root rather than writing to "".
+	if got := pipelines.LibraryRootFor("/library/movies", "", tv); got != "/library/movies" {
+		t.Errorf("tv profile, unconfigured TV root: got %q, want fallback to /library/movies", got)
+	}
+}
+
+func TestMaxHeightFromProfile(t *testing.T) {
+	cases := []struct {
+		name string
+		opts map[string]any
+		want int
+	}{
+		{"unset → 0 (no cap)", map[string]any{}, 0},
+		{"1080", map[string]any{"max_height": float64(1080)}, 1080},
+		{"zero → 0", map[string]any{"max_height": float64(0)}, 0},
+		{"negative → 0", map[string]any{"max_height": float64(-5)}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := pipelines.MaxHeightFromProfile(&state.Profile{Options: c.opts})
+			if got != c.want {
+				t.Errorf("MaxHeightFromProfile = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestResolutionAndAudioArgs(t *testing.T) {
+	t.Run("neither option set → no args", func(t *testing.T) {
+		got := pipelines.ResolutionAndAudioArgs(&state.Profile{})
+		if len(got) != 0 {
+			t.Errorf("want no args, got %v", got)
+		}
+	})
+
+	t.Run("max_height only", func(t *testing.T) {
+		prof := &state.Profile{Options: map[string]any{"max_height": float64(1080)}}
+		got := pipelines.ResolutionAndAudioArgs(prof)
+		want := []string{"--maxHeight", "1080", "--maxWidth", "1920"}
+		if len(got) != len(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("arg %d: got %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("stereo_audio only", func(t *testing.T) {
+		prof := &state.Profile{Options: map[string]any{"stereo_audio": true}}
+		got := pipelines.ResolutionAndAudioArgs(prof)
+		want := []string{"--aencoder", "av_aac", "--mixdown", "stereo", "--ab", "160"}
+		if len(got) != len(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("arg %d: got %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("both set, resolution args come first", func(t *testing.T) {
+		prof := &state.Profile{Options: map[string]any{
+			"max_height":   float64(1080),
+			"stereo_audio": true,
+		}}
+		got := pipelines.ResolutionAndAudioArgs(prof)
+		if len(got) != 10 {
+			t.Fatalf("want 10 args, got %d: %v", len(got), got)
+		}
+		if got[0] != "--maxHeight" || got[4] != "--aencoder" {
+			t.Errorf("unexpected arg order: %v", got)
+		}
+	})
+}

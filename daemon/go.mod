@@ -6,7 +6,6 @@ require github.com/go-chi/chi/v5 v5.2.5
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/pilebones/go-udev v0.9.1
 	golang.org/x/text v0.36.0
 	gopkg.in/yaml.v3 v3.0.1 // used by daemon/identify/data/refresh.go (go:build ignore)
 	modernc.org/sqlite v1.50.0

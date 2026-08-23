@@ -1,0 +1,20 @@
+Using libbluray version 1.3.4
+Volume Identifier   : VOLUME_ID
+BluRay detected     : yes
+First Play supported: yes
+Top menu supported  : yes
+HDMV titles         : 32
+BD-J titles         : 1
+UNSUPPORTED titles  : 0
+
+AACS detected       : yes
+libaacs detected    : no
+
+BD+ detected        : no
+
+Disc library metadata:
+Metadata file       : bdmt_eng.xml
+Language            : eng
+Disc name           : V For Vendetta
+Alternative         : <undefined>
+Disc #              : 1/1

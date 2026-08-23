@@ -12,6 +12,7 @@
     ensureLogBackfill,
     cancelJob,
     ejectDrive,
+    closeTrayDrive,
     reidentify,
     jobs,
     discs,
@@ -36,6 +37,7 @@
   $: canStop = hasActiveJob && !!job;
   $: canEject = !hasActiveJob && drive.state !== 'ejecting';
   $: canReidentify = !!disc && !hasActiveJob && drive.state === 'idle';
+  $: canCloseTray = drive.tray_open && !hasActiveJob && drive.state !== 'ejecting';
 
   // Most recent done job for the currently-inserted disc. Drives the
   // "already ripped, re-rip?" affordance below.
@@ -45,7 +47,7 @@
   // matches the desktop RipCard and users see the same affordance even
   // though they can't click it until the rip finishes.
   $: showEject = canEject || hasActiveJob;
-  $: hasActions = canStop || showEject || canReidentify || canRerip;
+  $: hasActions = canStop || showEject || canCloseTray || canReidentify || canRerip;
 
   $: rerippedCaption = lastDoneJob
     ? `Already ripped${lastDoneJob.finished_at ? ' ' + lastDoneJob.finished_at.slice(0, 10) : ''} — re-rip?`
@@ -61,7 +63,7 @@
   $: showEncodingChip = !!(encodingDisc && disc && encodingDisc.id !== disc.id);
   $: encodingJob = encodingDisc ? activeTranscodeJob(encodingDisc, $jobs) : undefined;
 
-  let actionBusy: 'cancel' | 'eject' | 'reid' | 'rerip' | null = null;
+  let actionBusy: 'cancel' | 'eject' | 'closeTray' | 'reid' | 'rerip' | null = null;
   let actionErr = '';
 
   async function onStop(): Promise<void> {
@@ -83,6 +85,18 @@
     actionErr = '';
     try {
       await ejectDrive(drive.id);
+    } catch (e) {
+      actionErr = (e as Error).message;
+    } finally {
+      actionBusy = null;
+    }
+  }
+
+  async function onCloseTray(): Promise<void> {
+    actionBusy = 'closeTray';
+    actionErr = '';
+    try {
+      await closeTrayDrive(drive.id);
     } catch (e) {
       actionErr = (e as Error).message;
     } finally {
@@ -246,6 +260,15 @@
             {formatDuration(elapsedSeconds)}
           </span>
         {/if}
+        {#if drive.tray_open}
+          <span
+            class="rounded px-1.5 py-0.5 font-bold uppercase tracking-[0.14em]"
+            style="font-size: 10px; background: var(--surface-2); color: var(--warn)"
+            data-testid="drive-tray-open"
+          >
+            TRAY OPEN
+          </span>
+        {/if}
       </div>
     </div>
 
@@ -389,6 +412,16 @@
           data-testid="drive-eject"
         >
           {actionBusy === 'eject' ? 'Ejecting…' : 'Eject'}
+        </button>
+      {/if}
+      {#if canCloseTray}
+        <button
+          class="min-h-[36px] flex-1 rounded-xl border border-border bg-surface-2 px-3 text-[13px] font-medium text-text-2 disabled:opacity-50"
+          on:click={onCloseTray}
+          disabled={actionBusy !== null}
+          data-testid="drive-close-tray"
+        >
+          {actionBusy === 'closeTray' ? 'Closing…' : 'Close Tray'}
         </button>
       {/if}
     </div>

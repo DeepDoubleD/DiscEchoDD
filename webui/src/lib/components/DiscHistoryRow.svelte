@@ -6,7 +6,7 @@
   import DiscTypeBadge from './DiscTypeBadge.svelte';
   import { formatDuration } from '$lib/time';
   import { formatBytes } from '$lib/format';
-  import { jobs, startDisc, cancelJob } from '$lib/store';
+  import { jobs, startDisc, cancelJob, skipDisc } from '$lib/store';
   import { lastDoneJobForDisc } from './lastDoneJobForDisc';
   import { pushToast } from '$lib/toasts';
 
@@ -18,6 +18,7 @@
   // EncodingChip / HistoryRow hygiene.
   const dispatch = createEventDispatcher<{
     navigate: string;
+    deleted: string;
   }>();
 
   $: state = row.disc.lifecycle_state ?? 'awaiting_decision';
@@ -72,6 +73,33 @@
   function onBody(): void {
     dispatch('navigate', navigateTo);
   }
+
+  // Two-step confirm, matching ClearHistoryButton / the ProfileEditor
+  // delete pattern: first click arms `confirmingDelete`, second click
+  // performs it. Lets a single row be removed directly from history
+  // without going through the API by hand — the only way to do this
+  // before was asking for a manual DELETE /api/discs/{id}.
+  let confirmingDelete = false;
+  let deleting = false;
+
+  async function onDelete(e: MouseEvent): Promise<void> {
+    e.stopPropagation();
+    if (deleting) return;
+    if (!confirmingDelete) {
+      confirmingDelete = true;
+      return;
+    }
+    deleting = true;
+    try {
+      await skipDisc(row.disc.id);
+      dispatch('deleted', row.disc.id);
+    } catch (err) {
+      pushToast('error', (err as Error).message);
+      confirmingDelete = false;
+    } finally {
+      deleting = false;
+    }
+  }
 </script>
 
 <div data-testid="disc-history-row" class="mb-2 rounded-2xl border border-border bg-surface-1 p-3">
@@ -103,7 +131,7 @@
         <div class="truncate text-[11px] text-text-3">{metaLine}</div>
       </div>
     </button>
-    <div class="flex-shrink-0">
+    <div class="flex flex-shrink-0 items-center gap-1.5">
       <button
         data-testid="disc-history-action"
         type="button"
@@ -113,6 +141,21 @@
       >
         {actionLabel}
       </button>
+      {#if !inFlight}
+        <button
+          data-testid="disc-history-delete"
+          type="button"
+          title={confirmingDelete ? 'Confirm delete' : 'Delete this history entry'}
+          class="min-h-[36px] rounded-xl border px-2.5 text-[13px] font-medium disabled:opacity-50"
+          style="border-color: {confirmingDelete ? 'var(--error)' : 'var(--border)'};
+                 background: {confirmingDelete ? 'rgba(255,91,91,0.1)' : 'var(--surface-2)'};
+                 color: {confirmingDelete ? 'var(--error)' : 'var(--text-2)'}"
+          on:click={onDelete}
+          disabled={deleting}
+        >
+          {confirmingDelete ? 'Confirm?' : 'Delete'}
+        </button>
+      {/if}
     </div>
   </div>
 </div>

@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jumpingmushroom/DiscEcho/daemon/api"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
 
@@ -399,5 +400,63 @@ func TestRetryTranscode_FailurePaths(t *testing.T) {
 		if w.Code != http.StatusGone {
 			t.Errorf("410 want (spool gone), got %d body=%s", w.Code, w.Body.String())
 		}
+	}
+}
+
+// TestCancelAllJobs_CancelsEveryActiveJob is the kill-switch's HTTP
+// wiring test: jobs are inserted directly via the store (bypassing the
+// orchestrator's Submit/execution) since CancelAllJobs only cares that
+// ListActiveJobIDs finds them and Cancel's store-flip fallback works
+// for jobs the orchestrator has no in-memory entry for — the
+// running-vs-queued in-memory-cancel-map routing itself is covered by
+// TestOrchestrator_CancelAll.
+func TestCancelAllJobs_CancelsEveryActiveJob(t *testing.T) {
+	h := apitestServerWithOrch(t, pipelines.NewRegistry())
+	drv := seedDrive(t, h)
+	prof := seedProfile(t, h)
+	disc := seedDisc(t, h, drv.ID)
+
+	var active []string
+	for _, st := range []state.JobState{state.JobStateQueued, state.JobStateRunning} {
+		j := &state.Job{DiscID: disc.ID, DriveID: drv.ID, ProfileID: prof.ID, State: st}
+		if err := h.Store.CreateJob(context.Background(), j); err != nil {
+			t.Fatal(err)
+		}
+		active = append(active, j.ID)
+	}
+	done := &state.Job{DiscID: disc.ID, DriveID: drv.ID, ProfileID: prof.ID, State: state.JobStateDone}
+	if err := h.Store.CreateJob(context.Background(), done); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/jobs/cancel-all", nil)
+	w := httptest.NewRecorder()
+	h.CancelAllJobs(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+	}
+	var resp api.CancelAllJobsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Cancelled != len(active) {
+		t.Errorf("cancelled = %d, want %d", resp.Cancelled, len(active))
+	}
+	for _, id := range active {
+		got, err := h.Store.GetJob(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State != state.JobStateCancelled {
+			t.Errorf("job %s state = %s, want cancelled", id, got.State)
+		}
+	}
+	// The already-done job must be untouched.
+	gotDone, err := h.Store.GetJob(context.Background(), done.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotDone.State != state.JobStateDone {
+		t.Errorf("done job state = %s, want unchanged done", gotDone.State)
 	}
 }

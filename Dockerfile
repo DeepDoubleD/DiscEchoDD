@@ -155,6 +155,34 @@ RUN cmake -DCMAKE_BUILD_TYPE=Release .. \
  && /usr/local/bin/loudgain --version
 
 ###############################################################################
+# Stage — build the PS3 dumper CLI wrapper (.NET)
+#
+# PS3 game discs are stock-mountable Blu-ray media (the protection is
+# per-file content encryption, not a drive-level read lockout the way
+# Wii/GameCube's non-standard format is) -- but the decryption itself
+# needs a disc key (from Redump's own key database or the community IRD
+# library), which is exactly what 13xforever/ps3-disc-dumper does.
+# Upstream ships only an Avalonia GUI (UI.Avalonia) with no CLI/console
+# project, so daemon/internal/thirdparty/ps3-disc-dumper vendors just
+# the two library projects (Ps3DiscDumper + IrdLibraryClient, MIT
+# licensed — see that directory's LICENSE) plus a small first-party Cli
+# project (Cli/Program.cs) wrapping Dumper's public API into something
+# the Go daemon can shell out to and parse stdout from, matching how it
+# already drives redumper/HandBrake/MakeMKV. Self-contained publish so
+# the runtime image needs no .NET runtime installed on its own behalf.
+###############################################################################
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS ps3dumper-build
+WORKDIR /src
+COPY daemon/internal/thirdparty/ps3-disc-dumper/ ./
+RUN dotnet publish Cli/Cli.csproj \
+        -c Release \
+        -r linux-x64 \
+        --self-contained true \
+        -p:PublishSingleFile=true \
+        -p:PublishTrimmed=false \
+        -o /out
+
+###############################################################################
 # Stage 4 — runtime: python slim + apprise + the daemon binary
 ###############################################################################
 FROM python:3.12-slim-bookworm AS runtime
@@ -172,12 +200,15 @@ FROM python:3.12-slim-bookworm AS runtime
 # libass9 + libturbojpeg0 are HandBrakeCLI runtime deps not pulled in
 # transitively by anything else in this image. libsdl2-2.0-0 is the
 # sole runtime dep of the chdman binary built from MAME source in the
-# chdman-build stage above (chdman links ocore_sdl).
+# chdman-build stage above (chdman links ocore_sdl). mkvtoolnix ships
+# mkvmerge (track identify, JSON) + mkvextract, used to pull text-based
+# subtitle tracks (S_TEXT/*) out of MakeMKV's ripped .mkv as sidecar
+# files -- lossless, no OCR needed, unlike bitmap PGS/VobSub tracks.
 RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
         > /etc/apt/sources.list.d/contrib.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-        ca-certificates eject cdparanoia libcdio-utils whipper \
+        ca-certificates eject udev cdparanoia libcdio-utils whipper \
         python3-cdio \
         flac \
         libdvd-pkg dvdbackup genisoimage \
@@ -187,6 +218,8 @@ RUN echo "deb http://deb.debian.org/debian bookworm main contrib" \
         libass9 libturbojpeg0 \
         libsdl2-2.0-0 \
         libebur128-1 libavformat59 libswresample4 libavutil57 libtag1v5 \
+        mkvtoolnix \
+        util-linux \
  && DEBIAN_FRONTEND=noninteractive dpkg-reconfigure libdvd-pkg \
  && rm -rf /var/lib/apt/lists/* \
  && pip install --no-cache-dir apprise
@@ -233,6 +266,12 @@ COPY --from=chdman-build /src/mame/chdman /usr/bin/chdman
 # loudgain built from source (see loudgain-build stage). Not in Debian.
 # Used for audio-CD post-rip ReplayGain 2.0 album-mode tagging.
 COPY --from=loudgain-build /usr/local/bin/loudgain /usr/bin/loudgain
+
+# ps3dumper-cli — self-contained single-file publish from the
+# ps3dumper-build stage above (vendored + wrapped 13xforever/
+# ps3-disc-dumper). No .NET runtime install needed in this image.
+COPY --from=ps3dumper-build /out/ps3dumper-cli /usr/local/bin/ps3dumper-cli
+RUN chmod +x /usr/local/bin/ps3dumper-cli
 
 # redumper — pre-built static Linux binary released on GitHub.
 # Pinned via REDUMPER_VERSION build arg.

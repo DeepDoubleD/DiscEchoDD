@@ -41,6 +41,11 @@ type Handlers struct {
 	// Ejector releases the tray for a drive's dev_path. Nil disables the
 	// manual eject endpoint (it 503s). Production binds via tools.Eject.
 	Ejector Ejector
+	// TrayCloser retracts the tray for a drive's dev_path (`eject -t`).
+	// Nil disables the manual close-tray endpoint (it 503s). Same
+	// function type as Ejector; production binds via tools.Eject with
+	// the -t flag baked in.
+	TrayCloser Ejector
 
 	// Reclassify reruns the disc-flow handler against the drive whose
 	// bus matches the argument. Wired in main.go to discFlow.HandleManual

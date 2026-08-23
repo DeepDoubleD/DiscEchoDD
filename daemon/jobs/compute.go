@@ -72,6 +72,13 @@ type Compute struct {
 	stopOnce sync.Once
 	stopped  chan struct{}
 	wg       sync.WaitGroup
+
+	// identifiedMu guards onIdentified, wired post-construction (see
+	// SetOnDiscIdentified) since the callback needs discFlow's IGDB
+	// client, which is built after NewCompute in main.go's startup
+	// order.
+	identifiedMu sync.RWMutex
+	onIdentified func(discID string, dt state.DiscType, title string)
 }
 
 type computeItem struct {
@@ -137,6 +144,26 @@ func (c *Compute) SetConcurrency(n int) {
 
 // Concurrency returns the current cap. Mostly for tests + diagnostics.
 func (c *Compute) Concurrency() int { return int(c.limit.Load()) }
+
+// SetOnDiscIdentified registers a callback fired (async, best-effort)
+// whenever a transcode job's RunTranscode call is the first thing to
+// give a disc a title -- Xbox 360 and the other post-rip MD5-identified
+// formats, whose Identify() runs before the rip and has nothing to
+// look up yet. main.go wires this to discFlow's IGDB enrichment once
+// discFlow exists (after NewCompute in startup order), so a nil hook
+// (never called, or called before SetOnDiscIdentified) is a normal,
+// silent no-op.
+func (c *Compute) SetOnDiscIdentified(fn func(discID string, dt state.DiscType, title string)) {
+	c.identifiedMu.Lock()
+	defer c.identifiedMu.Unlock()
+	c.onIdentified = fn
+}
+
+func (c *Compute) discIdentifiedHook() func(discID string, dt state.DiscType, title string) {
+	c.identifiedMu.RLock()
+	defer c.identifiedMu.RUnlock()
+	return c.onIdentified
+}
 
 // acquire blocks until inFlight is under limit, then bumps inFlight
 // atomically. Cancellation comes from ctx (per-job context) or stopped
@@ -317,8 +344,50 @@ func (c *Compute) runOne(jobID string) {
 	}
 	c.cfg.Broadcaster.Publish(state.Event{Name: "job.started", Payload: map[string]any{"job_id": jobID}})
 
+	// hadTitle distinguishes a disc that was already identified pre-rip
+	// (DVD, PSX, ...; RunTranscode leaves disc.Title untouched) from one
+	// that only gets a title here -- Xbox 360 and the other post-rip
+	// MD5-identified formats (Sega CD, 3DO, PC-FX, Jaguar CD, CD-i, PC
+	// Engine CD, Neo Geo CD), whose Identify() runs before the disc is
+	// even ripped and has nothing to look up yet. Gates the persist +
+	// IGDB-enrich block below so an already-identified disc doesn't get
+	// a redundant write and a wasted duplicate IGDB search.
+	hadTitle := disc.Title != ""
+
 	sink := NewPersistentSink(c.cfg.Store, c.cfg.Broadcaster, jobID)
 	runErr := splittable.RunTranscode(ctx, pipelines.RipResult{SpoolPath: job.SpoolPath}, disc, prof, sink)
+
+	// Post-rip identification (md5Identify) only ever mutated the
+	// in-memory disc struct above -- used for the output filename and
+	// the terminal notification, then discarded. Without this, the
+	// disc's DB row (and therefore disc history / the UI) never learns
+	// the title a successful rip just determined, and IGDB enrichment
+	// (which only fires once, pre-rip, in discflow.go) never gets a
+	// second chance now that a title actually exists. Confirmed live:
+	// two real Xbox 360 rips landed correctly-named files on disk but
+	// showed as bare UUIDs in disc history.
+	if runErr == nil && !hadTitle && disc.Title != "" {
+		if err := c.cfg.Store.UpdateDiscMetadata(ctx, disc.ID, disc.Title, disc.Year, disc.MetadataProvider, disc.MetadataID); err != nil {
+			slog.Warn("compute: persist post-rip identity", "disc_id", disc.ID, "err", err)
+		}
+		if len(disc.Candidates) > 0 {
+			if err := c.cfg.Store.UpdateDiscCandidates(ctx, disc.ID, disc.Candidates); err != nil {
+				slog.Warn("compute: persist post-rip candidates", "disc_id", disc.ID, "err", err)
+			}
+		}
+		c.cfg.Broadcaster.Publish(state.Event{
+			Name: "disc.changed",
+			Payload: map[string]any{
+				"id":       disc.ID,
+				"title":    disc.Title,
+				"year":     disc.Year,
+				"provider": disc.MetadataProvider,
+			},
+		})
+		if hook := c.discIdentifiedHook(); hook != nil {
+			go hook(disc.ID, disc.Type, disc.Title)
+		}
+	}
 
 	var final state.JobState
 	errMsg := ""

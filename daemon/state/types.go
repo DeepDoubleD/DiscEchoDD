@@ -17,6 +17,9 @@ const (
 	DiscTypePSX      DiscType = "PSX"
 	DiscTypePS2      DiscType = "PS2"
 	DiscTypeXBOX     DiscType = "XBOX"
+	DiscTypeXBOX360  DiscType = "XBOX360"
+	DiscTypeWII      DiscType = "WII"
+	DiscTypePS3      DiscType = "PS3"
 	DiscTypeSAT      DiscType = "SAT"
 	DiscTypeDC       DiscType = "DC"
 	DiscTypeSegaCD   DiscType = "SEGACD"
@@ -221,6 +224,10 @@ type Drive struct {
 	// want AccurateRip verification set this from Settings → System.
 	ReadOffset       int    `json:"read_offset"`
 	ReadOffsetSource string `json:"read_offset_source,omitempty"` // '' | 'manual' | 'auto'
+	// TrayOpen is a best-effort status hint, not a live hardware read --
+	// see migration 022_drive_tray_open.sql for what does and doesn't
+	// keep it accurate.
+	TrayOpen bool `json:"tray_open"`
 }
 
 // Candidate is a single MB (or other source) match for a disc.

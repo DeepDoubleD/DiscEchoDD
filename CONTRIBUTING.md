@@ -22,7 +22,10 @@ drive at `/dev/sr0`.
   imperative and under ~70 characters.
 - PRs squash-merge into `main`. Branch protection blocks direct pushes
   and requires CI green.
-- No AI attribution in commits, PR bodies, or code comments.
+- AI-assisted commits are fine — a lot of this fork is built with Claude
+  Code — and a `Co-Authored-By:`/session trailer on those commits is
+  welcome, not required. What matters is the commit message itself
+  explaining the real *why*, not just restating the diff.
 
 ## Code style
 

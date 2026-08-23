@@ -8,6 +8,10 @@ live status and history.
 Rip, transcode, tag and file your physical media automatically — just feed
 discs to the drive.
 
+> This is a fork of [jumpingmushroom/DiscEcho](https://github.com/jumpingmushroom/DiscEcho),
+> with Blu-ray/UHD identification fixes, a job kill-switch, drive-role
+> routing, and Xbox 360/Wii/PlayStation 3 support added on top.
+
 Supported disc types:
 
 - **DVD / Blu-ray / 4K UHD** video (MakeMKV rip → optional HandBrake re-encode)
@@ -17,6 +21,18 @@ Supported disc types:
   Sega CD, 3DO, PC-FX, Atari Jaguar CD, Philips CD-i, PC Engine CD, Neo Geo CD
   (redumper + chdman, Redump-verified); Amiga CD32, FM Towns, and Bandai Pippin
   via manual disc-type override (not auto-detected)
+- **Xbox 360** (XGD2/XGD3, redumper + Redump MD5 verify) and **Wii**
+  (redumper, MD5-identified post-rip) — both require an
+  [OmniDrive-flashed](https://wiki.redump.info/index.php?title=OmniDrive)
+  drive; Wii discs report no readable TOC under stock firmware, so insert
+  and pick "Wii" from the manual disc-type override
+- **PlayStation 3** — stock-mountable, no special drive firmware needed;
+  reads `PARAM.SFO` for pre-rip title identification and decrypts via a
+  vendored [ps3-disc-dumper](https://github.com/13xforever/ps3-disc-dumper)
+  CLI, using a matching disc key or an IRD file pulled automatically from
+  the [aldostools](http://ps3.aldostools.org/ird/) /
+  [FlexBy420](https://github.com/FlexBy420/playstation_3_ird_database) /
+  [ps3ird.free.fr](http://ps3ird.free.fr/) IRD libraries
 
 ## Screenshots
 
@@ -46,8 +62,8 @@ The web UI is mobile-first:
 ## Quick start
 
 ```bash
-git clone https://github.com/jumpingmushroom/DiscEcho.git
-cd DiscEcho
+git clone https://github.com/DeepDoubleD/DiscEchoDD.git
+cd DiscEchoDD
 cp .env.example .env
 # edit DISCECHO_LIBRARY_PATH and CDROM_GID for your host
 docker compose up -d --build
@@ -183,7 +199,7 @@ If a UHD disc is inserted and `KEYDB.cfg` is missing, the job fails
 fast at the identify step with a clear error before any disc read.
 Regular BDMV (Blu-ray) discs do not need this file.
 
-### Game-disc setup (PSX / PS2 / Saturn / Dreamcast / Xbox / Sega CD / 3DO / PC-FX / Jaguar CD / CD-i / PC Engine CD / Neo Geo CD / Amiga CD32 / FM Towns / Bandai Pippin)
+### Game-disc setup (PSX / PS2 / Saturn / Dreamcast / Xbox / Xbox 360 / Wii / PS3 / Sega CD / 3DO / PC-FX / Jaguar CD / CD-i / PC Engine CD / Neo Geo CD / Amiga CD32 / FM Towns / Bandai Pippin)
 
 DiscEcho's game-disc pipelines use
 [redumper](https://github.com/superg/redumper) for ripping and
@@ -220,6 +236,19 @@ one of these, select the disc type manually from the override, then start
 the rip. Post-rip Redump dat verification is available for all three if the
 matching dat-file is present.
 
+**Xbox 360 and Wii** both require an
+[OmniDrive-flashed](https://wiki.redump.info/index.php?title=OmniDrive)
+ASUS BW-16D1HT (or equivalent) drive — stock drive firmware can't read
+XGD2/XGD3 or Wii media at all. Xbox 360 auto-identifies the same way as
+original Xbox (`/default.xbe` + XBE title ID); Wii discs report no
+readable TOC even under an OmniDrive, so there's no pre-rip identification
+— insert the disc, select "Wii" from the manual override, and start the
+rip. Both are identified post-rip via Redump MD5 verify once ripped.
+
+**PlayStation 3** discs mount stock, with no special drive firmware
+needed — see the dedicated [PS3 setup](#playstation-3-setup) section
+below.
+
 Disc detection is automatic:
 
 - PSX/PS2: classifier reads `/SYSTEM.CNF` and parses the `BOOT[2]=`
@@ -230,8 +259,14 @@ Disc detection is automatic:
   2 starting at LBA ≥ 45000); product number read from IP.BIN at
   sector 45000.
 - Xbox: `/default.xbe` at the disc root + XBE certificate title ID.
-  Original Xbox only — Xbox 360 (XGD2/3) requires Kreon-flashed
-  drive firmware and is out of scope.
+- Xbox 360: the disc's decoy DVD-Video layer's `/_SYSTEMU` folder (the
+  real XEX Execution ID lives behind XGD2/3's security sectors, which
+  aren't reachable through a stock read even with an OmniDrive — title
+  and year come from a post-rip Redump MD5 lookup instead).
+- Wii: no reliable pre-rip signal — even the disc's magic word at a
+  fixed offset isn't reachable through a stock (or OmniDrive) read.
+  Select "Wii" manually from the override; title/year come from a
+  post-rip Redump MD5 lookup, same as Xbox 360.
 - Sega CD: raw sector 0 magic `SEGADISCSYSTEM` or `SEGABOOTDISC`
   (cooked or raw 2352-byte sector layout).
 - 3DO: sector 0 binary volume magic.
@@ -255,6 +290,8 @@ ${DISCECHO_DATA}/redump/ps2/Sony - PlayStation 2 - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/saturn/Sega - Saturn - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/dc/Sega - Dreamcast - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/xbox/Microsoft - Xbox - Datfile (*.dat)
+${DISCECHO_DATA}/redump/xbox360/Microsoft - Xbox 360 - Datfile (*.dat)
+${DISCECHO_DATA}/redump/wii/Nintendo - Wii - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/sega-cd/Sega - Mega-CD & Sega CD - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/3do/Panasonic - 3DO Interactive Multiplayer - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/pc-fx/NEC - PC-FX & PC-FXGA - Datfile (*.dat)
@@ -303,6 +340,30 @@ button. To enable it:
 If the env vars are unset, the "Search manually" button surfaces a
 clean "IGDB not configured" message — the daemon still starts and all
 other pipelines work normally.
+
+#### PlayStation 3 setup
+
+Unlike every other console pipeline, PS3 discs need no special drive
+firmware — they're stock-mountable Blu-ray media. DiscEcho mounts the
+disc read-only, reads `/PS3_GAME/PARAM.SFO` for a real pre-rip
+title/product code, then decrypts via a vendored
+[ps3-disc-dumper](https://github.com/13xforever/ps3-disc-dumper) CLI
+(`daemon/internal/thirdparty/ps3-disc-dumper/`, MIT-licensed, built into
+the Docker image).
+
+Decryption needs a matching disc key or IRD file. The dumper fetches
+one automatically from the aldostools / FlexBy420 / ps3ird.free.fr IRD
+libraries linked above and caches it locally, so this is normally
+zero-config. Two settings control it if you need to override them:
+
+```env
+DISCECHO_PS3DUMPER_BIN=ps3dumper-cli        # already on PATH in the image
+DISCECHO_PS3_KEYCACHE_DIR=${DISCECHO_DATA}/ps3-keys   # downloaded IRD/key cache
+```
+
+Output is a decrypted directory tree per title (`PS3/{{.Title}}/`), not
+a single ISO — there's no Redump dat-based MD5 verification step for
+PS3 the way there is for the disc-image formats above.
 
 ### Raw-data discs
 

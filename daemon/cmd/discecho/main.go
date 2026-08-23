@@ -30,11 +30,14 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/dreamcast"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/dvdvideo"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/ps2"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/ps3"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/psx"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/saturn"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/uhd"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/vcd"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/wii"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/xbox"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/xbox360"
 	"github.com/jumpingmushroom/DiscEcho/daemon/settings"
 	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
@@ -116,12 +119,32 @@ func main() {
 		MinInterval: time.Second,
 	})
 	sysCNFProber := identify.NewSystemCNFProber(cfg.IsoInfoBin)
+	bdProber := identify.NewBDProber(identify.BDProberConfig{BDInfoBin: cfg.BDInfoBin})
+	mkvSubs := tools.NewMKVToolNix(cfg.MKVMergeBin, cfg.MKVExtractBin)
+	// xboxProber constructed here (not inline in pipeReg.Register below)
+	// so the same instance can also be wired into the classifier --
+	// previously ClassifierConfig.XboxProber was left unset entirely,
+	// which meant RefineDiscType's Xbox branch was dead code: an Xbox
+	// disc always fell through to DATA classification and never reached
+	// the xbox pipeline handler at all.
+	//
+	// xbox360Prober has no classifier-side use: Xbox 360 discs are
+	// classified by the /_SYSTEMU marker alone (see RefineDiscType) --
+	// default.xex isn't reachable via a stock filesystem read on a real
+	// disc, confirmed live, so a pre-rip XEX probe at classify time would
+	// never succeed. The prober is still useful inside the xbox360
+	// pipeline's own Identify() as a best-effort bonus path.
+	xboxProber := &xbox.IsoinfoXboxProber{Bin: cfg.IsoInfoBin}
+	xbox360Prober := &xbox360.IsoinfoXbox360Prober{Bin: cfg.IsoInfoBin}
+	fsProber := identify.NewFSProber(identify.FSProberConfig{IsoInfoBin: cfg.IsoInfoBin})
 	classifier := identify.NewClassifier(identify.ClassifierConfig{
-		CDInfoBin:       cfg.CDInfoBin,
-		FSProber:        identify.NewFSProber(identify.FSProberConfig{IsoInfoBin: cfg.IsoInfoBin}),
-		BDProber:        identify.NewBDProber(identify.BDProberConfig{BDInfoBin: cfg.BDInfoBin}),
-		SystemCNFProber: sysCNFProber,
-		CDGameProber:    identify.NewDevCDGameProber(),
+		CDInfoBin:          cfg.CDInfoBin,
+		FSProber:           fsProber,
+		BDProber:           bdProber,
+		SystemCNFProber:    sysCNFProber,
+		CDGameProber:       identify.NewDevCDGameProber(),
+		XboxProber:         xboxProber,
+		Xbox360DecoyProber: identify.NewXbox360DecoyProber(identify.Xbox360DecoyProberConfig{IsoInfoBin: cfg.IsoInfoBin}),
 	})
 
 	// urlsForTrigger is shared by every pipeline — looks up the
@@ -199,42 +222,50 @@ func main() {
 		MakeMKVRipper:    makeMKV,
 		Tools:            toolReg,
 		LibraryRoot:      cfg.LibraryMovies,
+		LibraryTV:        cfg.LibraryTV,
 		WorkRoot:         filepath.Join(cfg.DataPath, "work"),
 		SubsLang:         cfg.SubsLang,
 		URLsForTrigger:   urlsForTrigger,
 		MetadataStore:    store,
 		NVENCAvailable:   nvencAvailable,
 		ShouldEject:      shouldEjectOnFinish,
+		MKVSubs:          mkvSubs,
 	}))
 
 	// BDMV + UHD pipelines (M3.1).
 
 	pipeReg.Register(bdmv.New(bdmv.Deps{
 		Prober:         dvdProber, // re-used for volume-label reading
+		BDProber:       bdProber,  // preferred: real disc-library title from bdmt_*.xml
 		TMDB:           tmdbClient,
 		MakeMKVScanner: makeMKV,
 		MakeMKVRipper:  makeMKV,
 		Tools:          toolReg,
 		LibraryRoot:    cfg.LibraryMovies,
+		LibraryTV:      cfg.LibraryTV,
 		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
 		SubsLang:       cfg.SubsLang,
 		URLsForTrigger: urlsForTrigger,
 		NVENCAvailable: nvencAvailable,
 		ShouldEject:    shouldEjectOnFinish,
+		MKVSubs:        mkvSubs,
 	}))
 
 	pipeReg.Register(uhd.New(uhd.Deps{
 		Prober:         dvdProber,
+		BDProber:       bdProber, // preferred: real disc-library title from bdmt_*.xml
 		TMDB:           tmdbClient,
 		MakeMKVScanner: makeMKV,
 		MakeMKVRipper:  makeMKV,
 		Tools:          toolReg,
 		LibraryRoot:    cfg.LibraryMovies,
+		LibraryTV:      cfg.LibraryTV,
 		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
 		SubsLang:       cfg.SubsLang,
 		AACS2KeyDB:     filepath.Join(cfg.MakeMKVDataDir, "KEYDB.cfg"),
 		URLsForTrigger: urlsForTrigger,
 		ShouldEject:    shouldEjectOnFinish,
+		MKVSubs:        mkvSubs,
 	}))
 
 	// PSX + PS2 pipelines (M5.1).
@@ -374,9 +405,38 @@ func main() {
 	}))
 	pipeReg.Register(xbox.New(xbox.Deps{
 		Redumper:       redumperTool,
-		XboxProber:     &xbox.IsoinfoXboxProber{Bin: cfg.IsoInfoBin},
+		XboxProber:     xboxProber,
 		RedumpDB:       redumpDB,
 		BootCodeIndex:  bootCodeIndex,
+		Tools:          toolReg,
+		LibraryRoot:    cfg.LibraryGames,
+		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
+		URLsForTrigger: urlsForTrigger,
+		ShouldEject:    shouldEjectOnFinish,
+	}))
+	pipeReg.Register(xbox360.New(xbox360.Deps{
+		Redumper:       redumperTool,
+		Xbox360Prober:  xbox360Prober,
+		FSProber:       fsProber,
+		RedumpDB:       redumpDB,
+		Tools:          toolReg,
+		LibraryRoot:    cfg.LibraryGames,
+		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
+		URLsForTrigger: urlsForTrigger,
+		ShouldEject:    shouldEjectOnFinish,
+	}))
+	pipeReg.Register(wii.New(wii.Deps{
+		Redumper:       redumperTool,
+		RedumpDB:       redumpDB,
+		Tools:          toolReg,
+		LibraryRoot:    cfg.LibraryGames,
+		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
+		URLsForTrigger: urlsForTrigger,
+		ShouldEject:    shouldEjectOnFinish,
+	}))
+	pipeReg.Register(ps3.New(ps3.Deps{
+		Dumper:         tools.NewPS3Dumper(cfg.PS3DumperBin),
+		KeyCacheDir:    cfg.PS3KeyCacheDir,
 		Tools:          toolReg,
 		LibraryRoot:    cfg.LibraryGames,
 		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
@@ -514,6 +574,9 @@ func main() {
 		Ejector: func(ctx context.Context, devPath string) error {
 			return ejectTool.Run(ctx, []string{devPath}, nil, "", tools.NopSink{})
 		},
+		TrayCloser: func(ctx context.Context, devPath string) error {
+			return ejectTool.Run(ctx, []string{"-t", devPath}, nil, "", tools.NopSink{})
+		},
 	}
 
 	embedFS, err := embed.FS()
@@ -556,8 +619,17 @@ func main() {
 		// tight, 60s also clipped some PSX discs that needed the cd-info
 		// retry budget plus a full fs+sysCNF probe pass.
 		identifyDur: 120 * time.Second,
+		eject: func(ctx context.Context, devPath string) error {
+			return ejectTool.Run(ctx, []string{devPath}, nil, "", tools.NopSink{})
+		},
 	}
 	apiH.Reclassify = df.HandleManual
+	// Post-rip identification (Xbox 360 and the other post-rip
+	// MD5-identified formats) only gets a title after RunTranscode
+	// finishes, too late for discflow.go's own pre-rip enrichment call
+	// above -- wire compute's callback now that df exists so those
+	// discs still get IGDB cover art / summary / genres.
+	compute.SetOnDiscIdentified(df.enrichGameDiscFromIGDB)
 	go func() {
 		if err := drive.Watch(ctx, df.handle); err != nil {
 			slog.Error("udev watcher exited", "err", err)

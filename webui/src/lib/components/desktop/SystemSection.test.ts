@@ -120,6 +120,10 @@ function mockEndpoints(overrides: Record<string, unknown> = {}) {
           jsonResponse({ id: 'd1', read_offset: body?.read_offset, read_offset_source: 'manual' }),
         );
       }
+      if (method === 'POST' && url === '/api/jobs/cancel-all') {
+        cancelAllMock();
+        return Promise.resolve(jsonResponse(overrides.cancelAll ?? { cancelled: 2 }));
+      }
       return Promise.reject(new Error('unexpected ' + method + ' ' + url));
     }),
   );
@@ -128,12 +132,14 @@ function mockEndpoints(overrides: Record<string, unknown> = {}) {
 const apiPutMock = vi.fn();
 const apiPatchMock = vi.fn();
 const recalcMock = vi.fn();
+const cancelAllMock = vi.fn();
 
 describe('SystemSection', () => {
   beforeEach(() => {
     apiPutMock.mockReset();
     apiPatchMock.mockReset();
     recalcMock.mockReset();
+    cancelAllMock.mockReset();
     mockEndpoints();
     toasts.set([]);
     settings.set({});
@@ -350,5 +356,30 @@ describe('SystemSection', () => {
       expect(err?.textContent).toMatch(/within ±3000/);
     });
     expect(apiPatchMock).not.toHaveBeenCalled();
+  });
+
+  it('cancel-all-jobs button calls the kill-switch endpoint after confirm and toasts the count', async () => {
+    vi.stubGlobal('confirm', () => true);
+    const { container } = render(SystemSection);
+    await waitFor(() => expect(container.textContent).toContain('discecho-host'));
+    await fireEvent.click(
+      container.querySelector('[data-testid="cancel-all-jobs"]') as HTMLButtonElement,
+    );
+    await waitFor(() => expect(cancelAllMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(get(toasts)).toContainEqual(
+        expect.objectContaining({ kind: 'success', message: 'Cancelled 2 active job(s).' }),
+      ),
+    );
+  });
+
+  it('cancel-all-jobs button does nothing when the confirm dialog is declined', async () => {
+    vi.stubGlobal('confirm', () => false);
+    const { container } = render(SystemSection);
+    await waitFor(() => expect(container.textContent).toContain('discecho-host'));
+    await fireEvent.click(
+      container.querySelector('[data-testid="cancel-all-jobs"]') as HTMLButtonElement,
+    );
+    expect(cancelAllMock).not.toHaveBeenCalled();
   });
 });

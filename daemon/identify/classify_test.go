@@ -92,6 +92,7 @@ func TestRefineDiscType_DVD(t *testing.T) {
 		&fakeBDProber{},
 		nil, // SystemCNFProber not needed for this case
 		nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeDVD {
@@ -106,6 +107,7 @@ func TestRefineDiscType_VCD(t *testing.T) {
 		&fakeFSProber{files: []string{"/MPEGAV", "/MPEGAV/AVSEQ01.DAT", "/VCD", "/VCD/INFO.VCD"}},
 		&fakeBDProber{},
 		nil, nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeVCD {
@@ -120,6 +122,7 @@ func TestRefineDiscType_SVCDFoldsIntoVCD(t *testing.T) {
 		&fakeFSProber{files: []string{"/MPEG2", "/MPEG2/AVSEQ01.MPG", "/SVCD", "/SVCD/INFO.SVD"}},
 		&fakeBDProber{},
 		nil, nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeVCD {
@@ -135,6 +138,7 @@ func TestRefineDiscType_BDMV(t *testing.T) {
 		&fakeBDProber{info: &identify.BDInfo{AACSEncrypted: true, HasAACS2: false}},
 		nil, // SystemCNFProber not needed for this case
 		nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeBDMV {
@@ -150,6 +154,7 @@ func TestRefineDiscType_UHD(t *testing.T) {
 		&fakeBDProber{info: &identify.BDInfo{AACSEncrypted: true, HasAACS2: true}},
 		nil, // SystemCNFProber not needed for this case
 		nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeUHD {
@@ -165,6 +170,7 @@ func TestRefineDiscType_BDMVWhenBDInfoFails(t *testing.T) {
 		&fakeBDProber{err: errors.New("bd_info crashed")},
 		nil, // SystemCNFProber not needed for this case
 		nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	// Conservative: when bd_info is unavailable, default to BDMV. The
@@ -182,6 +188,7 @@ func TestRefineDiscType_DataWhenNoVideoMarkers(t *testing.T) {
 		&fakeBDProber{},
 		nil, // SystemCNFProber not needed for this case
 		nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeData {
@@ -199,6 +206,7 @@ func TestRefineDiscType_PreservesAudioCD(t *testing.T) {
 		nil,
 		nil, // SystemCNFProber not needed for this case
 		nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeAudioCD {
@@ -224,6 +232,7 @@ func TestRefineDiscType_PSX(t *testing.T) {
 		&fakeBDProber{},
 		&fakeSystemCNFProber{info: &identify.SystemCNF{BootCode: "SCUS_004.34", IsPS2: false}},
 		nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypePSX {
@@ -239,6 +248,7 @@ func TestRefineDiscType_PS2(t *testing.T) {
 		&fakeBDProber{},
 		&fakeSystemCNFProber{info: &identify.SystemCNF{BootCode: "SCES_500.51", IsPS2: true}},
 		nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypePS2 {
@@ -254,6 +264,7 @@ func TestRefineDiscType_DataWhenSystemCNFUnreadable(t *testing.T) {
 		&fakeBDProber{},
 		&fakeSystemCNFProber{err: errors.New("isoinfo crashed")},
 		nil, nil, nil, nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeData {
@@ -299,6 +310,7 @@ func TestRefineDiscType_Saturn(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeSAT {
@@ -316,6 +328,7 @@ func TestRefineDiscType_Dreamcast(t *testing.T) {
 		&fakeSaturnProber{err: identify.ErrNotSaturn},
 		nil,
 		&fakeDCProber{ok: true},
+		nil,
 		nil,
 		"/dev/sr0",
 	)
@@ -335,10 +348,101 @@ func TestRefineDiscType_Xbox(t *testing.T) {
 		&fakeXboxProber{info: &identify.XboxInfo{TitleID: 0x4D530002, Region: "USA"}},
 		nil,
 		nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeXBOX {
 		t.Fatalf("got %q, want XBOX", got)
+	}
+}
+
+// TestRefineDiscType_Xbox360 uses /_SYSTEMU alone, no prober -- unlike
+// original Xbox, Xbox 360 classification doesn't call a prober at all.
+// Confirmed live against a real Halo Reach disc: default.xex is never
+// reachable via a stock filesystem read (it lives behind the security
+// sectors), so a pre-rip XEX probe at classify time would never
+// succeed; /_SYSTEMU (Microsoft's reserved system folder) is the only
+// marker actually present on a stock read.
+func TestRefineDiscType_Xbox360(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{"/_SYSTEMU", "/AUDIO_TS", "/VIDEO_TS"}},
+		&fakeBDProber{},
+		nil, nil, nil, nil, nil,
+		nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypeXBOX360 {
+		t.Fatalf("got %q, want XBOX360", got)
+	}
+}
+
+// TestRefineDiscType_Xbox360WinsOverDVD is the regression test for the
+// live bug this ordering fix addresses: every retail Xbox 360 disc is
+// also a fully valid, playable DVD-Video (real VIDEO_TS with .VOB/.IFO
+// files) -- a naive /VIDEO_TS-first check misclassifies every single
+// Xbox 360 disc as a plain DVD.
+func TestRefineDiscType_Xbox360WinsOverDVD(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{
+			"/_SYSTEMU", "/AUDIO_TS", "/VIDEO_TS",
+			"/VIDEO_TS/VIDEO_TS.IFO", "/VIDEO_TS/VTS_01_1.VOB",
+		}},
+		&fakeBDProber{},
+		nil, nil, nil, nil, nil,
+		nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypeXBOX360 {
+		t.Fatalf("got %q, want XBOX360 (checked before /VIDEO_TS)", got)
+	}
+}
+
+// TestRefineDiscType_PS3 covers the live-confirmed fact behind PS3
+// support: PARAM.SFO is plaintext on every retail disc (only the game
+// content itself is per-file encrypted), so a stock isoinfo listing
+// sees it -- no OmniDrive/raw read needed at all, unlike Xbox 360/Wii.
+func TestRefineDiscType_PS3(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{"/PS3_GAME", "/PS3_GAME/PARAM.SFO", "/PS3_GAME/USRDIR"}},
+		&fakeBDProber{},
+		nil, nil, nil, nil, nil,
+		nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypePS3 {
+		t.Fatalf("got %q, want PS3", got)
+	}
+}
+
+// TestRefineDiscType_PS3WinsOverBDMV is the regression test for the
+// live bug this ordering fix addresses: udev reports every PS3 disc as
+// plain BD media (mediaIsBluRay short-circuits before the filesystem
+// listing is ever consulted), so the PS3 marker check has to run
+// before that short-circuit or every real PS3 disc misclassifies as
+// BDMV. This can't fully exercise mediaIsBluRay itself (it reads live
+// udev properties, not mockable), but locks in that the marker wins
+// over a BDMV-shaped listing regardless.
+func TestRefineDiscType_PS3WinsOverBDMV(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{
+			"/PS3_GAME", "/PS3_GAME/PARAM.SFO",
+			"/BDMV", "/BDMV/index.bdmv",
+		}},
+		&fakeBDProber{},
+		nil, nil, nil, nil, nil,
+		nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypePS3 {
+		t.Fatalf("got %q, want PS3 (checked before /BDMV/index.bdmv)", got)
 	}
 }
 
@@ -352,6 +456,7 @@ func TestRefineDiscType_DataFallback(t *testing.T) {
 		&fakeSaturnProber{err: identify.ErrNotSaturn},
 		&fakeXboxProber{err: identify.ErrNotXbox},
 		&fakeDCProber{ok: false},
+		nil,
 		nil,
 		"/dev/sr0",
 	)
@@ -370,6 +475,7 @@ func TestRefineDiscType_ProbeErrorsFallthrough(t *testing.T) {
 		&fakeSaturnProber{err: errors.New("io")},
 		&fakeXboxProber{err: errors.New("io")},
 		&fakeDCProber{err: errors.New("io")},
+		nil,
 		nil,
 		"/dev/sr0",
 	)
@@ -400,6 +506,7 @@ func TestRefineDiscType_CDGame_Match(t *testing.T) {
 		nil,
 		&fakeDCProber{ok: false},
 		&fakeCDGameProber{dt: state.DiscTypeSegaCD, ok: true},
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeSegaCD {
@@ -420,6 +527,7 @@ func TestRefineDiscType_CDGame_Miss(t *testing.T) {
 		nil,
 		&fakeDCProber{ok: false},
 		&fakeCDGameProber{dt: "", ok: false},
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeData {
@@ -442,6 +550,7 @@ func TestRefineDiscType_CDGame_EarlierProberWins(t *testing.T) {
 		nil,
 		nil,
 		&fakeCDGameProber{dt: state.DiscTypeSegaCD, ok: true},
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeSAT {

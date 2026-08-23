@@ -6,19 +6,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
-
-	"github.com/pilebones/go-udev/netlink"
 )
 
 // Watch subscribes to kernel uevents and invokes onMediaChange for every
 // optical-media-change event until ctx is cancelled. It supervises the
-// underlying netlink session: the go-udev monitor stops on its first
-// read error (e.g. ENOBUFS when a uevent burst overflows the socket
-// buffer), so Watch reconnects after any non-shutdown exit — without
-// that, one transient failure left the daemon permanently deaf to disc
-// insertions. Returns nil on clean shutdown.
+// underlying netlink session: a read on the socket returns an error on
+// its first hiccup (e.g. ENOBUFS when a uevent burst overflows the
+// socket buffer), so Watch reconnects after any non-shutdown exit —
+// without that, one transient failure left the daemon permanently deaf
+// to disc insertions. Returns nil on clean shutdown.
 func Watch(ctx context.Context, onMediaChange func(Uevent)) error {
 	return superviseWatch(ctx, func(c context.Context) error {
 		return watchOnce(c, onMediaChange)
@@ -53,20 +50,33 @@ func superviseWatch(ctx context.Context, watch func(context.Context) error, minB
 }
 
 // watchOnce runs a single netlink monitor session: connect, stream
-// uevents, and return on the first monitor error or ctx cancellation.
-// The go-udev monitor goroutine stops on its first read error, so a
-// session can't be resumed in place — superviseWatch reconnects.
+// uevents, and return on the first read error or ctx cancellation. The
+// blocking socket read can't be cancelled in place, so a session can't
+// be resumed in-place either — superviseWatch reconnects, which drops
+// the stuck read goroutine along with the closed socket.
 func watchOnce(ctx context.Context, onMediaChange func(Uevent)) error {
-	conn := new(netlink.UEventConn)
-	if err := conn.Connect(netlink.UdevEvent); err != nil {
+	conn, err := dialUdevMonitor()
+	if err != nil {
 		return fmt.Errorf("netlink connect: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
 
-	queue := make(chan netlink.UEvent, 16)
+	queue := make(chan Uevent, 16)
 	errs := make(chan error, 1)
-	stop := conn.Monitor(queue, errs, nil)
-	defer close(stop)
+	go func() {
+		for {
+			payload, err := conn.readPayload()
+			if err != nil {
+				errs <- fmt.Errorf("netlink read: %w", err)
+				return
+			}
+			ev, ok := ParseUevent(payload)
+			if !ok {
+				continue
+			}
+			queue <- ev
+		}
+	}()
 
 	slog.Info("udev watcher started")
 	for {
@@ -74,40 +84,19 @@ func watchOnce(ctx context.Context, onMediaChange func(Uevent)) error {
 		case <-ctx.Done():
 			return nil
 		case err := <-errs:
-			return fmt.Errorf("netlink monitor: %w", err)
-		case raw := <-queue:
-			ev := translate(raw)
+			return err
+		case ev := <-queue:
 			if !ev.IsOpticalMediaChange() {
 				continue
 			}
 			// Dispatch async: classify+identify (handle) can run for
 			// many seconds — cd-info alone retries for up to ~13s.
 			// Running it inline stalls this read loop, the netlink
-			// socket buffer overflows, and the monitor dies with
-			// ENOBUFS. handle is concurrency-safe; ClaimDriveForIdentify
-			// dedups the uevent burst a single insertion produces.
+			// socket buffer overflows, and the read goroutine dies
+			// with ENOBUFS. handle is concurrency-safe;
+			// ClaimDriveForIdentify dedups the uevent burst a single
+			// insertion produces.
 			go onMediaChange(ev)
 		}
 	}
-}
-
-func translate(raw netlink.UEvent) Uevent {
-	ev := Uevent{
-		Action:     string(raw.Action),
-		Properties: make(map[string]string, len(raw.Env)),
-	}
-	for k, v := range raw.Env {
-		ev.Properties[k] = v
-		switch k {
-		case "DEVPATH":
-			ev.DevPath = v
-		case "SUBSYSTEM":
-			ev.Subsystem = v
-		case "DEVNAME":
-			ev.DevName = strings.TrimPrefix(v, "/dev/")
-		case "DEVTYPE":
-			ev.DevType = v
-		}
-	}
-	return ev
 }

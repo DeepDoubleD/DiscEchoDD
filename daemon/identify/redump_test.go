@@ -96,6 +96,38 @@ func TestLoadRedumpDB_LookupByMD5_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestLoadRedumpDB_MD5LookupWithoutBootCode reproduces a live bug: the
+// Xbox 360 Redump dat's ROM names carry no bracketed boot code at all
+// (just region/language parentheticals, e.g. "Halo - Reach (World)
+// (En,Ja,...).iso" -- unlike PSX/PS2/Saturn/original Xbox), so every
+// entry was silently dropped, including from the MD5 index, by a
+// single "skip the whole entry when no boot code" gate. Confirmed
+// against the real dat: a genuine Halo Reach entry whose MD5 exactly
+// matched a live rip was invisible to LookupByMD5 until this fix.
+func TestLoadRedumpDB_MD5LookupWithoutBootCode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "xbox360.dat")
+	writeDat(t, path, []datEntry{
+		{name: "Halo - Reach (World) (En,Ja,Fr,De,Es,It,Pt,Zh,Ko)", roms: []datROM{
+			{name: "Halo - Reach (World) (En,Ja,Fr,De,Es,It,Pt,Zh,Ko).iso", md5: "4d951122d42124c0bcdeb7bf1868ccfa"},
+		}},
+	})
+	db, err := identify.LoadRedumpDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := db.LookupByMD5("4d951122d42124c0bcdeb7bf1868ccfa")
+	if got == nil {
+		t.Fatal("want a hit, got nil — entry with no bracketed boot code must still be MD5-indexed")
+	}
+	if got.Title != "Halo - Reach" {
+		t.Errorf("Title = %q, want %q", got.Title, "Halo - Reach")
+	}
+	if got.BootCode != "" {
+		t.Errorf("BootCode = %q, want empty (no bracket code in this dat's ROM names)", got.BootCode)
+	}
+}
+
 func TestLoadRedumpDB_MalformedXML(t *testing.T) {
 	tmp := t.TempDir()
 	bad := filepath.Join(tmp, "bad.dat")
@@ -158,6 +190,68 @@ func TestLoadRedumpDir_MultipleSystems(t *testing.T) {
 	}
 	if got := db.LookupByMD5("def"); got == nil {
 		t.Fatalf("md5 lookup miss")
+	}
+}
+
+// TestLoadRedumpDir_FlatFiles reproduces the live layout: Redump's own
+// bulk-download tooling drops every console's dat directly in the root
+// directory (e.g. "Sony - PlayStation - Datfile (...).dat"), no
+// per-console subfolders. LoadRedumpDir must load these without
+// requiring the user to sort them into folders first.
+func TestLoadRedumpDir_FlatFiles(t *testing.T) {
+	root := t.TempDir()
+	writeDat(t, filepath.Join(root, "Sony - PlayStation - Datfile (10914).dat"), []datEntry{
+		{name: "Final Fantasy VII (USA) (Disc 1)", roms: []datROM{
+			{name: "Final Fantasy VII (USA) (Disc 1) [SCUS-94163].bin", md5: "abc"},
+		}},
+	})
+	writeDat(t, filepath.Join(root, "Microsoft - Xbox 360 - Datfile (3691).dat"), []datEntry{
+		{name: "Halo 3 (USA)", roms: []datROM{
+			{name: "Halo 3 (USA) [4D5307E6].iso", md5: "jkl"},
+		}},
+	})
+
+	db, err := identify.LoadRedumpDir(root)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := db.LookupByBootCode("SCUS-94163"); got == nil || got.Title != "Final Fantasy VII" {
+		t.Fatalf("psx miss: %#v", got)
+	}
+	if got := db.LookupByXboxTitleID(0x4D5307E6); got == nil || got.Title != "Halo 3" {
+		t.Fatalf("xbox360 miss: %#v", got)
+	}
+}
+
+// TestLoadRedumpDir_FlatAndSubdirBothLoad covers both layouts loading
+// together into the same DB, in case a user has some dats sorted into
+// folders and others left flat.
+func TestLoadRedumpDir_FlatAndSubdirBothLoad(t *testing.T) {
+	root := t.TempDir()
+	writeDat(t, filepath.Join(root, "Sony - PlayStation - Datfile (10914).dat"), []datEntry{
+		{name: "Final Fantasy VII (USA) (Disc 1)", roms: []datROM{
+			{name: "Final Fantasy VII (USA) (Disc 1) [SCUS-94163].bin", md5: "abc"},
+		}},
+	})
+	subdir := filepath.Join(root, "saturn")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeDat(t, filepath.Join(subdir, "saturn.dat"), []datEntry{
+		{name: "Nights into Dreams (USA)", roms: []datROM{
+			{name: "Nights into Dreams (USA) [MK-81088].bin", md5: "def"},
+		}},
+	})
+
+	db, err := identify.LoadRedumpDir(root)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := db.LookupByBootCode("SCUS-94163"); got == nil {
+		t.Fatal("flat-file entry missing")
+	}
+	if got := db.LookupByBootCode("MK-81088"); got == nil {
+		t.Fatal("subdir entry missing")
 	}
 }
 

@@ -164,6 +164,31 @@ describe('handleSSEEvent', () => {
     expect(get(pendingDiscID)).toBe('disc-1');
   });
 
+  // Live bug: swapping discs on the same drive (Wii finished -> PS2
+  // inserted) left the dashboard showing the old disc/type until a
+  // hard page reload, because current_disc_id is only ever set from a
+  // full /api/state snapshot -- no drive.changed payload carries it
+  // (see daemon/state/store.go's CurrentDiscByDrive doc comment).
+  it('disc.detected updates the owning drive current_disc_id', () => {
+    drives.set([{ ...seedDrive, current_disc_id: 'stale-old-disc' }]);
+    handleSSEEvent('disc.detected', { disc: seedDisc });
+    expect(get(drives)[0].current_disc_id).toBe('disc-1');
+  });
+
+  it('disc.detected leaves other drives current_disc_id untouched', () => {
+    drives.set([seedDrive, { ...seedDrive, id: 'd2', current_disc_id: 'other-disc' }]);
+    handleSSEEvent('disc.detected', { disc: seedDisc });
+    expect(get(drives).find((d) => d.id === 'd2')?.current_disc_id).toBe('other-disc');
+  });
+
+  it('disc.deleted clears current_disc_id from the drive that pointed at it', () => {
+    drives.set([{ ...seedDrive, current_disc_id: 'disc-1' }]);
+    discs.set({ 'disc-1': seedDisc });
+    handleSSEEvent('disc.deleted', { disc_id: 'disc-1' });
+    expect(get(discs)['disc-1']).toBeUndefined();
+    expect(get(drives)[0].current_disc_id).toBeUndefined();
+  });
+
   it('disc.identified replaces disc with full candidates', () => {
     discs.set({ 'disc-1': { ...seedDisc, candidates: [] } });
     pendingDiscID.set('disc-1');
@@ -326,6 +351,42 @@ describe('handleSSEEvent', () => {
     jobs.set([{ ...seedJob, state: 'running' }]);
     handleSSEEvent('job.failed', { job_id: 'job-1', state: 'cancelled' });
     expect(get(jobs)[0].state).toBe('cancelled');
+  });
+
+  // Live bug: a drive that auto-ejects on rip completion (Settings ->
+  // rip.eject_on_finish) kept showing "Already ripped — Re-rip" for the
+  // disc that had just physically left the tray, because current_disc_id
+  // is a server-computed field (daemon/state/store.go's
+  // CurrentDiscByDrive: excludes a disc once ANY of its jobs is
+  // terminal) that no drive.changed payload ever carries. job.done /
+  // job.failed are the signal that a disc just dropped out of "current".
+  it('job.done clears current_disc_id on the job\'s drive when it matches', () => {
+    drives.set([{ ...seedDrive, current_disc_id: 'disc-1' }]);
+    jobs.set([{ ...seedJob, state: 'running' }]);
+    handleSSEEvent('job.done', { job_id: 'job-1' });
+    expect(get(drives)[0].current_disc_id).toBeUndefined();
+  });
+
+  it('job.done leaves current_disc_id alone when it points elsewhere', () => {
+    drives.set([{ ...seedDrive, current_disc_id: 'some-other-disc' }]);
+    jobs.set([{ ...seedJob, state: 'running' }]);
+    handleSSEEvent('job.done', { job_id: 'job-1' });
+    expect(get(drives)[0].current_disc_id).toBe('some-other-disc');
+  });
+
+  it('job.failed also clears current_disc_id on the matching drive', () => {
+    drives.set([{ ...seedDrive, current_disc_id: 'disc-1' }]);
+    jobs.set([{ ...seedJob, state: 'running' }]);
+    handleSSEEvent('job.failed', { job_id: 'job-1', error: 'disc unreadable' });
+    expect(get(drives)[0].current_disc_id).toBeUndefined();
+  });
+
+  it('job.done is a no-op for a driveless (transcode) job', () => {
+    drives.set([{ ...seedDrive, current_disc_id: 'disc-1' }]);
+    jobs.set([{ ...seedJob, id: 'job-2', drive_id: undefined, state: 'running' }]);
+    handleSSEEvent('job.done', { job_id: 'job-2' });
+    // Unaffected -- the parent rip job's own job.done is what clears it.
+    expect(get(drives)[0].current_disc_id).toBe('disc-1');
   });
 });
 

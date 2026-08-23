@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -313,8 +315,8 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	if gd.Status != "partial" {
 		t.Errorf("GameDiscs status = %q, want partial (empty dat dir)", gd.Status)
 	}
-	if len(gd.Systems) != 15 {
-		t.Fatalf("GameDiscs systems = %d, want 15", len(gd.Systems))
+	if len(gd.Systems) != 18 {
+		t.Fatalf("GameDiscs systems = %d, want 18", len(gd.Systems))
 	}
 	byName := map[state.DiscType]api.GameDiscSystem{}
 	for _, s := range gd.Systems {
@@ -325,7 +327,7 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	}
 	// Xbox and the CD-only consoles have no boot-code index → "na".
 	for _, sys := range []state.DiscType{
-		state.DiscTypeXBOX,
+		state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeWII, state.DiscTypePS3,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
 		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
 		state.DiscTypeNeoCD,
@@ -339,7 +341,8 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	// "PlayStation" lives in psx/, "Dreamcast" in dc/).
 	for sys, want := range map[state.DiscType]string{
 		state.DiscTypePSX: "psx", state.DiscTypePS2: "ps2", state.DiscTypeSAT: "saturn",
-		state.DiscTypeDC: "dc", state.DiscTypeXBOX: "xbox",
+		state.DiscTypeDC: "dc", state.DiscTypeXBOX: "xbox", state.DiscTypeXBOX360: "xbox360",
+		state.DiscTypeWII: "wii", state.DiscTypePS3: "ps3",
 		state.DiscTypeSegaCD: "sega-cd", state.DiscType3DO: "3do", state.DiscTypePCFX: "pc-fx",
 		state.DiscTypeJaguarCD: "jaguar-cd", state.DiscTypeCDi: "cdi",
 		state.DiscTypePCECD: "pc-engine-cd", state.DiscTypeNeoCD: "neo-geo-cd",
@@ -351,6 +354,56 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	}
 	if gd.DatDir == "" {
 		t.Error("GameDiscs dat_dir should be set")
+	}
+}
+
+// TestGetSystemIntegrations_GameDiscsSection_FlatDatFiles reproduces the
+// live layout: Redump's own bulk-download tooling drops every console's
+// dat directly in the root directory (e.g. "Sony - PlayStation -
+// Datfile (...).dat"), no per-console subfolders. The Settings tile
+// must report these as "loaded", not "missing".
+func TestGetSystemIntegrations_GameDiscsSection_FlatDatFiles(t *testing.T) {
+	h := apitestServer(t)
+	datDir := t.TempDir()
+	for _, name := range []string{
+		"Sony - PlayStation - Datfile (10914) (2026-06-15 11-55-46).dat",
+		"Microsoft - Xbox 360 - Datfile (3691) (2026-06-15 03-15-02).dat",
+	} {
+		if err := os.WriteFile(filepath.Join(datDir, name), []byte("<datafile></datafile>"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.Settings = &settings.Settings{
+		MusicBrainzBaseURL:   "https://musicbrainz.org",
+		MusicBrainzUserAgent: "DiscEcho/test",
+		AppriseBin:           "apprise",
+		RedumperBin:          "sh",
+		RedumpDataDir:        datDir,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/system/integrations", nil)
+	w := httptest.NewRecorder()
+	h.GetSystemIntegrations(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	var info api.IntegrationsInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[state.DiscType]api.GameDiscSystem{}
+	for _, s := range info.GameDiscs.Systems {
+		byName[s.System] = s
+	}
+	if got := byName[state.DiscTypePSX].RedumpDat; got != "loaded" {
+		t.Errorf("PSX redump_dat = %q, want loaded (flat file present)", got)
+	}
+	if got := byName[state.DiscTypeXBOX360].RedumpDat; got != "loaded" {
+		t.Errorf("Xbox 360 redump_dat = %q, want loaded (flat file present)", got)
+	}
+	// A system with no matching flat file and no subdir stays missing.
+	if got := byName[state.DiscTypePS2].RedumpDat; got != "missing" {
+		t.Errorf("PS2 redump_dat = %q, want missing (no file for it)", got)
 	}
 }
 

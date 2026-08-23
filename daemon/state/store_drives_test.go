@@ -405,6 +405,56 @@ func TestStore_UpdateDriveReadOffset_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestStore_UpdateDriveTrayOpen_RoundTrip(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+
+	d := &state.Drive{
+		Model: "LG WH16NS60", Bus: "USB", DevPath: "/dev/sr0",
+		State: state.DriveStateIdle, LastSeenAt: time.Now(),
+	}
+	if err := s.UpsertDrive(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetDrive(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrayOpen {
+		t.Error("fresh drive: want tray_open=false")
+	}
+
+	if err := s.UpdateDriveTrayOpen(ctx, d.ID, true); err != nil {
+		t.Fatalf("set open: %v", err)
+	}
+	got, err = s.GetDrive(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.TrayOpen {
+		t.Error("want tray_open=true after UpdateDriveTrayOpen(true)")
+	}
+
+	if err := s.UpdateDriveTrayOpen(ctx, d.ID, false); err != nil {
+		t.Fatalf("set closed: %v", err)
+	}
+	got, err = s.GetDrive(ctx, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrayOpen {
+		t.Error("want tray_open=false after UpdateDriveTrayOpen(false)")
+	}
+}
+
+func TestStore_UpdateDriveTrayOpen_NotFound(t *testing.T) {
+	s := openStore(t)
+	if err := s.UpdateDriveTrayOpen(context.Background(), "ghost", true); err != state.ErrNotFound {
+		t.Errorf("want ErrNotFound, got %v", err)
+	}
+}
+
 func TestStore_UpdateDriveReadOffset_NotFound(t *testing.T) {
 	s := openStore(t)
 	if err := s.UpdateDriveReadOffset(context.Background(), "ghost", 0, "manual"); err != state.ErrNotFound {

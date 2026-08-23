@@ -129,6 +129,30 @@ export async function bootstrap(): Promise<void> {
   }
 }
 
+// clearCurrentDiscIfJobDone mirrors the server's own CurrentDiscByDrive
+// definition (daemon/state/store.go): a disc drops out of "current" the
+// moment ANY of its jobs reaches a terminal state, even if a split
+// pipeline's other half (e.g. the transcode child) is still running.
+// job.done/job.failed payloads only carry job_id, so the job's
+// disc_id/drive_id are looked up from the already-known $jobs store.
+//
+// Live bug this fixes: a drive whose rip auto-ejects on finish (Settings
+// -> rip.eject_on_finish) kept showing "Already ripped — Re-rip" for
+// the disc that had just physically left the tray, because nothing
+// ever told the frontend the drive's current_disc_id was stale --
+// only a hard page reload picked up the server's real (empty) value.
+function clearCurrentDiscIfJobDone(jobID: string): void {
+  const job = get(jobs).find((j) => j.id === jobID);
+  if (!job || !job.drive_id || !job.disc_id) return;
+  const driveID = job.drive_id;
+  const discID = job.disc_id;
+  drives.update((arr) =>
+    arr.map((d) => (d.id === driveID && d.current_disc_id === discID
+      ? { ...d, current_disc_id: undefined }
+      : d)),
+  );
+}
+
 // ----- SSE event dispatch ---------------------------------------------------
 
 export function handleSSEEvent(name: string, payload: unknown): void {
@@ -173,6 +197,21 @@ export function handleSSEEvent(name: string, payload: unknown): void {
       const d = p.disc as Disc;
       discs.update((m) => ({ ...m, [d.id]: d }));
       pendingDiscID.set(d.id);
+      // A newly detected disc always has no terminal job yet, so it
+      // matches the server's own CurrentDiscByDrive definition (see
+      // state/store.go) -- update the owning drive's current_disc_id
+      // immediately rather than leaving it stale until the next full
+      // /api/state fetch. Without this, a drive that already had a
+      // finished disc's id cached kept showing that old disc/type
+      // until a hard page reload, even while a brand new disc was
+      // actively identifying or ripping on the same drive (confirmed
+      // live: swapping Wii -> PS2 on the same drive).
+      if (d.drive_id) {
+        const driveID = d.drive_id;
+        drives.update((arr) =>
+          arr.map((dr) => (dr.id === driveID ? { ...dr, current_disc_id: d.id } : dr)),
+        );
+      }
       break;
     }
 
@@ -190,6 +229,12 @@ export function handleSSEEvent(name: string, payload: unknown): void {
         return rest;
       });
       pendingDiscID.update((cur) => (cur === id ? null : cur));
+      // Clear the reference from whichever drive still pointed at this
+      // disc as current -- mirrors the disc.detected patch above so a
+      // deleted disc's id can't linger and resolve to nothing.
+      drives.update((arr) =>
+        arr.map((dr) => (dr.current_disc_id === id ? { ...dr, current_disc_id: undefined } : dr)),
+      );
       break;
     }
 
@@ -308,6 +353,7 @@ export function handleSSEEvent(name: string, payload: unknown): void {
     case 'job.done': {
       const jobID = p.job_id as string;
       jobs.update((arr) => arr.map((j) => (j.id === jobID ? { ...j, state: 'done' as const } : j)));
+      clearCurrentDiscIfJobDone(jobID);
       scheduleStatsRefresh();
       break;
     }
@@ -327,6 +373,7 @@ export function handleSSEEvent(name: string, payload: unknown): void {
             : j,
         ),
       );
+      clearCurrentDiscIfJobDone(jobID);
       scheduleStatsRefresh();
       break;
     }
@@ -466,6 +513,14 @@ export async function cancelJob(jobID: string): Promise<void> {
   await apiPost<void>(`/api/jobs/${jobID}/cancel`);
 }
 
+// Kill-switch: cancels every job in a non-terminal state across every
+// drive in one call, instead of the user hunting down and stopping
+// each stuck job individually. Returns how many jobs were cancelled.
+export async function cancelAllJobs(): Promise<number> {
+  const res = await apiPost<{ cancelled: number }>('/api/jobs/cancel-all');
+  return res.cancelled;
+}
+
 // fetchJob loads a single job + its disc from the daemon. Used by
 // /jobs/[id] when the requested id isn't in the live $jobs snapshot
 // (i.e. a terminal job reached from /history). Side-effects: upserts
@@ -559,14 +614,22 @@ export async function deleteJob(jobID: string): Promise<void> {
 // skipDisc removes the disc row server-side so the awaiting-decision
 // card is dismissed permanently — without this, the row stays in the
 // DB and AwaitingDecisionList re-derives the card on every page load.
-// The daemon refuses to delete a disc that has any job history, so
-// this is only callable on truly orphan rows.
+// The daemon refuses to delete a disc with a job still in flight, but
+// allows it once that job is terminal (done/failed/cancelled/
+// interrupted) — Skip works on any card that isn't actively ripping.
 export async function skipDisc(discID: string): Promise<void> {
   await apiDelete(`/api/discs/${discID}`);
 }
 
 export async function ejectDrive(driveID: string): Promise<void> {
   await apiPost<void>(`/api/drives/${driveID}/eject`);
+}
+
+// closeTrayDrive retracts an open tray (`eject -t`) -- the counterpart
+// Eject never had: it only ever opens the tray, so there was previously
+// no way to close it back from the UI at all.
+export async function closeTrayDrive(driveID: string): Promise<void> {
+  await apiPost<void>(`/api/drives/${driveID}/close-tray`);
 }
 
 // ----- History --------------------------------------------------------------

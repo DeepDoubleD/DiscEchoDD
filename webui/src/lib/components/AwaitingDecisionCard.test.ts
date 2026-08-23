@@ -391,9 +391,16 @@ describe('AwaitingDecisionCard DATA disc flow', () => {
   });
 });
 
-// ---- Task 7.3: DATA batch auto-rip ---------------------------------------------
+// ---- Task 7.3 / DATA never auto-rips --------------------------------------------
+//
+// DATA is the classifier's catch-all fallback: sometimes a genuine
+// unlabeled data disc, but sometimes a console/format the probes don't
+// recognise yet (confirmed live — a misclassified Xbox 360 disc
+// auto-ripped via plain ddrescue and hung for 3+ hours retrying
+// permanently-erroring copy-protected sectors). DATA must always
+// require an explicit Start / "Rip as data" click, even in batch mode.
 
-describe('AwaitingDecisionCard DATA auto-rip', () => {
+describe('AwaitingDecisionCard DATA never auto-rips', () => {
   beforeEach(() => {
     profiles.set([dvdProfile, dataProfile]);
     settings.set({ 'operation.mode': 'batch' });
@@ -410,7 +417,7 @@ describe('AwaitingDecisionCard DATA auto-rip', () => {
     settings.set({});
   });
 
-  it('triggers auto-rip countdown for DATA discs in batch mode', async () => {
+  it('never shows the auto-rip countdown for DATA discs in batch mode', async () => {
     const dataDisc: Disc = {
       id: 'd1',
       drive_id: 'drv1',
@@ -419,9 +426,24 @@ describe('AwaitingDecisionCard DATA auto-rip', () => {
       candidates: [],
       created_at: new Date().toISOString(),
     };
-    const { getByText } = render(AwaitingDecisionCard, { disc: dataDisc });
+    const { queryByText } = render(AwaitingDecisionCard, { disc: dataDisc });
     await tick();
-    expect(getByText(/Auto-rip in \d+s/)).toBeInTheDocument();
+    expect(queryByText(/Auto-rip in \d+s/)).toBeNull();
+  });
+
+  it('does not auto-start a rip for DATA discs even after the countdown window elapses', async () => {
+    const dataDisc: Disc = {
+      id: 'd1',
+      drive_id: 'drv1',
+      type: 'DATA',
+      title: 'PHOTO_BACKUP_2024',
+      candidates: [],
+      created_at: new Date().toISOString(),
+    };
+    render(AwaitingDecisionCard, { disc: dataDisc });
+    await tick();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

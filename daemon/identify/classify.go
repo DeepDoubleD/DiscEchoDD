@@ -222,6 +222,11 @@ type XboxProber interface {
 	Probe(ctx context.Context, mountPoint string) (*XboxInfo, error)
 }
 
+// Xbox360Prober probes an Xbox 360 disc for the XEX Execution ID header.
+type Xbox360Prober interface {
+	Probe(ctx context.Context, devPath string) (*Xbox360Info, error)
+}
+
 // DCProber probes a CD device's TOC for the multi-session layout that
 // indicates a Dreamcast GD-ROM.
 type DCProber interface {
@@ -241,14 +246,15 @@ type CDGameProber interface {
 // default binaries. SaturnProber, XboxProber, DCProber, and CDGameProber
 // are optional; when nil those branches are skipped.
 type ClassifierConfig struct {
-	CDInfoBin       string          // default "cd-info"
-	FSProber        FSProber        // default NewFSProber({}) — distinguishes DVD/BDMV/DATA
-	BDProber        BDProber        // default NewBDProber({}) — distinguishes BDMV vs UHD
-	SystemCNFProber SystemCNFProber // default NewSystemCNFProber("") — distinguishes PSX vs PS2
-	SaturnProber    SaturnProber    // optional — detects Sega Saturn via IP.BIN
-	XboxProber      XboxProber      // optional — detects Xbox via default.xbe
-	DCProber        DCProber        // optional — detects Dreamcast via GD-ROM TOC heuristic
-	CDGameProber    CDGameProber    // optional — detects CD consoles via data-track magic
+	CDInfoBin          string             // default "cd-info"
+	FSProber           FSProber           // default NewFSProber({}) — distinguishes DVD/BDMV/DATA
+	BDProber           BDProber           // default NewBDProber({}) — distinguishes BDMV vs UHD
+	SystemCNFProber    SystemCNFProber    // default NewSystemCNFProber("") — distinguishes PSX vs PS2
+	SaturnProber       SaturnProber       // optional — detects Sega Saturn via IP.BIN
+	XboxProber         XboxProber         // optional — detects Xbox via default.xbe
+	DCProber           DCProber           // optional — detects Dreamcast via GD-ROM TOC heuristic
+	CDGameProber       CDGameProber       // optional — detects CD consoles via data-track magic
+	Xbox360DecoyProber Xbox360DecoyProber // optional — last-resort Xbox 360 PVD fingerprint
 
 	// CDInfoBackoff overrides the per-attempt wait schedule between
 	// retries. nil → use the production schedule (~13 s total). A
@@ -283,6 +289,7 @@ func NewClassifier(c ClassifierConfig) Classifier {
 		xbox:      c.XboxProber,
 		dc:        c.DCProber,
 		cdGame:    c.CDGameProber,
+		xgdDecoy:  c.Xbox360DecoyProber,
 		runner:    defaultCDInfoRunner,
 		backoff:   backoff,
 	}
@@ -297,6 +304,7 @@ type multiProbeClassifier struct {
 	xbox      XboxProber
 	dc        DCProber
 	cdGame    CDGameProber
+	xgdDecoy  Xbox360DecoyProber
 	runner    cdInfoRunner
 	backoff   []time.Duration
 }
@@ -333,7 +341,7 @@ func (c *multiProbeClassifier) Classify(ctx context.Context, devPath string) (st
 		// permanently mis-labelled. See retryingSystemCNFProber.
 		sysCNF = &retryingSystemCNFProber{inner: c.sysCNF, backoff: c.backoff}
 	}
-	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.dc, c.cdGame, devPath), nil
+	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.dc, c.cdGame, c.xgdDecoy, devPath), nil
 }
 
 func (c *multiProbeClassifier) runCDInfo(ctx context.Context, devPath string) ([]byte, error) {
@@ -454,6 +462,19 @@ func (r *retryingSystemCNFProber) Probe(ctx context.Context, devPath string) (*S
 	return info, nil
 }
 
+// mediaIsBluRay reports if udev already classified the medium as BD.
+// UDF Blu-rays often have an empty ISO9660 listing, so RefineDiscType
+// must not depend on /BDMV/index.bdmv being visible to isoinfo.
+func mediaIsBluRay(devPath string) bool {
+	cmd := exec.Command("udevadm", "info", "--query=property", "--name="+devPath)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.Debug("classify: udev info failed", "dev", devPath, "err", err)
+		return false
+	}
+	return strings.Contains(string(out), "ID_CDROM_MEDIA_BD=1")
+}
+
 // cdDATokenRE matches the bare CD-DA disc-mode token. Anchored with
 // word boundaries so it does NOT match CD-DATA, the value cd-info
 // prints for single-data-track CD-ROMs (e.g. Morrowind's "CD-DATA
@@ -489,6 +510,8 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 //
 // Decision tree:
 //   - AUDIO_CD → AUDIO_CD (passthrough)
+//   - DATA + /_SYSTEMU → XBOX360 (checked before /VIDEO_TS: every retail
+//     Xbox 360 disc is also a valid DVD-Video, so this must win first)
 //   - DATA + /VIDEO_TS → DVD
 //   - DATA + /MPEGAV|/VCD (VCD) or /MPEG2|/SVCD (SVCD) → VCD
 //   - DATA + /BDMV/index.bdmv:
@@ -502,20 +525,71 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 //   - saturn probe ok (raw sector 0) → SAT
 //   - dc probe ok (TOC heuristic) → DC
 //   - cdGame probe ok (data-track magic) → SegaCD / 3DO / PC-FX / Jaguar / CD-i
+//   - xgdDecoy probe ok (Microsoft CDIMAGE PVD fingerprint, last resort) → XBOX360
 //   - else → DATA
 //
 // Probes that error are logged and treated as a negative result.
-func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, dc DCProber, cdGame CDGameProber, devPath string) state.DiscType {
+func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, dc DCProber, cdGame CDGameProber, xgdDecoy Xbox360DecoyProber, devPath string) state.DiscType {
 	if base == state.DiscTypeAudioCD {
 		return state.DiscTypeAudioCD
+	}
+
+	// Listed once, up front, so both the BD branch below and the
+	// DVD/console checks further down share the same read -- PS3 is a
+	// stock-mountable Blu-ray disc (udev reports it as BD media, same
+	// as a movie or Xbox 360's XGD), so its marker has to be checked
+	// BEFORE the mediaIsBluRay short-circuit below, or every PS3 disc
+	// misclassifies as a plain BDMV.
+	var files []string
+	if fs != nil {
+		var err error
+		files, err = fs.List(ctx, devPath)
+		if err != nil {
+			slog.Warn("classify: fs probe failed", "dev", devPath, "err", err)
+			files = nil
+		}
+	}
+	// PS3: PARAM.SFO is plaintext on every retail disc (only the game
+	// content itself is per-file encrypted) -- confirmed live via a
+	// stock isoinfo listing, no OmniDrive/raw read needed at all. Redump's
+	// PS3 dat doesn't key by product code (MD5-only, like Xbox 360's),
+	// so this is purely a classify-time marker; see pipelines/ps3 for
+	// the actual identification path.
+	if hasPath(files, "/PS3_GAME/PARAM.SFO") {
+		return state.DiscTypePS3
+	}
+	if mediaIsBluRay(devPath) {
+		slog.Info("classify: udev reports BD media; not treating as DATA", "dev", devPath)
+		if bd != nil {
+			info, err := bd.Probe(ctx, devPath)
+			if err != nil {
+				slog.Warn("classify: bd_info failed; defaulting to BDMV", "dev", devPath, "err", err)
+				return state.DiscTypeBDMV
+			}
+			if info != nil && info.HasAACS2 {
+				return state.DiscTypeUHD
+			}
+		}
+		return state.DiscTypeBDMV
 	}
 	if fs == nil {
 		return base
 	}
-	files, err := fs.List(ctx, devPath)
-	if err != nil {
-		slog.Warn("classify: fs probe failed", "dev", devPath, "err", err)
-		return base
+	// Xbox 360 (XGD2/XGD3): every retail disc is deliberately mastered as
+	// a valid, playable DVD-Video too (a stock drive/PC sees a "this game
+	// is for Xbox 360" branded video instead of the real game data,
+	// which lives behind security sectors only a raw-read-capable drive
+	// like an OmniDrive-flashed one can reach) -- confirmed live against
+	// a real disc, which carries /_SYSTEMU, /AUDIO_TS, AND a fully
+	// populated /VIDEO_TS with real .VOB/.IFO files. /default.xex is
+	// NOT reachable via a stock filesystem read (it lives in the
+	// security-sector region), so /_SYSTEMU -- Microsoft's own reserved
+	// system folder, not something any legitimate DVD-Video disc would
+	// carry -- is the only reliable marker, and this check must run
+	// before the /VIDEO_TS one below or every Xbox 360 disc misclassifies
+	// as a plain DVD.
+	if hasPath(files, "/_SYSTEMU") {
+		return state.DiscTypeXBOX360
 	}
 	if hasPath(files, "/VIDEO_TS") {
 		return state.DiscTypeDVD
@@ -577,6 +651,9 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 			return state.DiscTypeXBOX
 		}
 	}
+	// Xbox 360 is classified above (/_SYSTEMU, before the /VIDEO_TS
+	// check) since default.xex is never reachable via a stock read on a
+	// real disc — see the comment there.
 	// Saturn: probe raw sector 0 regardless of fs listing; Saturn discs
 	// often have no ISO9660 filesystem so files may be empty.
 	if saturn != nil {
@@ -606,6 +683,24 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 		if dt, ok := cdGame.Probe(ctx, devPath); ok {
 			slog.Info("classify: cd-game prober matched", "dev", devPath, "type", dt)
 			return dt
+		}
+	}
+	// Last resort: Xbox 360 discs whose decoy DVD layer is too sparse to
+	// carry /_SYSTEMU (some titles' decoy content is just a README.TXT,
+	// not a full branded DVD-Video structure — confirmed live). The PVD
+	// publisher/preparer/application fingerprint Microsoft's CDIMAGE
+	// mastering tool stamps on XGD discs survives regardless of what the
+	// decoy directory tree contains, since it's a fixed-location sector,
+	// not something reached by walking the tree. Runs after every more
+	// specific probe (default.xbe/XBE already claims real original Xbox
+	// discs) so this only fires when nothing else recognised the disc.
+	if xgdDecoy != nil {
+		ok, err := xgdDecoy.Probe(ctx, devPath)
+		if err != nil {
+			slog.Warn("classify: xgd decoy probe failed", "dev", devPath, "err", err)
+		} else if ok {
+			slog.Info("classify: xgd decoy PVD fingerprint matched; treating as XBOX360", "dev", devPath)
+			return state.DiscTypeXBOX360
 		}
 	}
 	// Breadcrumb: nothing recognised the disc. fs_entries==0 points at a

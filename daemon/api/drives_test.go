@@ -103,6 +103,9 @@ func TestEjectDrive_FiresEjectorAndReturnsToIdle(t *testing.T) {
 	if got.State != state.DriveStateIdle {
 		t.Errorf("post-eject state %s want idle", got.State)
 	}
+	if !got.TrayOpen {
+		t.Error("want tray_open=true after a successful eject")
+	}
 }
 
 func TestEjectDrive_NoEjectorReturns503(t *testing.T) {
@@ -136,6 +139,79 @@ func TestEjectDrive_EjectorFailureRestoresIdle(t *testing.T) {
 	got, _ := h.Store.GetDrive(context.Background(), d.ID)
 	if got.State != state.DriveStateIdle {
 		t.Errorf("post-failed-eject state %s want idle", got.State)
+	}
+}
+
+// TestCloseTrayDrive_FiresTrayCloserAndClearsTrayOpen covers the fix
+// for the live bug: Eject only ever ran plain `eject` (open), so a
+// second press of the same button did nothing -- there was no way to
+// retract the tray from the UI at all. close-tray must call the
+// closer with -t semantics and flip tray_open back to false.
+func TestCloseTrayDrive_FiresTrayCloserAndClearsTrayOpen(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	if err := h.Store.UpdateDriveTrayOpen(context.Background(), d.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	gotDev := ""
+	h.TrayCloser = func(_ context.Context, dev string) error {
+		called = true
+		gotDev = dev
+		return nil
+	}
+
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/close-tray", h.CloseTrayDrive)
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/close-tray", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+	if !called {
+		t.Fatal("tray closer not called")
+	}
+	if gotDev != d.DevPath {
+		t.Errorf("tray closer got dev %q want %q", gotDev, d.DevPath)
+	}
+	got, err := h.Store.GetDrive(context.Background(), d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrayOpen {
+		t.Error("want tray_open=false after a successful close-tray")
+	}
+}
+
+func TestCloseTrayDrive_NoTrayCloserReturns503(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	// h.TrayCloser is nil by default in apitestServer.
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/close-tray", h.CloseTrayDrive)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/close-tray", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status %d want 503", w.Code)
+	}
+}
+
+func TestCloseTrayDrive_CloserFailureReturns500(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	h.TrayCloser = func(_ context.Context, _ string) error { return errors.New("boom") }
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/close-tray", h.CloseTrayDrive)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/close-tray", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status %d want 500", w.Code)
 	}
 }
 
@@ -180,12 +256,15 @@ func TestEjectDrive_DropsOrphanDiscBoundToDrive(t *testing.T) {
 	}
 }
 
-func TestEjectDrive_KeepsDiscWithJobHistory(t *testing.T) {
+// TestEjectDrive_ClearsFailedJobDisc reproduces the live bug this fixes:
+// a disc whose only job failed used to survive Eject forever, leaving
+// the dashboard "asking for a decision" for a drive that's now empty.
+// Eject must now clear it, same as a truly jobless disc.
+func TestEjectDrive_ClearsFailedJobDisc(t *testing.T) {
 	h := apitestServer(t)
 	d := seedDrive(t, h)
 	p := seedProfile(t, h)
 	disc := seedDisc(t, h, d.ID)
-	// Failed job → retry-intent; eject must NOT delete the disc.
 	if err := h.Store.CreateJob(context.Background(), &state.Job{
 		DiscID: disc.ID, DriveID: d.ID, ProfileID: p.ID,
 		State: state.JobStateFailed,
@@ -206,13 +285,54 @@ func TestEjectDrive_KeepsDiscWithJobHistory(t *testing.T) {
 		t.Fatalf("status %d", w.Code)
 	}
 
-	if _, err := h.Store.GetDisc(context.Background(), disc.ID); err != nil {
-		t.Errorf("disc with failed job should be kept; got err=%v", err)
+	if _, err := h.Store.GetDisc(context.Background(), disc.ID); err == nil {
+		t.Errorf("disc with failed job should be cleared on eject")
 	}
 
+	var sawDelete bool
+	for _, ev := range drainBroadcast(t, ch, 2) {
+		if ev.Name == "disc.deleted" {
+			sawDelete = true
+		}
+	}
+	if !sawDelete {
+		t.Errorf("want disc.deleted broadcast for cleared failed-job disc")
+	}
+}
+
+// TestEjectDrive_KeepsDoneDisc: a disc whose job succeeded is real
+// completed work, not a dead-end prompt -- Eject must leave it alone.
+func TestEjectDrive_KeepsDoneDisc(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	p := seedProfile(t, h)
+	disc := seedDisc(t, h, d.ID)
+	if err := h.Store.CreateJob(context.Background(), &state.Job{
+		DiscID: disc.ID, DriveID: d.ID, ProfileID: p.ID,
+		State: state.JobStateDone,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.Ejector = func(_ context.Context, _ string) error { return nil }
+
+	ch, cancel := h.Broadcaster.Subscribe(8)
+	defer cancel()
+
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/eject", h.EjectDrive)
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/eject", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+
+	if _, err := h.Store.GetDisc(context.Background(), disc.ID); err != nil {
+		t.Errorf("disc with done job should be kept; got err=%v", err)
+	}
 	for _, ev := range drainBroadcast(t, ch, 1) {
 		if ev.Name == "disc.deleted" {
-			t.Errorf("unexpected disc.deleted broadcast for disc with job history")
+			t.Errorf("unexpected disc.deleted broadcast for done disc")
 		}
 	}
 }
