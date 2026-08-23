@@ -187,6 +187,7 @@ var DiscTypeEngines = map[state.DiscType][]string{
 	state.DiscTypeSAT:      {"redumper+chdman"},
 	state.DiscTypeDC:       {"redumper+chdman"},
 	state.DiscTypeXBOX:     {"redumper"},
+	state.DiscTypeXBOX360:  {"redumper"},
 	state.DiscTypeSegaCD:   {"redumper+chdman"},
 	state.DiscType3DO:      {"redumper+chdman"},
 	state.DiscTypePCFX:     {"redumper+chdman"},

@@ -222,6 +222,11 @@ type XboxProber interface {
 	Probe(ctx context.Context, mountPoint string) (*XboxInfo, error)
 }
 
+// Xbox360Prober probes an Xbox 360 disc for the XEX Execution ID header.
+type Xbox360Prober interface {
+	Probe(ctx context.Context, devPath string) (*Xbox360Info, error)
+}
+
 // DCProber probes a CD device's TOC for the multi-session layout that
 // indicates a Dreamcast GD-ROM.
 type DCProber interface {
@@ -247,6 +252,7 @@ type ClassifierConfig struct {
 	SystemCNFProber SystemCNFProber // default NewSystemCNFProber("") — distinguishes PSX vs PS2
 	SaturnProber    SaturnProber    // optional — detects Sega Saturn via IP.BIN
 	XboxProber      XboxProber      // optional — detects Xbox via default.xbe
+	Xbox360Prober   Xbox360Prober   // optional — detects Xbox 360 via default.xex
 	DCProber        DCProber        // optional — detects Dreamcast via GD-ROM TOC heuristic
 	CDGameProber    CDGameProber    // optional — detects CD consoles via data-track magic
 
@@ -281,6 +287,7 @@ func NewClassifier(c ClassifierConfig) Classifier {
 		sysCNF:    c.SystemCNFProber,
 		saturn:    c.SaturnProber,
 		xbox:      c.XboxProber,
+		xbox360:   c.Xbox360Prober,
 		dc:        c.DCProber,
 		cdGame:    c.CDGameProber,
 		runner:    defaultCDInfoRunner,
@@ -295,6 +302,7 @@ type multiProbeClassifier struct {
 	sysCNF    SystemCNFProber
 	saturn    SaturnProber
 	xbox      XboxProber
+	xbox360   Xbox360Prober
 	dc        DCProber
 	cdGame    CDGameProber
 	runner    cdInfoRunner
@@ -333,7 +341,7 @@ func (c *multiProbeClassifier) Classify(ctx context.Context, devPath string) (st
 		// permanently mis-labelled. See retryingSystemCNFProber.
 		sysCNF = &retryingSystemCNFProber{inner: c.sysCNF, backoff: c.backoff}
 	}
-	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.dc, c.cdGame, devPath), nil
+	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.xbox360, c.dc, c.cdGame, devPath), nil
 }
 
 func (c *multiProbeClassifier) runCDInfo(ctx context.Context, devPath string) ([]byte, error) {
@@ -512,13 +520,14 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 //     SYSTEM.CNF readable + !IsPS2 → PSX
 //     SYSTEM.CNF unreadable → DATA
 //   - DATA + /default.xbe + xbox probe ok → XBOX
+//   - DATA + /default.xex + xbox360 probe ok → XBOX360
 //   - saturn probe ok (raw sector 0) → SAT
 //   - dc probe ok (TOC heuristic) → DC
 //   - cdGame probe ok (data-track magic) → SegaCD / 3DO / PC-FX / Jaguar / CD-i
 //   - else → DATA
 //
 // Probes that error are logged and treated as a negative result.
-func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, dc DCProber, cdGame CDGameProber, devPath string) state.DiscType {
+func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, xbox360 Xbox360Prober, dc DCProber, cdGame CDGameProber, devPath string) state.DiscType {
 	if base == state.DiscTypeAudioCD {
 		return state.DiscTypeAudioCD
 	}
@@ -602,6 +611,22 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 			}
 		} else if info != nil {
 			return state.DiscTypeXBOX
+		}
+	}
+	// Xbox 360: /default.xex at root signals a candidate; XEX Execution
+	// ID probe confirms. Security-sector protection (the reason these
+	// discs need an OmniDrive-flashed drive at rip time) doesn't block
+	// a normal filesystem read of default.xex — it's an additional
+	// layer on top of an otherwise-standard UDF/ISO9660 filesystem, not
+	// full-disc encryption.
+	if hasPath(files, "/default.xex") && xbox360 != nil {
+		info, err := xbox360.Probe(ctx, devPath)
+		if err != nil {
+			if !errors.Is(err, ErrNotXbox360) {
+				slog.Warn("classify: xbox360 probe failed", "dev", devPath, "err", err)
+			}
+		} else if info != nil {
+			return state.DiscTypeXBOX360
 		}
 	}
 	// Saturn: probe raw sector 0 regardless of fs listing; Saturn discs

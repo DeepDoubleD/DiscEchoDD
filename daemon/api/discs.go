@@ -595,7 +595,8 @@ func (h *Handlers) fetchExtendedMetadata(ctx context.Context, disc *state.Disc, 
 
 func isGameDisc(t state.DiscType) bool {
 	switch t {
-	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT, state.DiscTypeDC, state.DiscTypeXBOX,
+	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT, state.DiscTypeDC,
+		state.DiscTypeXBOX, state.DiscTypeXBOX360,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX, state.DiscTypeJaguarCD,
 		state.DiscTypeCDi, state.DiscTypePCECD, state.DiscTypeNeoCD,
 		state.DiscTypeCD32, state.DiscTypeFMTowns, state.DiscTypePippin:
@@ -616,6 +617,8 @@ func gameSystemName(t state.DiscType) string {
 		return "Sega Dreamcast"
 	case state.DiscTypeXBOX:
 		return "Microsoft Xbox"
+	case state.DiscTypeXBOX360:
+		return "Microsoft Xbox 360"
 	case state.DiscTypeSegaCD:
 		return "Sega CD"
 	case state.DiscType3DO:

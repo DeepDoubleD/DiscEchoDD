@@ -867,6 +867,31 @@ func TestSeedXboxProfile_CreatesAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestSeedXbox360Profile_CreatesAndIsIdempotent(t *testing.T) {
+	store := openStore(t)
+	dataDir := t.TempDir()
+	env := envFn(map[string]string{
+		"DISCECHO_DATA": dataDir,
+	})
+	if _, err := settings.Load(env, store, "test"); err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+	if _, err := settings.Load(env, store, "test"); err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	ctx := context.Background()
+	got, err := store.ListProfilesByDiscType(ctx, state.DiscTypeXBOX360)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "XBOX360-ISO" {
+		t.Fatalf("expected exactly one XBOX360-ISO; got %d: %#v", len(got), got)
+	}
+	if got[0].Engine != "redumper" {
+		t.Errorf("XBOX360-ISO engine = %q, want redumper", got[0].Engine)
+	}
+}
+
 func TestSeedDataProfile_CreatesAndIsIdempotent(t *testing.T) {
 	store := openStore(t)
 	dataDir := t.TempDir()

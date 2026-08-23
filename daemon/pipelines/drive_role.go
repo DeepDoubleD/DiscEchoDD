@@ -36,7 +36,7 @@ func PreferredDriveRole(dt state.DiscType) DriveRole {
 	case state.DiscTypeAudioCD, state.DiscTypePSX:
 		return DriveRoleCDPS1
 	case state.DiscTypeBDMV, state.DiscTypeUHD,
-		state.DiscTypePS2, state.DiscTypeXBOX, state.DiscTypeSAT,
+		state.DiscTypePS2, state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeSAT,
 		state.DiscTypeDC, state.DiscTypeSegaCD, state.DiscType3DO,
 		state.DiscTypePCFX, state.DiscTypeJaguarCD, state.DiscTypeCDi,
 		state.DiscTypePCECD, state.DiscTypeNeoCD, state.DiscTypeCD32,

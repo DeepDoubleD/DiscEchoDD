@@ -261,7 +261,14 @@
         DiscNumber: 1,
       };
     }
-    if (dt === 'PSX' || dt === 'PS2' || dt === 'SAT' || dt === 'DC' || dt === 'XBOX') {
+    if (
+      dt === 'PSX' ||
+      dt === 'PS2' ||
+      dt === 'SAT' ||
+      dt === 'DC' ||
+      dt === 'XBOX' ||
+      dt === 'XBOX360'
+    ) {
       return { Title: 'Final Fantasy VII', Year: 1997, Region: 'USA' };
     }
     if (dt === 'DATA') {

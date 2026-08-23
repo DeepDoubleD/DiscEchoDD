@@ -22,7 +22,8 @@ const igdbEnrichTimeout = 15 * time.Second
 // gameDiscForIGDB reports whether the disc type is a game type IGDB enriches.
 func gameDiscForIGDB(t state.DiscType) bool {
 	switch t {
-	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT, state.DiscTypeDC, state.DiscTypeXBOX,
+	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT, state.DiscTypeDC,
+		state.DiscTypeXBOX, state.DiscTypeXBOX360,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX, state.DiscTypeJaguarCD,
 		state.DiscTypeCDi, state.DiscTypePCECD, state.DiscTypeNeoCD,
 		state.DiscTypeCD32, state.DiscTypeFMTowns, state.DiscTypePippin:

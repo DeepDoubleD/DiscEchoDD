@@ -35,6 +35,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/uhd"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/vcd"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/xbox"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/xbox360"
 	"github.com/jumpingmushroom/DiscEcho/daemon/settings"
 	"github.com/jumpingmushroom/DiscEcho/daemon/spool"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
@@ -118,12 +119,22 @@ func main() {
 	sysCNFProber := identify.NewSystemCNFProber(cfg.IsoInfoBin)
 	bdProber := identify.NewBDProber(identify.BDProberConfig{BDInfoBin: cfg.BDInfoBin})
 	mkvSubs := tools.NewMKVToolNix(cfg.MKVMergeBin, cfg.MKVExtractBin)
+	// Constructed here (not inline in pipeReg.Register below) so the same
+	// instances can also be wired into the classifier -- previously
+	// ClassifierConfig.XboxProber/Xbox360Prober were left unset entirely,
+	// which meant RefineDiscType's Xbox/Xbox 360 branches were dead code:
+	// a disc of either type always fell through to DATA classification
+	// and never reached the xbox/xbox360 pipeline handler at all.
+	xboxProber := &xbox.IsoinfoXboxProber{Bin: cfg.IsoInfoBin}
+	xbox360Prober := &xbox360.IsoinfoXbox360Prober{Bin: cfg.IsoInfoBin}
 	classifier := identify.NewClassifier(identify.ClassifierConfig{
 		CDInfoBin:       cfg.CDInfoBin,
 		FSProber:        identify.NewFSProber(identify.FSProberConfig{IsoInfoBin: cfg.IsoInfoBin}),
 		BDProber:        bdProber,
 		SystemCNFProber: sysCNFProber,
 		CDGameProber:    identify.NewDevCDGameProber(),
+		XboxProber:      xboxProber,
+		Xbox360Prober:   xbox360Prober,
 	})
 
 	// urlsForTrigger is shared by every pipeline — looks up the
@@ -384,9 +395,19 @@ func main() {
 	}))
 	pipeReg.Register(xbox.New(xbox.Deps{
 		Redumper:       redumperTool,
-		XboxProber:     &xbox.IsoinfoXboxProber{Bin: cfg.IsoInfoBin},
+		XboxProber:     xboxProber,
 		RedumpDB:       redumpDB,
 		BootCodeIndex:  bootCodeIndex,
+		Tools:          toolReg,
+		LibraryRoot:    cfg.LibraryGames,
+		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
+		URLsForTrigger: urlsForTrigger,
+		ShouldEject:    shouldEjectOnFinish,
+	}))
+	pipeReg.Register(xbox360.New(xbox360.Deps{
+		Redumper:       redumperTool,
+		Xbox360Prober:  xbox360Prober,
+		RedumpDB:       redumpDB,
 		Tools:          toolReg,
 		LibraryRoot:    cfg.LibraryGames,
 		WorkRoot:       filepath.Join(cfg.DataPath, "work"),

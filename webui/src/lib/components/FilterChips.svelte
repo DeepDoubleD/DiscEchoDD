@@ -20,6 +20,7 @@
     { id: 'SAT', label: DISC_TYPE_META.SAT.label },
     { id: 'DC', label: DISC_TYPE_META.DC.label },
     { id: 'XBOX', label: DISC_TYPE_META.XBOX.label },
+    { id: 'XBOX360', label: DISC_TYPE_META.XBOX360.label },
     { id: 'DATA', label: DISC_TYPE_META.DATA.label },
   ];
 

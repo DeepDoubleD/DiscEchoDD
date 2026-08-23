@@ -149,6 +149,9 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 	if err := seedXboxProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed Xbox profile: %w", err)
 	}
+	if err := seedXbox360Profile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed Xbox 360 profile: %w", err)
+	}
 	if err := seedSegaCDProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed SegaCD profile: %w", err)
 	}
@@ -339,6 +342,7 @@ const (
 	saturnProfileName                = "Saturn-CHD"
 	dcProfileName                    = "DC-CHD"
 	xboxProfileName                  = "XBOX-ISO"
+	xbox360ProfileName               = "XBOX360-ISO"
 	dataProfileName                  = "Data-ISO"
 	vcdProfileName                   = "VCD-MPEG"
 	segaCDProfileName                = "SegaCD-CHD"
@@ -1030,6 +1034,35 @@ func seedXboxProfile(ctx context.Context, store *state.Store) error {
 	return store.CreateProfile(ctx, &state.Profile{
 		DiscType:           state.DiscTypeXBOX,
 		Name:               xboxProfileName,
+		Engine:             "redumper",
+		Format:             "ISO",
+		Preset:             "",
+		Container:          "ISO",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso`,
+		Enabled:            true,
+		StepCount:          5,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedXbox360Profile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeXBOX360)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == xbox360ProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypeXBOX360,
+		Name:               xbox360ProfileName,
 		Engine:             "redumper",
 		Format:             "ISO",
 		Preset:             "",

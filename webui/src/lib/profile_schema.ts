@@ -158,6 +158,7 @@ export const DISC_TYPES: ReadonlyArray<string> = [
   'DC',
   'PS2',
   'XBOX',
+  'XBOX360',
   // Catch-all
   'DATA',
 ];
@@ -207,6 +208,7 @@ export const DISC_TYPE_ENGINES: Record<string, string[]> = {
   SAT: ['redumper+chdman'],
   DC: ['redumper+chdman'],
   XBOX: ['redumper'],
+  XBOX360: ['redumper'],
   SEGACD: ['redumper+chdman'],
   '3DO': ['redumper+chdman'],
   PCFX: ['redumper+chdman'],
@@ -358,6 +360,13 @@ export const DISC_TYPE_DEFAULTS: Record<string, DiscTypeDefault> = {
     qualityPreset: '',
     outputPathTemplate: '{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso',
   },
+  XBOX360: {
+    engine: 'redumper',
+    container: 'ISO',
+    videoCodec: '',
+    qualityPreset: '',
+    outputPathTemplate: '{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso',
+  },
   SEGACD: {
     engine: 'redumper+chdman',
     container: 'CHD',
@@ -477,6 +486,7 @@ export const OUTPUT_VARS_BY_DISC_TYPE: Record<string, OutputVar[]> = {
   SAT: gameVars(),
   DC: gameVars(),
   XBOX: gameVars(),
+  XBOX360: gameVars(),
   SEGACD: gameVars(),
   '3DO': gameVars(),
   PCFX: gameVars(),
@@ -537,10 +547,18 @@ export const DISC_TYPE_REQUIREMENTS: Record<string, DiscTypeRequirement | undefi
     tone: 'warn',
     title: 'Requires special drive firmware',
     items: [
-      'Original Xbox discs only — Xbox 360 (XGD2/3) is out of scope.',
-      "Needs an optical drive flashed with **Kreon** firmware. XGD media is unreadable on stock drives — the disc won't be detected at all.",
+      "Needs an optical drive flashed with **OmniDrive** firmware (the same flash used for Blu-ray ripping). XGD media is unreadable on stock drives — the disc won't be detected at all.",
     ],
-    links: [{ label: 'Kreon firmware', href: 'https://kreon.dev' }],
+    links: [{ label: 'OmniDrive firmware', href: 'https://wiki.redump.info/index.php?title=OmniDrive' }],
+  },
+  XBOX360: {
+    tone: 'warn',
+    title: 'Requires special drive firmware',
+    items: [
+      "Needs an optical drive flashed with **OmniDrive** firmware (the same flash used for Blu-ray ripping) — XGD2/XGD3's security sectors aren't reachable through a plain DVD read.",
+      'No curated boot-code fallback yet — identification depends entirely on a Redump "Microsoft - Xbox 360" dat being present.',
+    ],
+    links: [{ label: 'OmniDrive firmware', href: 'https://wiki.redump.info/index.php?title=OmniDrive' }],
   },
   UHD: {
     tone: 'warn',

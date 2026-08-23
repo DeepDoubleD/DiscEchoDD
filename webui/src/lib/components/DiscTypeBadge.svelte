@@ -22,6 +22,7 @@
     SAT: { label: 'Saturn', color: GAME },
     DC: { label: 'Dreamcast', color: GAME },
     XBOX: { label: 'Xbox', color: GAME },
+    XBOX360: { label: 'Xbox 360', color: GAME },
     SEGACD: { label: 'Sega CD', color: GAME },
     '3DO': { label: '3DO', color: GAME },
     PCFX: { label: 'PC-FX', color: GAME },

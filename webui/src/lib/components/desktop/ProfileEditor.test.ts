@@ -210,6 +210,15 @@ describe('ProfileEditor', () => {
       container: 'ISO',
       format: 'ISO',
     };
+    const xbox360: Profile = {
+      ...seed,
+      id: 'p-xbox360',
+      disc_type: 'XBOX360',
+      name: 'Xbox360-ISO',
+      engine: 'redumper',
+      container: 'ISO',
+      format: 'ISO',
+    };
 
     it('shows the UHD hardware/setup requirements with links', () => {
       const { getByText, container } = render(ProfileEditor, { profile: uhd, creating: false });
@@ -221,11 +230,23 @@ describe('ProfileEditor', () => {
       expect(libre.target).toBe('_blank');
     });
 
-    it('shows the Xbox Kreon requirement with kreon.dev link', () => {
+    it('shows the Xbox OmniDrive requirement with a firmware link', () => {
       const { getByText, container } = render(ProfileEditor, { profile: xbox, creating: false });
       expect(getByText(/Requires special drive firmware/i)).toBeInTheDocument();
-      expect(container.textContent).toMatch(/Kreon/);
-      expect(container.querySelector('a[href="https://kreon.dev"]')).not.toBeNull();
+      expect(container.textContent).toMatch(/OmniDrive/);
+      expect(
+        container.querySelector('a[href="https://wiki.redump.info/index.php?title=OmniDrive"]'),
+      ).not.toBeNull();
+    });
+
+    it('shows the Xbox 360 OmniDrive requirement with a firmware link', () => {
+      const { getByText, container } = render(ProfileEditor, { profile: xbox360, creating: false });
+      expect(getByText(/Requires special drive firmware/i)).toBeInTheDocument();
+      expect(container.textContent).toMatch(/OmniDrive/);
+      expect(container.textContent).toMatch(/XGD2\/XGD3/);
+      expect(
+        container.querySelector('a[href="https://wiki.redump.info/index.php?title=OmniDrive"]'),
+      ).not.toBeNull();
     });
 
     it('shows no requirements callout for an audio CD profile', () => {

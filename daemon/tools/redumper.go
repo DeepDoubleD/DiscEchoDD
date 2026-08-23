@@ -74,18 +74,22 @@ func NewRedumper(bin string) *Redumper {
 func (r *Redumper) Name() string { return "redumper" }
 
 // Rip dumps the disc to outDir using the given base name. mode is
-// "cd", "dvd", or "xbox"; selects the right --disc-type override and
-// invokes the `disc` aggregate subcommand (which runs dump+refine+split
-// in one pass).
+// "cd", "dvd", "xbox", or "xbox360"; selects the right --disc-type
+// override and invokes the `disc` aggregate subcommand (which runs
+// dump+refine+split in one pass).
 //
-//	cd   → redumper disc --disc-type=CD  --drive <devPath> --image-path <outDir> --image-name <name>
-//	       → produces <outDir>/<name>.bin + <outDir>/<name>.cue (after the split phase)
-//	dvd  → redumper disc --disc-type=DVD --drive <devPath> --image-path <outDir> --image-name <name>
-//	       → produces <outDir>/<name>.iso
-//	xbox → redumper disc --disc-type=DVD --drive <devPath> --image-path <outDir> --image-name <name>
-//	       → produces <outDir>/<name>.iso  (XGD discs are DVD media;
-//	         redumper's security-sector handling kicks in automatically
-//	         when it detects the XGD structure)
+//	cd      → redumper disc --disc-type=CD  --drive <devPath> --image-path <outDir> --image-name <name>
+//	          → produces <outDir>/<name>.bin + <outDir>/<name>.cue (after the split phase)
+//	dvd     → redumper disc --disc-type=DVD --drive <devPath> --image-path <outDir> --image-name <name>
+//	          → produces <outDir>/<name>.iso
+//	xbox    → redumper disc --disc-type=DVD --drive <devPath> --image-path <outDir> --image-name <name>
+//	          → produces <outDir>/<name>.iso  (XGD1 discs are DVD media;
+//	            redumper's security-sector handling kicks in automatically
+//	            when it detects the XGD structure)
+//	xbox360 → same as xbox, plus --dvd-raw (OmniDrive raw DVD sector
+//	          reads) — XGD2/XGD3's security sectors need the raw path
+//	          an OmniDrive-flashed drive exposes; a plain DVD read
+//	          (what "xbox" mode does) doesn't reach them.
 //
 // Older redumper releases shipped per-media subcommands (`redumper cd`,
 // `redumper dvd`, `redumper xbox`); current builds (b720+) use a single
@@ -96,7 +100,7 @@ func (r *Redumper) Name() string { return "redumper" }
 func (r *Redumper) Rip(ctx context.Context, devPath, outDir, name, mode string, sink Sink) error {
 	discType, ok := redumperDiscType(mode)
 	if !ok {
-		return fmt.Errorf("redumper: unknown mode %q (want cd|dvd|xbox)", mode)
+		return fmt.Errorf("redumper: unknown mode %q (want cd|dvd|xbox|xbox360)", mode)
 	}
 	args := []string{
 		"disc",
@@ -105,6 +109,9 @@ func (r *Redumper) Rip(ctx context.Context, devPath, outDir, name, mode string, 
 		"--image-path", outDir,
 		"--image-name", name,
 		fmt.Sprintf("--retries=%d", redumperRetries),
+	}
+	if mode == "xbox360" {
+		args = append(args, "--dvd-raw")
 	}
 
 	// Derive a cancelable context so the watchdog can kill a runaway rip
@@ -269,6 +276,8 @@ func redumperDiscType(mode string) (string, bool) {
 	case "dvd":
 		return "DVD", true
 	case "xbox":
+		return "DVD", true
+	case "xbox360":
 		return "DVD", true
 	}
 	return "", false

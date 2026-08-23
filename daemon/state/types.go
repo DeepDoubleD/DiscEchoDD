@@ -17,6 +17,7 @@ const (
 	DiscTypePSX      DiscType = "PSX"
 	DiscTypePS2      DiscType = "PS2"
 	DiscTypeXBOX     DiscType = "XBOX"
+	DiscTypeXBOX360  DiscType = "XBOX360"
 	DiscTypeSAT      DiscType = "SAT"
 	DiscTypeDC       DiscType = "DC"
 	DiscTypeSegaCD   DiscType = "SEGACD"

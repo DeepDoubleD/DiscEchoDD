@@ -157,6 +157,12 @@ func TestRedumperOutputExt_Xbox(t *testing.T) {
 	}
 }
 
+func TestRedumperOutputExt_Xbox360(t *testing.T) {
+	if got := tools.RedumperOutputExt("xbox360"); got != ".iso" {
+		t.Fatalf("xbox360: got %q, want .iso", got)
+	}
+}
+
 func TestRedumperOutputExt_DVDStillIso(t *testing.T) {
 	if got := tools.RedumperOutputExt("dvd"); got != ".iso" {
 		t.Fatalf("dvd: got %q, want .iso", got)
@@ -176,6 +182,17 @@ func TestRedumperRip_AcceptsXboxMode(t *testing.T) {
 	err := r.Rip(context.Background(), "/dev/null", t.TempDir(), "x", "xbox", &captureSinkRedumper{})
 	if err != nil && strings.Contains(err.Error(), "unknown mode") {
 		t.Fatalf("xbox mode rejected: %v", err)
+	}
+}
+
+func TestRedumperRip_AcceptsXbox360Mode(t *testing.T) {
+	r := tools.NewRedumper("")
+	// xbox360 is a valid mode (--disc-type=DVD plus --dvd-raw); redumper
+	// binary won't exist in CI so we expect a start error, not a
+	// mode-rejection error.
+	err := r.Rip(context.Background(), "/dev/null", t.TempDir(), "x", "xbox360", &captureSinkRedumper{})
+	if err != nil && strings.Contains(err.Error(), "unknown mode") {
+		t.Fatalf("xbox360 mode rejected: %v", err)
 	}
 }
 

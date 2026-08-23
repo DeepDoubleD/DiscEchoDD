@@ -49,6 +49,7 @@
       d.type === 'PSX' ||
       d.type === 'PS2' ||
       d.type === 'XBOX' ||
+      d.type === 'XBOX360' ||
       d.type === 'SAT' ||
       d.type === 'DC'
     ) {

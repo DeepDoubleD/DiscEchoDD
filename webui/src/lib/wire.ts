@@ -9,6 +9,7 @@ export type DiscType =
   | 'PSX'
   | 'PS2'
   | 'XBOX'
+  | 'XBOX360'
   | 'SAT'
   | 'DC'
   | 'SEGACD'

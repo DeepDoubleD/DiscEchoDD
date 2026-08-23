@@ -161,6 +161,68 @@ func TestLoadRedumpDir_MultipleSystems(t *testing.T) {
 	}
 }
 
+// TestLoadRedumpDir_FlatFiles reproduces the live layout: Redump's own
+// bulk-download tooling drops every console's dat directly in the root
+// directory (e.g. "Sony - PlayStation - Datfile (...).dat"), no
+// per-console subfolders. LoadRedumpDir must load these without
+// requiring the user to sort them into folders first.
+func TestLoadRedumpDir_FlatFiles(t *testing.T) {
+	root := t.TempDir()
+	writeDat(t, filepath.Join(root, "Sony - PlayStation - Datfile (10914).dat"), []datEntry{
+		{name: "Final Fantasy VII (USA) (Disc 1)", roms: []datROM{
+			{name: "Final Fantasy VII (USA) (Disc 1) [SCUS-94163].bin", md5: "abc"},
+		}},
+	})
+	writeDat(t, filepath.Join(root, "Microsoft - Xbox 360 - Datfile (3691).dat"), []datEntry{
+		{name: "Halo 3 (USA)", roms: []datROM{
+			{name: "Halo 3 (USA) [4D5307E6].iso", md5: "jkl"},
+		}},
+	})
+
+	db, err := identify.LoadRedumpDir(root)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := db.LookupByBootCode("SCUS-94163"); got == nil || got.Title != "Final Fantasy VII" {
+		t.Fatalf("psx miss: %#v", got)
+	}
+	if got := db.LookupByXboxTitleID(0x4D5307E6); got == nil || got.Title != "Halo 3" {
+		t.Fatalf("xbox360 miss: %#v", got)
+	}
+}
+
+// TestLoadRedumpDir_FlatAndSubdirBothLoad covers both layouts loading
+// together into the same DB, in case a user has some dats sorted into
+// folders and others left flat.
+func TestLoadRedumpDir_FlatAndSubdirBothLoad(t *testing.T) {
+	root := t.TempDir()
+	writeDat(t, filepath.Join(root, "Sony - PlayStation - Datfile (10914).dat"), []datEntry{
+		{name: "Final Fantasy VII (USA) (Disc 1)", roms: []datROM{
+			{name: "Final Fantasy VII (USA) (Disc 1) [SCUS-94163].bin", md5: "abc"},
+		}},
+	})
+	subdir := filepath.Join(root, "saturn")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeDat(t, filepath.Join(subdir, "saturn.dat"), []datEntry{
+		{name: "Nights into Dreams (USA)", roms: []datROM{
+			{name: "Nights into Dreams (USA) [MK-81088].bin", md5: "def"},
+		}},
+	})
+
+	db, err := identify.LoadRedumpDir(root)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := db.LookupByBootCode("SCUS-94163"); got == nil {
+		t.Fatal("flat-file entry missing")
+	}
+	if got := db.LookupByBootCode("MK-81088"); got == nil {
+		t.Fatal("subdir entry missing")
+	}
+}
+
 func TestLoadRedumpDir_MissingDirOK(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "doesnotexist")
 	db, err := identify.LoadRedumpDir(root)

@@ -233,10 +233,17 @@ func InferRegion(code string) string {
 	return ""
 }
 
-// LoadRedumpDir walks rootDir for per-system subdirectories and loads
-// every *.dat inside them into a single in-memory DB. Subdirectory
-// names are conventionally {psx, ps2, saturn, dreamcast, xbox} but
-// this loader doesn't enforce — any *.dat under any subdir is loaded.
+// LoadRedumpDir loads every *.dat under rootDir into a single in-memory
+// DB — both files dropped flat in rootDir itself (how Redump's own
+// bulk-download tooling lays them out: "Sony - PlayStation - Datfile
+// (...).dat" etc., no per-console folders) and files under per-system
+// subdirectories (conventionally {psx, ps2, saturn, dreamcast, xbox,
+// ...} — see gameDiscSystems in api/system.go — but this loader
+// doesn't enforce naming; any *.dat under any subdir is loaded).
+// mergeDat doesn't care which console a file's name suggests: it
+// indexes every <game> entry by boot code, and boot codes don't
+// collide across console families in practice, so a flat drop of every
+// dat Redump ships works without sorting them into folders first.
 //
 // A missing rootDir is non-fatal: a user without any dat-files just
 // gets an empty DB and no Redump matches.
@@ -251,6 +258,15 @@ func LoadRedumpDir(rootDir string) (*RedumpDB, error) {
 			return db, nil
 		}
 		return nil, fmt.Errorf("read redump dir: %w", err)
+	}
+	flatMatches, err := filepath.Glob(filepath.Join(rootDir, "*.dat"))
+	if err != nil {
+		return nil, fmt.Errorf("glob %s: %w", rootDir, err)
+	}
+	for _, m := range flatMatches {
+		if err := db.mergeDat(m); err != nil {
+			return nil, fmt.Errorf("load %s: %w", m, err)
+		}
 	}
 	for _, sub := range entries {
 		if !sub.IsDir() {

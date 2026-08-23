@@ -91,7 +91,7 @@ func TestRefineDiscType_DVD(t *testing.T) {
 		&fakeFSProber{files: []string{"/AUDIO_TS", "/VIDEO_TS", "/VIDEO_TS/VIDEO_TS.IFO"}},
 		&fakeBDProber{},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeDVD {
@@ -105,7 +105,7 @@ func TestRefineDiscType_VCD(t *testing.T) {
 		state.DiscTypeData,
 		&fakeFSProber{files: []string{"/MPEGAV", "/MPEGAV/AVSEQ01.DAT", "/VCD", "/VCD/INFO.VCD"}},
 		&fakeBDProber{},
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeVCD {
@@ -119,7 +119,7 @@ func TestRefineDiscType_SVCDFoldsIntoVCD(t *testing.T) {
 		state.DiscTypeData,
 		&fakeFSProber{files: []string{"/MPEG2", "/MPEG2/AVSEQ01.MPG", "/SVCD", "/SVCD/INFO.SVD"}},
 		&fakeBDProber{},
-		nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeVCD {
@@ -134,7 +134,7 @@ func TestRefineDiscType_BDMV(t *testing.T) {
 		&fakeFSProber{files: []string{"/BDMV", "/BDMV/index.bdmv", "/CERTIFICATE"}},
 		&fakeBDProber{info: &identify.BDInfo{AACSEncrypted: true, HasAACS2: false}},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeBDMV {
@@ -149,7 +149,7 @@ func TestRefineDiscType_UHD(t *testing.T) {
 		&fakeFSProber{files: []string{"/BDMV", "/BDMV/index.bdmv", "/AACS"}},
 		&fakeBDProber{info: &identify.BDInfo{AACSEncrypted: true, HasAACS2: true}},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeUHD {
@@ -164,7 +164,7 @@ func TestRefineDiscType_BDMVWhenBDInfoFails(t *testing.T) {
 		&fakeFSProber{files: []string{"/BDMV/index.bdmv"}},
 		&fakeBDProber{err: errors.New("bd_info crashed")},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	// Conservative: when bd_info is unavailable, default to BDMV. The
@@ -181,7 +181,7 @@ func TestRefineDiscType_DataWhenNoVideoMarkers(t *testing.T) {
 		&fakeFSProber{files: []string{"/README.TXT", "/ARCHIVE/PHOTO_001.JPG"}},
 		&fakeBDProber{},
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeData {
@@ -198,7 +198,7 @@ func TestRefineDiscType_PreservesAudioCD(t *testing.T) {
 		nil,
 		nil,
 		nil, // SystemCNFProber not needed for this case
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeAudioCD {
@@ -223,7 +223,7 @@ func TestRefineDiscType_PSX(t *testing.T) {
 		&fakeFSProber{files: []string{"/SYSTEM.CNF"}},
 		&fakeBDProber{},
 		&fakeSystemCNFProber{info: &identify.SystemCNF{BootCode: "SCUS_004.34", IsPS2: false}},
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypePSX {
@@ -238,7 +238,7 @@ func TestRefineDiscType_PS2(t *testing.T) {
 		&fakeFSProber{files: []string{"/SYSTEM.CNF"}},
 		&fakeBDProber{},
 		&fakeSystemCNFProber{info: &identify.SystemCNF{BootCode: "SCES_500.51", IsPS2: true}},
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypePS2 {
@@ -253,7 +253,7 @@ func TestRefineDiscType_DataWhenSystemCNFUnreadable(t *testing.T) {
 		&fakeFSProber{files: []string{"/SYSTEM.CNF"}},
 		&fakeBDProber{},
 		&fakeSystemCNFProber{err: errors.New("isoinfo crashed")},
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeData {
@@ -279,6 +279,15 @@ func (f *fakeXboxProber) Probe(_ context.Context, _ string) (*identify.XboxInfo,
 	return f.info, f.err
 }
 
+type fakeXbox360Prober struct {
+	info *identify.Xbox360Info
+	err  error
+}
+
+func (f *fakeXbox360Prober) Probe(_ context.Context, _ string) (*identify.Xbox360Info, error) {
+	return f.info, f.err
+}
+
 type fakeDCProber struct {
 	ok  bool
 	err error
@@ -299,6 +308,7 @@ func TestRefineDiscType_Saturn(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeSAT {
@@ -314,6 +324,7 @@ func TestRefineDiscType_Dreamcast(t *testing.T) {
 		&fakeBDProber{},
 		nil,
 		&fakeSaturnProber{err: identify.ErrNotSaturn},
+		nil,
 		nil,
 		&fakeDCProber{ok: true},
 		nil,
@@ -335,10 +346,54 @@ func TestRefineDiscType_Xbox(t *testing.T) {
 		&fakeXboxProber{info: &identify.XboxInfo{TitleID: 0x4D530002, Region: "USA"}},
 		nil,
 		nil,
+		nil,
 		"/dev/sr0",
 	)
 	if got != state.DiscTypeXBOX {
 		t.Fatalf("got %q, want XBOX", got)
+	}
+}
+
+func TestRefineDiscType_Xbox360(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{"/default.xex"}},
+		&fakeBDProber{},
+		nil,
+		nil,
+		nil,
+		&fakeXbox360Prober{info: &identify.Xbox360Info{TitleID: 0x4D5307E6}},
+		nil,
+		nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypeXBOX360 {
+		t.Fatalf("got %q, want XBOX360", got)
+	}
+}
+
+// TestRefineDiscType_XboxWinsOverXbox360 covers the (impossible in
+// practice, since a disc only carries one of the two files) ordering
+// question directly: /default.xbe is checked before /default.xex, so
+// if a disc's filesystem listing somehow carried both, original Xbox
+// wins.
+func TestRefineDiscType_XboxWinsOverXbox360(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{"/default.xbe", "/default.xex"}},
+		&fakeBDProber{},
+		nil,
+		nil,
+		&fakeXboxProber{info: &identify.XboxInfo{TitleID: 0x4D530002}},
+		&fakeXbox360Prober{info: &identify.Xbox360Info{TitleID: 0x4D5307E6}},
+		nil,
+		nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypeXBOX {
+		t.Fatalf("got %q, want XBOX (checked first)", got)
 	}
 }
 
@@ -351,6 +406,7 @@ func TestRefineDiscType_DataFallback(t *testing.T) {
 		nil,
 		&fakeSaturnProber{err: identify.ErrNotSaturn},
 		&fakeXboxProber{err: identify.ErrNotXbox},
+		&fakeXbox360Prober{err: identify.ErrNotXbox360},
 		&fakeDCProber{ok: false},
 		nil,
 		"/dev/sr0",
@@ -369,6 +425,7 @@ func TestRefineDiscType_ProbeErrorsFallthrough(t *testing.T) {
 		nil,
 		&fakeSaturnProber{err: errors.New("io")},
 		&fakeXboxProber{err: errors.New("io")},
+		&fakeXbox360Prober{err: errors.New("io")},
 		&fakeDCProber{err: errors.New("io")},
 		nil,
 		"/dev/sr0",
@@ -398,6 +455,7 @@ func TestRefineDiscType_CDGame_Match(t *testing.T) {
 		nil,
 		&fakeSaturnProber{err: identify.ErrNotSaturn},
 		nil,
+		nil,
 		&fakeDCProber{ok: false},
 		&fakeCDGameProber{dt: state.DiscTypeSegaCD, ok: true},
 		"/dev/sr0",
@@ -417,6 +475,7 @@ func TestRefineDiscType_CDGame_Miss(t *testing.T) {
 		&fakeBDProber{},
 		nil,
 		&fakeSaturnProber{err: identify.ErrNotSaturn},
+		nil,
 		nil,
 		&fakeDCProber{ok: false},
 		&fakeCDGameProber{dt: "", ok: false},
@@ -439,6 +498,7 @@ func TestRefineDiscType_CDGame_EarlierProberWins(t *testing.T) {
 		&fakeBDProber{},
 		nil,
 		&fakeSaturnProber{info: &identify.SaturnInfo{ProductNumber: "MK-81088"}},
+		nil,
 		nil,
 		nil,
 		&fakeCDGameProber{dt: state.DiscTypeSegaCD, ok: true},

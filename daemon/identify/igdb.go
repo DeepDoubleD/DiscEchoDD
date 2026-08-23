@@ -57,6 +57,7 @@ var igdbPlatformID = map[state.DiscType]int{
 	state.DiscTypePSX:      7,
 	state.DiscTypePS2:      8,
 	state.DiscTypeXBOX:     11,
+	state.DiscTypeXBOX360:  12,
 	state.DiscTypeDC:       23,
 	state.DiscTypeSAT:      32,
 	state.DiscTypeSegaCD:   78,
