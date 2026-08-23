@@ -86,6 +86,23 @@ func (h *Handlers) CancelJob(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// CancelAllJobsResponse is the wire shape of POST /api/jobs/cancel-all.
+type CancelAllJobsResponse struct {
+	Cancelled int `json:"cancelled"`
+}
+
+// CancelAllJobs is the kill-switch for a wedged queue: cancels every
+// job in a non-terminal state across every drive in one call, instead
+// of the user hunting down and stopping each stuck job individually.
+func (h *Handlers) CancelAllJobs(w http.ResponseWriter, r *http.Request) {
+	n, err := h.Orchestrator.CancelAll(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, CancelAllJobsResponse{Cancelled: n})
+}
+
 // RetryTranscode re-enqueues a kind=transcode job that's in a failed
 // or interrupted state, reusing the existing spool dir so the user
 // doesn't have to re-rip the disc. Validates the job kind, terminal

@@ -220,6 +220,29 @@ func (o *Orchestrator) Cancel(jobID string) error {
 	return nil
 }
 
+// CancelAll is the kill-switch: cancel every job currently in a
+// non-terminal state (queued/identifying/running/paused), across every
+// drive. Reuses Cancel's per-job routing (in-memory cancel map, Compute
+// pool, or a bare store write for a queued job) so the same "which pool
+// owns this job" logic isn't duplicated. One job's cancel failing
+// doesn't stop the rest — this exists specifically for a wedged queue,
+// so it should clear everything it can rather than bailing on the
+// first error. Returns how many jobs it attempted to cancel and the
+// first error encountered, if any.
+func (o *Orchestrator) CancelAll(ctx context.Context) (int, error) {
+	ids, err := o.cfg.Store.ListActiveJobIDs(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list active jobs: %w", err)
+	}
+	var firstErr error
+	for _, id := range ids {
+		if err := o.Cancel(id); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return len(ids), firstErr
+}
+
 // errStopped is returned by enqueue when Submit races shutdown.
 var errStopped = errors.New("orchestrator: stopped")
 

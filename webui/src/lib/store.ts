@@ -466,6 +466,14 @@ export async function cancelJob(jobID: string): Promise<void> {
   await apiPost<void>(`/api/jobs/${jobID}/cancel`);
 }
 
+// Kill-switch: cancels every job in a non-terminal state across every
+// drive in one call, instead of the user hunting down and stopping
+// each stuck job individually. Returns how many jobs were cancelled.
+export async function cancelAllJobs(): Promise<number> {
+  const res = await apiPost<{ cancelled: number }>('/api/jobs/cancel-all');
+  return res.cancelled;
+}
+
 // fetchJob loads a single job + its disc from the daemon. Used by
 // /jobs/[id] when the requested id isn't in the live $jobs snapshot
 // (i.e. a terminal job reached from /history). Side-effects: upserts

@@ -317,6 +317,59 @@ func TestStore_Job_CancelIfActive(t *testing.T) {
 	}
 }
 
+// TestStore_ListActiveJobIDs covers the kill-switch's job discovery:
+// every non-terminal state (queued/identifying/running/paused) must be
+// included, every terminal state excluded, and results aren't scoped
+// to one disc or drive — CancelAll needs every wedged job across the
+// whole system, not just one.
+func TestStore_ListActiveJobIDs(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	prof := newProfile(t, s, "CD-FLAC", state.DiscTypeAudioCD)
+	disc := newDisc(t, s, drv)
+
+	active := map[state.JobState]string{}
+	for _, st := range []state.JobState{
+		state.JobStateQueued, state.JobStateIdentifying,
+		state.JobStateRunning, state.JobStatePaused,
+	} {
+		j := newJob(t, s, drv, prof, disc)
+		if st != state.JobStateQueued {
+			if err := s.UpdateJobState(ctx, j.ID, st, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		active[st] = j.ID
+	}
+	for _, st := range []state.JobState{
+		state.JobStateDone, state.JobStateFailed,
+		state.JobStateCancelled, state.JobStateInterrupted,
+	} {
+		j := newJob(t, s, drv, prof, disc)
+		if err := s.UpdateJobState(ctx, j.ID, st, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ids, err := s.ListActiveJobIDs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id] = true
+	}
+	for st, id := range active {
+		if !got[id] {
+			t.Errorf("ListActiveJobIDs missing job in state %q", st)
+		}
+	}
+	if len(ids) != len(active) {
+		t.Errorf("ListActiveJobIDs = %d ids, want %d (terminal-state jobs leaked in)", len(ids), len(active))
+	}
+}
+
 func TestStore_Job_MarkInterrupted(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()

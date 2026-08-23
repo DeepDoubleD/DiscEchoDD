@@ -188,6 +188,74 @@ func TestOrchestrator_Cancel(t *testing.T) {
 	}
 }
 
+// TestOrchestrator_CancelAll is the kill-switch test: one job actually
+// running (in the in-memory cancels map) and one still queued behind
+// it on the same drive (per-drive serialization) must both end up
+// cancelled from a single CancelAll call. The queued job never gets an
+// entry in o.cancels, so this also verifies CancelAll's per-job Cancel
+// reuse correctly falls through to the store-flip path for it, not
+// just the happy path a single in-flight job would exercise.
+func TestOrchestrator_CancelAll(t *testing.T) {
+	store, bc, h := openOrch(t)
+	defer bc.Close()
+	h.delay = 5 * time.Second
+	h.startedCh = make(chan struct{}, 1)
+	reg := pipelines.NewRegistry()
+	reg.Register(h)
+
+	o := jobs.NewOrchestrator(jobs.OrchestratorConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg,
+	})
+	t.Cleanup(o.Close)
+
+	_, disc, prof := seedJobInputs(t, store)
+	running, err := o.Submit(context.Background(), disc.ID, prof.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := o.Submit(context.Background(), disc.ID, prof.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-h.startedCh // first job is now running; second is still queued
+
+	n, err := o.CancelAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("CancelAll count = %d, want 2", n)
+	}
+	if err := waitJobState(store, running.ID, state.JobStateCancelled, 1*time.Second); err != nil {
+		t.Errorf("running job: %v", err)
+	}
+	if err := waitJobState(store, queued.ID, state.JobStateCancelled, 1*time.Second); err != nil {
+		t.Errorf("queued job: %v", err)
+	}
+}
+
+// TestOrchestrator_CancelAll_NoActiveJobs covers the empty case: no
+// active jobs anywhere shouldn't error, just report zero.
+func TestOrchestrator_CancelAll_NoActiveJobs(t *testing.T) {
+	store, bc, h := openOrch(t)
+	defer bc.Close()
+	reg := pipelines.NewRegistry()
+	reg.Register(h)
+
+	o := jobs.NewOrchestrator(jobs.OrchestratorConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg,
+	})
+	t.Cleanup(o.Close)
+
+	n, err := o.CancelAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("CancelAll count = %d, want 0", n)
+	}
+}
+
 func TestOrchestrator_HandlerFailureMarksFailed(t *testing.T) {
 	store, bc, h := openOrch(t)
 	defer bc.Close()

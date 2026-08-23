@@ -607,6 +607,30 @@ func (s *Store) DiscHasActiveJob(ctx context.Context, discID string) (bool, erro
 	return n > 0, nil
 }
 
+// ListActiveJobIDs returns the ids of every job in a non-terminal state
+// (queued / identifying / running / paused), across all discs and
+// drives. Used by the kill-switch (POST /api/jobs/cancel-all) to find
+// every job worth cancelling without the caller needing to know which
+// drives currently have something in flight.
+func (s *Store) ListActiveJobIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.Conn().QueryContext(ctx, `
+		SELECT id FROM jobs
+		WHERE state IN ('queued','identifying','running','paused')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // DeleteDisc removes a disc row by id. Returns ErrNotFound when no row
 // matches. jobs.disc_id is ON DELETE CASCADE (foreign keys are enabled
 // on this connection, see db.go), so any job history for the disc is
