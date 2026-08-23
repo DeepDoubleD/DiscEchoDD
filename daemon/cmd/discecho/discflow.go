@@ -106,11 +106,12 @@ func (df *discFlow) handle(ev drive.Uevent) {
 		if err := df.store.UpdateDriveState(ctx, drv.ID, state.DriveStateIdle); err != nil {
 			slog.Warn("disc-flow: settle drive idle on eject", "err", err, "drive_id", drv.ID)
 		}
-		// Mirror the API eject path: drop the orphan awaiting-decision disc
-		// so the dashboard's computed Drive.CurrentDiscID stops resolving
-		// to a phantom card after a physical eject. Discs with job history
-		// (failed/cancelled retry-intent) are kept.
-		df.dropOrphanDiscOnDrive(ctx, drv.ID)
+		// Mirror the API eject path: drop the disc bound to this drive if
+		// it's safe (no job in flight) and sensible (jobless, failed,
+		// cancelled, or interrupted -- not a completed rip) to clear, so
+		// the dashboard's computed Drive.CurrentDiscID stops resolving to
+		// a phantom "asking for a decision" card after a physical eject.
+		df.dropClearableDiscOnDrive(ctx, drv.ID)
 		df.bc.Publish(state.Event{
 			Name:    "drive.changed",
 			Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
@@ -290,22 +291,23 @@ func (df *discFlow) reuseDiscRow(ctx context.Context, existing, disc *state.Disc
 	return nil
 }
 
-// dropOrphanDiscOnDrive deletes the awaiting-decision (no jobs) disc
-// bound to driveID and broadcasts disc.deleted so the webui drops it
-// from its $discs map. No-op when nothing matches. Idempotent — safe to
-// race against the API EjectDrive path (which calls the same cleanup
-// helper in daemon/api on the user's button click).
-func (df *discFlow) dropOrphanDiscOnDrive(ctx context.Context, driveID string) {
-	discID, err := df.store.OrphanDiscOnDrive(ctx, driveID)
+// dropClearableDiscOnDrive deletes the disc bound to driveID if
+// ClearableDiscOnDrive says it's safe and sensible to (see its doc
+// comment), and broadcasts disc.deleted so the webui drops it from its
+// $discs map. No-op when nothing matches. Idempotent — safe to race
+// against the API EjectDrive path (which calls the same cleanup helper
+// in daemon/api on the user's button click).
+func (df *discFlow) dropClearableDiscOnDrive(ctx context.Context, driveID string) {
+	discID, err := df.store.ClearableDiscOnDrive(ctx, driveID)
 	if err != nil {
-		slog.Warn("disc-flow: lookup orphan disc on eject", "err", err, "drive_id", driveID)
+		slog.Warn("disc-flow: lookup clearable disc on eject", "err", err, "drive_id", driveID)
 		return
 	}
 	if discID == "" {
 		return
 	}
 	if err := df.store.DeleteDisc(ctx, discID); err != nil && !errors.Is(err, state.ErrNotFound) {
-		slog.Warn("disc-flow: delete orphan disc on eject", "err", err, "disc_id", discID)
+		slog.Warn("disc-flow: delete clearable disc on eject", "err", err, "disc_id", discID)
 		return
 	}
 	df.bc.Publish(state.Event{

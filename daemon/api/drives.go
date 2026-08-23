@@ -90,12 +90,13 @@ func (h *Handlers) EjectDrive(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// Drop the orphan disc bound to this drive (no jobs ever attached) so
-	// the dashboard's computed Drive.CurrentDiscID stops resolving to a
-	// phantom card after eject. Discs with job history are kept — failed/
-	// cancelled rows preserve retry intent in AwaitingDecisionList. Errors
-	// here are non-fatal: the eject itself already succeeded.
-	dropOrphanDiscOnDrive(r.Context(), h.Store, h.Broadcaster, drv.ID)
+	// Drop the disc bound to this drive if it's safe to (no job in
+	// flight) and sensible to (jobless, failed, cancelled, or interrupted
+	// -- not a completed rip worth keeping) so the dashboard's computed
+	// Drive.CurrentDiscID stops resolving to a phantom "asking for a
+	// decision" card after eject. Errors here are non-fatal: the eject
+	// itself already succeeded.
+	dropClearableDiscOnDrive(r.Context(), h.Store, h.Broadcaster, drv.ID)
 	if h.Broadcaster != nil {
 		h.Broadcaster.Publish(state.Event{
 			Name:    "drive.changed",
@@ -105,24 +106,25 @@ func (h *Handlers) EjectDrive(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// dropOrphanDiscOnDrive deletes the awaiting-decision (no jobs) disc bound
-// to driveID and broadcasts disc.deleted so the webui drops it from its
+// dropClearableDiscOnDrive deletes the disc bound to driveID if
+// ClearableDiscOnDrive says it's safe and sensible to (see its doc
+// comment), and broadcasts disc.deleted so the webui drops it from its
 // $discs map. No-op when nothing matches. Idempotent — safe to call from
 // both the API eject endpoint and any other cleanup site.
-func dropOrphanDiscOnDrive(ctx context.Context, store *state.Store, bc *state.Broadcaster, driveID string) {
+func dropClearableDiscOnDrive(ctx context.Context, store *state.Store, bc *state.Broadcaster, driveID string) {
 	if store == nil {
 		return
 	}
-	discID, err := store.OrphanDiscOnDrive(ctx, driveID)
+	discID, err := store.ClearableDiscOnDrive(ctx, driveID)
 	if err != nil {
-		slog.Warn("eject: lookup orphan disc", "err", err, "drive_id", driveID)
+		slog.Warn("eject: lookup clearable disc", "err", err, "drive_id", driveID)
 		return
 	}
 	if discID == "" {
 		return
 	}
 	if err := store.DeleteDisc(ctx, discID); err != nil && !errors.Is(err, state.ErrNotFound) {
-		slog.Warn("eject: delete orphan disc", "err", err, "disc_id", discID)
+		slog.Warn("eject: delete clearable disc", "err", err, "disc_id", discID)
 		return
 	}
 	if bc != nil {

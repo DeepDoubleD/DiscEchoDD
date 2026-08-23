@@ -603,17 +603,22 @@ func (s *Store) DeleteDisc(ctx context.Context, id string) error {
 	return nil
 }
 
-// OrphanDiscOnDrive returns the id of the most-recent disc bound to driveID
-// that has no job history (the truly-orphan awaiting-decision case).
-// Returns "" + nil when nothing matches.
+// ClearableDiscOnDrive returns the id of the most-recent disc bound to
+// driveID that's both safe and sensible to auto-clear on eject (physical
+// removal or the explicit Eject button):
 //
-// Used by the eject paths (API + udev removal branch) to clean up so the
-// dashboard's computed Drive.CurrentDiscID stops resolving to a phantom
-// disc after the user ejects without ripping. Discs with any job history
-// (including failed/cancelled/interrupted retry-intent rows) are left
-// alone — those are already excluded from CurrentDiscByDrive when
-// terminal, and active jobs would have refused the eject upstream.
-func (s *Store) OrphanDiscOnDrive(ctx context.Context, driveID string) (string, error) {
+//   - safe: no job currently in flight (DiscHasActiveJob) -- deleting
+//     out from under a live worker would leave it writing into a spool
+//     dir whose disc row just vanished.
+//   - sensible: its lifecycle state is one that otherwise leaves the
+//     dashboard stuck "asking for a decision" -- awaiting-decision (no
+//     jobs at all), failed, cancelled, or interrupted. A disc whose
+//     latest job succeeded (done / awaiting-encode) is left alone; that's
+//     real completed/in-progress work worth keeping in history, not a
+//     dead-end prompt.
+//
+// Returns "" + nil when nothing matches.
+func (s *Store) ClearableDiscOnDrive(ctx context.Context, driveID string) (string, error) {
 	if driveID == "" {
 		return "", nil
 	}
@@ -621,7 +626,6 @@ func (s *Store) OrphanDiscOnDrive(ctx context.Context, driveID string) (string, 
 	err := s.db.Conn().QueryRowContext(ctx, `
 		SELECT id FROM discs
 		WHERE drive_id = ?
-		  AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.disc_id = discs.id)
 		ORDER BY created_at DESC
 		LIMIT 1`, driveID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -629,6 +633,22 @@ func (s *Store) OrphanDiscOnDrive(ctx context.Context, driveID string) (string, 
 	}
 	if err != nil {
 		return "", err
+	}
+	hasActive, err := s.DiscHasActiveJob(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if hasActive {
+		return "", nil
+	}
+	states, err := s.LifecycleStates(ctx, []string{id})
+	if err != nil {
+		return "", err
+	}
+	switch states[id] {
+	case DiscLifecycleAwaitingDecision, DiscLifecycleFailed, DiscLifecycleCancelled, DiscLifecycleInterrupted:
+	default:
+		return "", nil
 	}
 	return id, nil
 }

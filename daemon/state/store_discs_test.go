@@ -397,13 +397,13 @@ func TestStore_ListDiscHistory(t *testing.T) {
 	}
 }
 
-func TestStore_OrphanDiscOnDrive_ReturnsDiscWithNoJobs(t *testing.T) {
+func TestStore_ClearableDiscOnDrive_ReturnsDiscWithNoJobs(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	drv := newDrive(t, s, "/dev/sr0")
 	d := newDisc(t, s, drv)
 
-	got, err := s.OrphanDiscOnDrive(ctx, drv.ID)
+	got, err := s.ClearableDiscOnDrive(ctx, drv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,36 +412,84 @@ func TestStore_OrphanDiscOnDrive_ReturnsDiscWithNoJobs(t *testing.T) {
 	}
 }
 
-func TestStore_OrphanDiscOnDrive_SkipsDiscsWithJobHistory(t *testing.T) {
+// TestStore_ClearableDiscOnDrive_ReturnsTerminalFailureStates covers the
+// live bug this fixes: a disc whose only job failed/was cancelled/was
+// interrupted used to be left on the dashboard forever after a physical
+// eject, "asking for a decision" with no disc actually in the drive.
+// Each of these terminal-but-not-done states must now be cleared.
+func TestStore_ClearableDiscOnDrive_ReturnsTerminalFailureStates(t *testing.T) {
+	for _, st := range []state.JobState{
+		state.JobStateFailed, state.JobStateCancelled, state.JobStateInterrupted,
+	} {
+		t.Run(string(st), func(t *testing.T) {
+			s := openStore(t)
+			ctx := context.Background()
+			drv := newDrive(t, s, "/dev/sr0")
+			prof := newProfile(t, s, "CD-FLAC", state.DiscTypeAudioCD)
+			disc := newDisc(t, s, drv)
+			j := newJob(t, s, drv, prof, disc)
+			if err := s.UpdateJobState(ctx, j.ID, st, ""); err != nil {
+				t.Fatalf("update job state %s: %v", st, err)
+			}
+
+			got, err := s.ClearableDiscOnDrive(ctx, drv.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != disc.ID {
+				t.Errorf("got %q, want %q", got, disc.ID)
+			}
+		})
+	}
+}
+
+// TestStore_ClearableDiscOnDrive_SkipsDoneDisc covers the other half of
+// the same fix: a disc whose job actually succeeded must NOT be
+// auto-cleared on eject -- that's real completed work worth keeping in
+// history, not a dead-end prompt.
+func TestStore_ClearableDiscOnDrive_SkipsDoneDisc(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	drv := newDrive(t, s, "/dev/sr0")
 	prof := newProfile(t, s, "CD-FLAC", state.DiscTypeAudioCD)
-
-	// Disc with a job in any state — including terminal — must NOT be
-	// returned. The eject path leaves these alone so AwaitingDecisionList
-	// preserves the retry-intent surface for failed/cancelled rows.
-	for _, st := range []state.JobState{
-		state.JobStateDone, state.JobStateFailed,
-		state.JobStateCancelled, state.JobStateInterrupted,
-	} {
-		disc := newDisc(t, s, drv)
-		j := newJob(t, s, drv, prof, disc)
-		if err := s.UpdateJobState(ctx, j.ID, st, ""); err != nil {
-			t.Fatalf("update job state %s: %v", st, err)
-		}
+	disc := newDisc(t, s, drv)
+	j := newJob(t, s, drv, prof, disc)
+	if err := s.UpdateJobState(ctx, j.ID, state.JobStateDone, ""); err != nil {
+		t.Fatal(err)
 	}
 
-	got, err := s.OrphanDiscOnDrive(ctx, drv.ID)
+	got, err := s.ClearableDiscOnDrive(ctx, drv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "" {
-		t.Errorf("got %q, want empty", got)
+		t.Errorf("got %q, want empty (done disc must be preserved)", got)
 	}
 }
 
-func TestStore_OrphanDiscOnDrive_PicksMostRecent(t *testing.T) {
+// TestStore_ClearableDiscOnDrive_SkipsActiveJobDisc is the safety half:
+// never delete out from under a job that's still in flight.
+func TestStore_ClearableDiscOnDrive_SkipsActiveJobDisc(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	drv := newDrive(t, s, "/dev/sr0")
+	prof := newProfile(t, s, "CD-FLAC", state.DiscTypeAudioCD)
+	disc := newDisc(t, s, drv)
+	j := newJob(t, s, drv, prof, disc)
+	if err := s.UpdateJobState(ctx, j.ID, state.JobStateRunning, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.ClearableDiscOnDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty (active job must be preserved)", got)
+	}
+}
+
+func TestStore_ClearableDiscOnDrive_PicksMostRecent(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	drv := newDrive(t, s, "/dev/sr0")
@@ -450,7 +498,7 @@ func TestStore_OrphanDiscOnDrive_PicksMostRecent(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	newer := newDisc(t, s, drv)
 
-	got, err := s.OrphanDiscOnDrive(ctx, drv.ID)
+	got, err := s.ClearableDiscOnDrive(ctx, drv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,11 +507,11 @@ func TestStore_OrphanDiscOnDrive_PicksMostRecent(t *testing.T) {
 	}
 }
 
-func TestStore_OrphanDiscOnDrive_NoDiscReturnsEmpty(t *testing.T) {
+func TestStore_ClearableDiscOnDrive_NoDiscReturnsEmpty(t *testing.T) {
 	s := openStore(t)
 	drv := newDrive(t, s, "/dev/sr0")
 
-	got, err := s.OrphanDiscOnDrive(context.Background(), drv.ID)
+	got, err := s.ClearableDiscOnDrive(context.Background(), drv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,9 +520,9 @@ func TestStore_OrphanDiscOnDrive_NoDiscReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestStore_OrphanDiscOnDrive_EmptyDriveID(t *testing.T) {
+func TestStore_ClearableDiscOnDrive_EmptyDriveID(t *testing.T) {
 	s := openStore(t)
-	got, err := s.OrphanDiscOnDrive(context.Background(), "")
+	got, err := s.ClearableDiscOnDrive(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

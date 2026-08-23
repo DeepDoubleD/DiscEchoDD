@@ -180,12 +180,15 @@ func TestEjectDrive_DropsOrphanDiscBoundToDrive(t *testing.T) {
 	}
 }
 
-func TestEjectDrive_KeepsDiscWithJobHistory(t *testing.T) {
+// TestEjectDrive_ClearsFailedJobDisc reproduces the live bug this fixes:
+// a disc whose only job failed used to survive Eject forever, leaving
+// the dashboard "asking for a decision" for a drive that's now empty.
+// Eject must now clear it, same as a truly jobless disc.
+func TestEjectDrive_ClearsFailedJobDisc(t *testing.T) {
 	h := apitestServer(t)
 	d := seedDrive(t, h)
 	p := seedProfile(t, h)
 	disc := seedDisc(t, h, d.ID)
-	// Failed job → retry-intent; eject must NOT delete the disc.
 	if err := h.Store.CreateJob(context.Background(), &state.Job{
 		DiscID: disc.ID, DriveID: d.ID, ProfileID: p.ID,
 		State: state.JobStateFailed,
@@ -206,13 +209,54 @@ func TestEjectDrive_KeepsDiscWithJobHistory(t *testing.T) {
 		t.Fatalf("status %d", w.Code)
 	}
 
-	if _, err := h.Store.GetDisc(context.Background(), disc.ID); err != nil {
-		t.Errorf("disc with failed job should be kept; got err=%v", err)
+	if _, err := h.Store.GetDisc(context.Background(), disc.ID); err == nil {
+		t.Errorf("disc with failed job should be cleared on eject")
 	}
 
+	var sawDelete bool
+	for _, ev := range drainBroadcast(t, ch, 2) {
+		if ev.Name == "disc.deleted" {
+			sawDelete = true
+		}
+	}
+	if !sawDelete {
+		t.Errorf("want disc.deleted broadcast for cleared failed-job disc")
+	}
+}
+
+// TestEjectDrive_KeepsDoneDisc: a disc whose job succeeded is real
+// completed work, not a dead-end prompt -- Eject must leave it alone.
+func TestEjectDrive_KeepsDoneDisc(t *testing.T) {
+	h := apitestServer(t)
+	d := seedDrive(t, h)
+	p := seedProfile(t, h)
+	disc := seedDisc(t, h, d.ID)
+	if err := h.Store.CreateJob(context.Background(), &state.Job{
+		DiscID: disc.ID, DriveID: d.ID, ProfileID: p.ID,
+		State: state.JobStateDone,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.Ejector = func(_ context.Context, _ string) error { return nil }
+
+	ch, cancel := h.Broadcaster.Subscribe(8)
+	defer cancel()
+
+	r := chi.NewRouter()
+	r.Post("/api/drives/{id}/eject", h.EjectDrive)
+	req := httptest.NewRequest(http.MethodPost, "/api/drives/"+d.ID+"/eject", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status %d", w.Code)
+	}
+
+	if _, err := h.Store.GetDisc(context.Background(), disc.ID); err != nil {
+		t.Errorf("disc with done job should be kept; got err=%v", err)
+	}
 	for _, ev := range drainBroadcast(t, ch, 1) {
 		if ev.Name == "disc.deleted" {
-			t.Errorf("unexpected disc.deleted broadcast for disc with job history")
+			t.Errorf("unexpected disc.deleted broadcast for done disc")
 		}
 	}
 }

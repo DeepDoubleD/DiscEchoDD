@@ -65,10 +65,10 @@ func TestDiscFlow_Eject_SettlesIdleAndClearsError(t *testing.T) {
 }
 
 // Physical eject (drive-button press) fires the same media-change uevent
-// as the API eject path; the discflow handler must also drop the orphan
-// awaiting-decision disc bound to the drive so the dashboard's computed
+// as the API eject path; the discflow handler must also drop the
+// jobless disc bound to the drive so the dashboard's computed
 // Drive.CurrentDiscID stops resolving to a phantom card.
-func TestDiscFlow_Eject_DropsOrphanDiscOnDrive(t *testing.T) {
+func TestDiscFlow_Eject_DropsClearableDiscOnDrive(t *testing.T) {
 	store := newDiscFlowTestStore(t)
 	ctx := context.Background()
 	drv := &state.Drive{DevPath: "/dev/sr0", Model: "X", Bus: "sr0", State: state.DriveStateIdle, LastSeenAt: time.Now()}
@@ -110,5 +110,43 @@ loop:
 	}
 	if !sawDelete {
 		t.Errorf("no disc.deleted broadcast for orphan disc on eject")
+	}
+}
+
+// TestDiscFlow_Eject_DropsFailedDisc reproduces the live bug this
+// feature fixes: physically pulling a disc whose only rip attempt
+// failed used to leave its card on the dashboard forever, "asking for
+// a decision" with nothing actually in the drive. A physical eject must
+// now clear it, same as a jobless disc.
+func TestDiscFlow_Eject_DropsFailedDisc(t *testing.T) {
+	store := newDiscFlowTestStore(t)
+	ctx := context.Background()
+	drv := &state.Drive{DevPath: "/dev/sr0", Model: "X", Bus: "sr0", State: state.DriveStateIdle, LastSeenAt: time.Now()}
+	if err := store.UpsertDrive(ctx, drv); err != nil {
+		t.Fatal(err)
+	}
+	prof := &state.Profile{DiscType: state.DiscTypeAudioCD, Name: "p", Engine: "whipper", Format: "FLAC"}
+	if err := store.CreateProfile(ctx, prof); err != nil {
+		t.Fatal(err)
+	}
+	disc := &state.Disc{DriveID: drv.ID, Type: state.DiscTypeAudioCD, Title: "Failed Rip"}
+	if err := store.CreateDisc(ctx, disc); err != nil {
+		t.Fatal(err)
+	}
+	job := &state.Job{DiscID: disc.ID, DriveID: drv.ID, ProfileID: prof.ID}
+	if err := store.CreateJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateJobState(ctx, job.ID, state.JobStateFailed, "disc read error"); err != nil {
+		t.Fatal(err)
+	}
+
+	bc := state.NewBroadcaster()
+	t.Cleanup(bc.Close)
+	df := &discFlow{store: store, bc: bc, identifyDur: 5 * time.Second}
+	df.handle(ejectUevent())
+
+	if _, err := store.GetDisc(ctx, disc.ID); err == nil {
+		t.Errorf("failed-job disc still present after physical eject")
 	}
 }
