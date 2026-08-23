@@ -173,6 +173,21 @@ export function handleSSEEvent(name: string, payload: unknown): void {
       const d = p.disc as Disc;
       discs.update((m) => ({ ...m, [d.id]: d }));
       pendingDiscID.set(d.id);
+      // A newly detected disc always has no terminal job yet, so it
+      // matches the server's own CurrentDiscByDrive definition (see
+      // state/store.go) -- update the owning drive's current_disc_id
+      // immediately rather than leaving it stale until the next full
+      // /api/state fetch. Without this, a drive that already had a
+      // finished disc's id cached kept showing that old disc/type
+      // until a hard page reload, even while a brand new disc was
+      // actively identifying or ripping on the same drive (confirmed
+      // live: swapping Wii -> PS2 on the same drive).
+      if (d.drive_id) {
+        const driveID = d.drive_id;
+        drives.update((arr) =>
+          arr.map((dr) => (dr.id === driveID ? { ...dr, current_disc_id: d.id } : dr)),
+        );
+      }
       break;
     }
 
@@ -190,6 +205,12 @@ export function handleSSEEvent(name: string, payload: unknown): void {
         return rest;
       });
       pendingDiscID.update((cur) => (cur === id ? null : cur));
+      // Clear the reference from whichever drive still pointed at this
+      // disc as current -- mirrors the disc.detected patch above so a
+      // deleted disc's id can't linger and resolve to nothing.
+      drives.update((arr) =>
+        arr.map((dr) => (dr.current_disc_id === id ? { ...dr, current_disc_id: undefined } : dr)),
+      );
       break;
     }
 

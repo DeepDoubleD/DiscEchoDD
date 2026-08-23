@@ -164,6 +164,31 @@ describe('handleSSEEvent', () => {
     expect(get(pendingDiscID)).toBe('disc-1');
   });
 
+  // Live bug: swapping discs on the same drive (Wii finished -> PS2
+  // inserted) left the dashboard showing the old disc/type until a
+  // hard page reload, because current_disc_id is only ever set from a
+  // full /api/state snapshot -- no drive.changed payload carries it
+  // (see daemon/state/store.go's CurrentDiscByDrive doc comment).
+  it('disc.detected updates the owning drive current_disc_id', () => {
+    drives.set([{ ...seedDrive, current_disc_id: 'stale-old-disc' }]);
+    handleSSEEvent('disc.detected', { disc: seedDisc });
+    expect(get(drives)[0].current_disc_id).toBe('disc-1');
+  });
+
+  it('disc.detected leaves other drives current_disc_id untouched', () => {
+    drives.set([seedDrive, { ...seedDrive, id: 'd2', current_disc_id: 'other-disc' }]);
+    handleSSEEvent('disc.detected', { disc: seedDisc });
+    expect(get(drives).find((d) => d.id === 'd2')?.current_disc_id).toBe('other-disc');
+  });
+
+  it('disc.deleted clears current_disc_id from the drive that pointed at it', () => {
+    drives.set([{ ...seedDrive, current_disc_id: 'disc-1' }]);
+    discs.set({ 'disc-1': seedDisc });
+    handleSSEEvent('disc.deleted', { disc_id: 'disc-1' });
+    expect(get(discs)['disc-1']).toBeUndefined();
+    expect(get(drives)[0].current_disc_id).toBeUndefined();
+  });
+
   it('disc.identified replaces disc with full candidates', () => {
     discs.set({ 'disc-1': { ...seedDisc, candidates: [] } });
     pendingDiscID.set('disc-1');
