@@ -2,7 +2,7 @@
 
   <!--
     Cli is DiscEcho's own thin wrapper around the vendored Ps3DiscDumper
-    library (see ../Ps3DiscDumper/Dumper.cs) -- not part of upstream
+    library (see ../Ps3DiscDumper/Dumper.cs), not part of upstream
     13xforever/ps3-disc-dumper. Upstream ships only an Avalonia GUI
     project (UI.Avalonia); this gives the daemon something it can shell
     out to and parse stdout from, matching how it already drives
