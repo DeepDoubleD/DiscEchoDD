@@ -34,6 +34,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/saturn"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/uhd"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/vcd"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/wii"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/xbox"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/xbox360"
 	"github.com/jumpingmushroom/DiscEcho/daemon/settings"
@@ -416,6 +417,15 @@ func main() {
 		Redumper:       redumperTool,
 		Xbox360Prober:  xbox360Prober,
 		FSProber:       fsProber,
+		RedumpDB:       redumpDB,
+		Tools:          toolReg,
+		LibraryRoot:    cfg.LibraryGames,
+		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
+		URLsForTrigger: urlsForTrigger,
+		ShouldEject:    shouldEjectOnFinish,
+	}))
+	pipeReg.Register(wii.New(wii.Deps{
+		Redumper:       redumperTool,
 		RedumpDB:       redumpDB,
 		Tools:          toolReg,
 		LibraryRoot:    cfg.LibraryGames,

@@ -18,6 +18,7 @@ const (
 	DiscTypePS2      DiscType = "PS2"
 	DiscTypeXBOX     DiscType = "XBOX"
 	DiscTypeXBOX360  DiscType = "XBOX360"
+	DiscTypeWII      DiscType = "WII"
 	DiscTypeSAT      DiscType = "SAT"
 	DiscTypeDC       DiscType = "DC"
 	DiscTypeSegaCD   DiscType = "SEGACD"

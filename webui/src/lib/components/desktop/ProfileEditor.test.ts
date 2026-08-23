@@ -219,6 +219,15 @@ describe('ProfileEditor', () => {
       container: 'ISO',
       format: 'ISO',
     };
+    const wii: Profile = {
+      ...seed,
+      id: 'p-wii',
+      disc_type: 'WII',
+      name: 'WII-ISO',
+      engine: 'redumper',
+      container: 'ISO',
+      format: 'ISO',
+    };
 
     it('shows the UHD hardware/setup requirements with links', () => {
       const { getByText, container } = render(ProfileEditor, { profile: uhd, creating: false });
@@ -244,6 +253,16 @@ describe('ProfileEditor', () => {
       expect(getByText(/Requires special drive firmware/i)).toBeInTheDocument();
       expect(container.textContent).toMatch(/OmniDrive/);
       expect(container.textContent).toMatch(/XGD2\/XGD3/);
+      expect(
+        container.querySelector('a[href="https://wiki.redump.info/index.php?title=OmniDrive"]'),
+      ).not.toBeNull();
+    });
+
+    it('shows the Wii OmniDrive + manual-override requirement with a firmware link', () => {
+      const { getByText, container } = render(ProfileEditor, { profile: wii, creating: false });
+      expect(getByText(/Requires special drive firmware/i)).toBeInTheDocument();
+      expect(container.textContent).toMatch(/OmniDrive/);
+      expect(container.textContent).toMatch(/not even a table of contents/);
       expect(
         container.querySelector('a[href="https://wiki.redump.info/index.php?title=OmniDrive"]'),
       ).not.toBeNull();

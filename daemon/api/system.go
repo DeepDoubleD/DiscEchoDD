@@ -243,6 +243,7 @@ var gameDiscSystems = []struct {
 	{state.DiscTypeDC, "Dreamcast", "dc", "Sega - Dreamcast - "},
 	{state.DiscTypeXBOX, "Xbox", "xbox", "Microsoft - Xbox - "},
 	{state.DiscTypeXBOX360, "Xbox 360", "xbox360", "Microsoft - Xbox 360 - "},
+	{state.DiscTypeWII, "Wii", "wii", "Nintendo - Wii - "},
 	{state.DiscTypeSegaCD, "Sega CD", "sega-cd", "Sega - Mega CD & Sega CD - "},
 	{state.DiscType3DO, "3DO", "3do", ""},
 	{state.DiscTypePCFX, "PC-FX", "pc-fx", ""},
@@ -303,6 +304,7 @@ func (h *Handlers) buildGameDiscsInfo() *GameDiscsInfo {
 		switch {
 		case gs.sys == state.DiscTypeXBOX ||
 			gs.sys == state.DiscTypeXBOX360 ||
+			gs.sys == state.DiscTypeWII ||
 			gs.sys == state.DiscTypeSegaCD ||
 			gs.sys == state.DiscType3DO ||
 			gs.sys == state.DiscTypePCFX ||

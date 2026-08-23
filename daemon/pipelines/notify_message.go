@@ -53,7 +53,7 @@ func BuildSuccessNotification(disc *state.Disc, job *state.Job, prof *state.Prof
 		b.line("Saved to", saved)
 
 	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT,
-		state.DiscTypeDC, state.DiscTypeXBOX, state.DiscTypeXBOX360,
+		state.DiscTypeDC, state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeWII,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
 		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
 		state.DiscTypeNeoCD,
@@ -171,6 +171,8 @@ func discTypeLabel(t state.DiscType) string {
 		return "Xbox"
 	case state.DiscTypeXBOX360:
 		return "Xbox 360"
+	case state.DiscTypeWII:
+		return "Wii"
 	case state.DiscTypeSegaCD:
 		return "Sega CD"
 	case state.DiscType3DO:
@@ -336,7 +338,7 @@ func pickAttachment(disc *state.Disc, meta map[string]any) []string {
 			}
 		}
 	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT,
-		state.DiscTypeDC, state.DiscTypeXBOX, state.DiscTypeXBOX360,
+		state.DiscTypeDC, state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeWII,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
 		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
 		state.DiscTypeNeoCD,

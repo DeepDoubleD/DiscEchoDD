@@ -303,6 +303,92 @@ func TestDiscFlow_Insert_MatchingDriveProceedsToIdentify(t *testing.T) {
 	}
 }
 
+// TestDiscFlow_ClassifyFailure_BDConsoleDrive_CreatesDataCard covers the
+// live bug behind Wii/GameCube support: a stock read gets nothing at
+// all off a Wii disc (confirmed live -- not even a TOC, cd-info fails
+// outright), unlike every other format this classifier handles. Without
+// this fallback the disc silently vanishes into a drive error with no
+// card at all and no way to manually flag it as Wii. On a BD/console
+// (OmniDrive-flashed) drive, a classify failure must instead create a
+// DATA card so the user can override it via the same dropdown CD32/FM
+// Towns/Pippin already use.
+func TestDiscFlow_ClassifyFailure_BDConsoleDrive_CreatesDataCard(t *testing.T) {
+	store := newDiscFlowTestStore(t)
+	ctx := context.Background()
+	drv := &state.Drive{DevPath: "/dev/sr0", Model: "ASUS BW-16D1HT", Bus: "sr0", State: state.DriveStateIdle, LastSeenAt: time.Now()}
+	if err := store.UpsertDrive(ctx, drv); err != nil {
+		t.Fatal(err)
+	}
+
+	bc := state.NewBroadcaster()
+	t.Cleanup(bc.Close)
+	df := &discFlow{
+		store:       store,
+		bc:          bc,
+		classifier:  erroringClassifier{},
+		pipelines:   pipelines.NewRegistry(),
+		identifyDur: 5 * time.Second,
+	}
+	df.handle(insertUevent())
+
+	got, err := store.GetDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != state.DriveStateIdle {
+		t.Errorf("drive state = %q, want idle (not error -- this is handled, not a fault)", got.State)
+	}
+	discs, err := store.ListDiscsForDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discs) != 1 {
+		t.Fatalf("discs on drive = %d, want 1 (fallback DATA card)", len(discs))
+	}
+	if discs[0].Type != state.DiscTypeData {
+		t.Errorf("disc.Type = %q, want DATA (awaiting manual override)", discs[0].Type)
+	}
+}
+
+// TestDiscFlow_ClassifyFailure_NonBDConsoleDrive_StillErrors is the
+// control case: a totally unreadable disc on the Plextor (not
+// OmniDrive-capable) is a real error, not a Wii/GameCube candidate --
+// the old drive-error-only behaviour must be unchanged there.
+func TestDiscFlow_ClassifyFailure_NonBDConsoleDrive_StillErrors(t *testing.T) {
+	store := newDiscFlowTestStore(t)
+	ctx := context.Background()
+	drv := &state.Drive{DevPath: "/dev/sr0", Model: "PLEXTOR DVDR PX-716A", Bus: "sr0", State: state.DriveStateIdle, LastSeenAt: time.Now()}
+	if err := store.UpsertDrive(ctx, drv); err != nil {
+		t.Fatal(err)
+	}
+
+	bc := state.NewBroadcaster()
+	t.Cleanup(bc.Close)
+	df := &discFlow{
+		store:       store,
+		bc:          bc,
+		classifier:  erroringClassifier{},
+		pipelines:   pipelines.NewRegistry(),
+		identifyDur: 5 * time.Second,
+	}
+	df.handle(insertUevent())
+
+	got, err := store.GetDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != state.DriveStateError {
+		t.Errorf("drive state = %q, want error", got.State)
+	}
+	discs, err := store.ListDiscsForDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(discs) != 0 {
+		t.Errorf("discs on drive = %d, want 0 (no fallback card for a non-BDConsole drive)", len(discs))
+	}
+}
+
 // stubPSXHandler is the minimal pipelines.Handler needed to prove
 // Identify actually ran in TestDiscFlow_Insert_MatchingDriveProceedsToIdentify.
 type stubPSXHandler struct{}

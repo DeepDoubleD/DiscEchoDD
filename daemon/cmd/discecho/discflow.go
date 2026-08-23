@@ -158,6 +158,41 @@ func (df *discFlow) handle(ev drive.Uevent) {
 
 	dt, err := df.classifier.Classify(ctx, devPath)
 	if err != nil {
+		// A totally unreadable disc on a BD/console (OmniDrive-flashed)
+		// drive isn't necessarily broken media -- confirmed live against
+		// a real Wii disc: a stock read gets nothing at all (not even a
+		// TOC; cd-info fails outright), unlike every other format this
+		// classifier handles, which get at least a partial stock read.
+		// Without this fallback the disc silently vanishes into a drive
+		// error with no card at all, leaving no way to manually flag it
+		// as Wii/GameCube -- the same OVERRIDE_TYPES dropdown every other
+		// hard-to-classify format (CD32, FM Towns, Pippin) already uses.
+		// A non-BDConsole drive (e.g. the Plextor) keeps the old
+		// behaviour: a totally unreadable disc there is a real error,
+		// not an OmniDrive-only-format candidate.
+		if pipelines.DriveRoleForModel(drv.Model) == pipelines.DriveRoleBDConsole {
+			slog.Info("classify failed on BD/console drive; creating DATA card for manual override",
+				"dev", devPath, "err", err)
+			disc := &state.Disc{Type: state.DiscTypeData, DriveID: drv.ID}
+			if perr := df.persistDisc(ctx, disc, nil); perr != nil {
+				slog.Warn("persist unreadable-disc fallback", "err", perr)
+				df.recordDriveError(drv.ID, err.Error())
+				df.releaseDriveState(drv.ID, state.DriveStateError)
+				return
+			}
+			df.bc.Publish(state.Event{Name: "disc.detected", Payload: map[string]any{"disc": disc}})
+			df.bc.Publish(state.Event{
+				Name:    "disc.identified",
+				Payload: map[string]any{"disc": disc, "candidates": []state.Candidate{}},
+			})
+			if df.releaseDriveState(drv.ID, state.DriveStateIdle) {
+				df.bc.Publish(state.Event{
+					Name:    "drive.changed",
+					Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
+				})
+			}
+			return
+		}
 		slog.Warn("classify failed", "dev", devPath, "err", err)
 		df.recordDriveError(drv.ID, err.Error())
 		df.releaseDriveState(drv.ID, state.DriveStateError)
