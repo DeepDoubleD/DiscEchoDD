@@ -58,7 +58,7 @@ func TestApplyRankConfidence_RanksJackassCandidatesCorrectly(t *testing.T) {
 		{Title: "The Making of 'Jackass 3D'", Confidence: 8, TMDBID: 936730},
 		{Title: "Jackass 3D", Confidence: 75, TMDBID: 16290},
 	}
-	applyRankConfidence(cands, "Jackass 3")
+	applyRankConfidence(cands, "Jackass 3", "")
 	if cands[0].Title != "Jackass Volume Three" {
 		t.Errorf("top match: want Jackass Volume Three, got %q (full order: %v)",
 			cands[0].Title, titlesOf(cands))

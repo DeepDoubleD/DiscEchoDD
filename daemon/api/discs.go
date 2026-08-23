@@ -514,7 +514,9 @@ func (h *Handlers) IdentifyDisc(w http.ResponseWriter, r *http.Request) {
 		case "tv":
 			cands, err = h.TMDB.SearchTV(r.Context(), req.Query)
 		case "both":
-			cands, err = h.TMDB.SearchBoth(r.Context(), req.Query)
+			// No preference: this is an explicit manual search, so the
+			// user picks from an unbiased list rather than us guessing.
+			cands, err = h.TMDB.SearchBoth(r.Context(), req.Query, "")
 		default:
 			writeError(w, http.StatusBadRequest, "media_type must be 'movie', 'tv', or 'both'")
 			return

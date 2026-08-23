@@ -107,7 +107,10 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 	if q == "" {
 		return disc, nil, pipelines.ErrNoCandidates
 	}
-	cands, err := h.deps.TMDB.SearchBoth(ctx, q)
+	// "movie": a BD is a single disc, essentially never a full TV
+	// season release, so an exact-title tie (e.g. a movie and an
+	// unrelated same-named TV series) should favour the movie.
+	cands, err := h.deps.TMDB.SearchBoth(ctx, q, "movie")
 	if err != nil {
 		return nil, nil, fmt.Errorf("tmdb search: %w", err)
 	}

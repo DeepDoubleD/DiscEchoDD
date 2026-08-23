@@ -138,7 +138,10 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 		return disc, nil, pipelines.ErrNoCandidates
 	}
 
-	cands, err := h.deps.TMDB.SearchBoth(ctx, q)
+	// No media-type preference: DVD serves real movie AND real
+	// season/box-set profiles, with no way at identify-time (before the
+	// user picks a profile) to tell which one this disc is for.
+	cands, err := h.deps.TMDB.SearchBoth(ctx, q, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("tmdb search: %w", err)
 	}

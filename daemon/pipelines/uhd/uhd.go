@@ -119,7 +119,9 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 	if q == "" {
 		return disc, nil, pipelines.ErrNoCandidates
 	}
-	cands, err := h.deps.TMDB.SearchBoth(ctx, q)
+	// "movie": same reasoning as BDMV -- a single UHD disc is
+	// essentially never a full TV season release.
+	cands, err := h.deps.TMDB.SearchBoth(ctx, q, "movie")
 	if err != nil {
 		return nil, nil, fmt.Errorf("tmdb search: %w", err)
 	}

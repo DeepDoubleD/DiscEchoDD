@@ -28,7 +28,10 @@ type TMDBConfig struct {
 type TMDBClient interface {
 	SearchMovie(ctx context.Context, query string) ([]state.Candidate, error)
 	SearchTV(ctx context.Context, query string) ([]state.Candidate, error)
-	SearchBoth(ctx context.Context, query string) ([]state.Candidate, error)
+	// preferMediaType ("movie", "tv", or "") breaks ties between
+	// candidates that score identically on title similarity -- see the
+	// implementation's doc comment for why that matters.
+	SearchBoth(ctx context.Context, query string, preferMediaType string) ([]state.Candidate, error)
 	// MovieRuntime fetches `/movie/{id}` and returns the runtime in
 	// seconds. Returns (0, nil) when the API is not configured or
 	// TMDB doesn't know the runtime; only network / decode errors
@@ -351,7 +354,7 @@ func (c *tmdbClient) SearchMovie(ctx context.Context, query string) ([]state.Can
 	if err != nil {
 		return nil, err
 	}
-	applyRankConfidence(out, query)
+	applyRankConfidence(out, query, "")
 	return out, nil
 }
 
@@ -360,7 +363,7 @@ func (c *tmdbClient) SearchTV(ctx context.Context, query string) ([]state.Candid
 	if err != nil {
 		return nil, err
 	}
-	applyRankConfidence(out, query)
+	applyRankConfidence(out, query, "")
 	return out, nil
 }
 
@@ -368,11 +371,17 @@ func (c *tmdbClient) SearchTV(ctx context.Context, query string) ([]state.Candid
 // popularity-derived sort key (kept in Confidence at this stage),
 // caps at 5, then assigns final rank-based confidence.
 //
-// It calls c.search() directly rather than c.SearchMovie / c.SearchTV
-// because the public methods apply rankConfidence per endpoint, which
-// would erase the popularity signal needed for the cross-endpoint
-// merge.
-func (c *tmdbClient) SearchBoth(ctx context.Context, query string) ([]state.Candidate, error) {
+// preferMediaType ("movie", "tv", or "" for no preference) breaks ties
+// between candidates that score identically on title similarity --
+// e.g. a disc labeled "WATCHMEN" matches the 2009 movie, the 2019 HBO
+// series, and a 2001 short at the same 100% text similarity, and
+// TMDB's own popularity field is recency-biased enough that the newest
+// one can outrank a far more iconic older film. Callers that only ever
+// mean one media type for their disc format (BDMV/UHD are single-disc
+// formats essentially never used for a full TV season) pass that
+// preference; DVD, which has real movie AND real season/box-set
+// profiles with no way to tell which from the label alone, passes "".
+func (c *tmdbClient) SearchBoth(ctx context.Context, query string, preferMediaType string) ([]state.Candidate, error) {
 	if c.snapshot().APIKey == "" {
 		return nil, nil
 	}
@@ -406,11 +415,12 @@ func (c *tmdbClient) SearchBoth(ctx context.Context, query string) ([]state.Cand
 		return nil, fmt.Errorf("tmdb both: movie=%w; tv=%v", movieErr, tvErr)
 	}
 
-	// Pre-cap ordering: similarity to the query first, popularity
-	// (which still lives in Confidence) as tiebreaker. Keeps the
-	// best-matching candidates when there are more than tmdbCandidateCap
-	// results across the two endpoints, instead of dropping them in
-	// favour of irrelevant-but-popular titles.
+	// Pre-cap ordering: similarity to the query first, preferred media
+	// type second, popularity (which still lives in Confidence) as
+	// final tiebreaker. Keeps the best-matching candidates when there
+	// are more than tmdbCandidateCap results across the two endpoints,
+	// instead of dropping them in favour of irrelevant-but-popular
+	// titles.
 	sort.SliceStable(out, func(i, j int) bool {
 		if query != "" {
 			si := TitleSimilarity(query, out[i].Title)
@@ -419,12 +429,20 @@ func (c *tmdbClient) SearchBoth(ctx context.Context, query string) ([]state.Cand
 				return si > sj
 			}
 		}
+		if preferMediaType != "" && out[i].MediaType != out[j].MediaType {
+			if out[i].MediaType == preferMediaType {
+				return true
+			}
+			if out[j].MediaType == preferMediaType {
+				return false
+			}
+		}
 		return out[i].Confidence > out[j].Confidence
 	})
 	if len(out) > tmdbCandidateCap {
 		out = out[:tmdbCandidateCap]
 	}
-	applyRankConfidence(out, query)
+	applyRankConfidence(out, query, preferMediaType)
 	return out, nil
 }
 
@@ -461,17 +479,30 @@ func rankConfidence(rank int) int {
 // similarity is the only honest confidence signal: a weak match must
 // report a low number so the UI/user can tell it's a guess, not a hit.
 //
+// preferMediaType breaks ties between candidates tied on similarity --
+// see SearchBoth's doc comment for why that's needed. "" for callers
+// (SearchMovie/SearchTV) whose candidates are already all one media
+// type, where it would be a no-op anyway.
+//
 // Passing an empty query falls back to the old rank ladder — for tests
 // and callers that don't have a natural query (none in production
 // today), since TitleSimilarity can't score against nothing. Stable
 // sort preserves the relative order of full ties.
-func applyRankConfidence(cands []state.Candidate, query string) {
+func applyRankConfidence(cands []state.Candidate, query string, preferMediaType string) {
 	sort.SliceStable(cands, func(i, j int) bool {
 		if query != "" {
 			si := TitleSimilarity(query, cands[i].Title)
 			sj := TitleSimilarity(query, cands[j].Title)
 			if si != sj {
 				return si > sj
+			}
+		}
+		if preferMediaType != "" && cands[i].MediaType != cands[j].MediaType {
+			if cands[i].MediaType == preferMediaType {
+				return true
+			}
+			if cands[j].MediaType == preferMediaType {
+				return false
 			}
 		}
 		return cands[i].Confidence > cands[j].Confidence

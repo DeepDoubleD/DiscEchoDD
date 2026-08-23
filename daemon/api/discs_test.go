@@ -670,7 +670,7 @@ func (f *fakeTMDBForAPI) SearchMovie(_ context.Context, _ string) ([]state.Candi
 func (f *fakeTMDBForAPI) SearchTV(_ context.Context, _ string) ([]state.Candidate, error) {
 	return nil, nil
 }
-func (f *fakeTMDBForAPI) SearchBoth(_ context.Context, _ string) ([]state.Candidate, error) {
+func (f *fakeTMDBForAPI) SearchBoth(_ context.Context, _ string, _ string) ([]state.Candidate, error) {
 	return f.cands, nil
 }
 func (f *fakeTMDBForAPI) MovieRuntime(_ context.Context, _ int) (int, error) { return 0, nil }

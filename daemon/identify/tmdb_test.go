@@ -115,7 +115,7 @@ func TestTMDB_SearchBoth_MergesAndSortsAndCaps(t *testing.T) {
 	defer srv.Close()
 
 	c := identify.NewTMDBClient(identify.TMDBConfig{APIKey: "x", BaseURL: srv.URL})
-	cands, err := c.SearchBoth(context.Background(), "Friends")
+	cands, err := c.SearchBoth(context.Background(), "Friends", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +135,65 @@ func TestTMDB_SearchBoth_MergesAndSortsAndCaps(t *testing.T) {
 	if len(cands) >= 2 && cands[1].Confidence != 0 {
 		t.Errorf("unrelated-title confidence: want 0, got %d", cands[1].Confidence)
 	}
+}
+
+// TestTMDB_SearchBoth_PreferMediaType_BreaksExactTitleTies reproduces
+// the live bug: a disc labeled "WATCHMEN" matches both the 2009 movie
+// and the 2019 HBO series at identical (100%) title similarity, and
+// TMDB's popularity field is recency-biased enough that the newer TV
+// entry outranks the far more iconic older film -- exactly what
+// happened ripping the actual Blu-ray. preferMediaType must let a
+// caller that knows its disc format (BDMV/UHD: always a single-disc
+// movie in practice) break that tie deterministically.
+func TestTMDB_SearchBoth_PreferMediaType_BreaksExactTitleTies(t *testing.T) {
+	movieBody, err := os.ReadFile("testdata/tmdb-watchmen-movie.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tvBody, err := os.ReadFile("testdata/tmdb-watchmen-tv.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/search/movie") {
+			_, _ = w.Write(movieBody)
+		} else {
+			_, _ = w.Write(tvBody)
+		}
+	}))
+	defer srv.Close()
+	c := identify.NewTMDBClient(identify.TMDBConfig{APIKey: "x", BaseURL: srv.URL})
+
+	t.Run("no preference: recency-biased popularity picks the newer TV entry (the bug)", func(t *testing.T) {
+		cands, err := c.SearchBoth(context.Background(), "Watchmen", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cands[0].MediaType != "tv" {
+			t.Fatalf("got %s first, want tv (popularity-driven default)", cands[0].MediaType)
+		}
+	})
+
+	t.Run("prefer movie: BDMV/UHD callers get the film despite lower popularity", func(t *testing.T) {
+		cands, err := c.SearchBoth(context.Background(), "Watchmen", "movie")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cands[0].MediaType != "movie" || cands[0].Year != 2009 {
+			t.Errorf("got %s/%d, want movie/2009", cands[0].MediaType, cands[0].Year)
+		}
+	})
+
+	t.Run("prefer tv: explicit series intent still resolvable", func(t *testing.T) {
+		cands, err := c.SearchBoth(context.Background(), "Watchmen", "tv")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cands[0].MediaType != "tv" || cands[0].Year != 2019 {
+			t.Errorf("got %s/%d, want tv/2019", cands[0].MediaType, cands[0].Year)
+		}
+	})
 }
 
 // TestTMDB_SearchBoth_LowSignalQueryStaysLowConfidence covers the bug
@@ -157,7 +216,7 @@ func TestTMDB_SearchBoth_LowSignalQueryStaysLowConfidence(t *testing.T) {
 	defer srv.Close()
 
 	c := identify.NewTMDBClient(identify.TMDBConfig{APIKey: "x", BaseURL: srv.URL})
-	cands, err := c.SearchBoth(context.Background(), "VOLUME_ID")
+	cands, err := c.SearchBoth(context.Background(), "VOLUME_ID", "")
 	if err != nil {
 		t.Fatal(err)
 	}
