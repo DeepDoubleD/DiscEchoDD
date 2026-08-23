@@ -96,6 +96,38 @@ func TestLoadRedumpDB_LookupByMD5_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestLoadRedumpDB_MD5LookupWithoutBootCode reproduces a live bug: the
+// Xbox 360 Redump dat's ROM names carry no bracketed boot code at all
+// (just region/language parentheticals, e.g. "Halo - Reach (World)
+// (En,Ja,...).iso" -- unlike PSX/PS2/Saturn/original Xbox), so every
+// entry was silently dropped, including from the MD5 index, by a
+// single "skip the whole entry when no boot code" gate. Confirmed
+// against the real dat: a genuine Halo Reach entry whose MD5 exactly
+// matched a live rip was invisible to LookupByMD5 until this fix.
+func TestLoadRedumpDB_MD5LookupWithoutBootCode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "xbox360.dat")
+	writeDat(t, path, []datEntry{
+		{name: "Halo - Reach (World) (En,Ja,Fr,De,Es,It,Pt,Zh,Ko)", roms: []datROM{
+			{name: "Halo - Reach (World) (En,Ja,Fr,De,Es,It,Pt,Zh,Ko).iso", md5: "4d951122d42124c0bcdeb7bf1868ccfa"},
+		}},
+	})
+	db, err := identify.LoadRedumpDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := db.LookupByMD5("4d951122d42124c0bcdeb7bf1868ccfa")
+	if got == nil {
+		t.Fatal("want a hit, got nil — entry with no bracketed boot code must still be MD5-indexed")
+	}
+	if got.Title != "Halo - Reach" {
+		t.Errorf("Title = %q, want %q", got.Title, "Halo - Reach")
+	}
+	if got.BootCode != "" {
+		t.Errorf("BootCode = %q, want empty (no bracket code in this dat's ROM names)", got.BootCode)
+	}
+}
+
 func TestLoadRedumpDB_MalformedXML(t *testing.T) {
 	tmp := t.TempDir()
 	bad := filepath.Join(tmp, "bad.dat")

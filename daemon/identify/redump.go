@@ -89,10 +89,16 @@ func LoadRedumpDB(path string) (*RedumpDB, error) {
 		}
 		entry.MD5 = primary.MD5
 		entry.BootCode = parseBootCodeFromROMName(primary.Name)
-		if entry.BootCode == "" {
-			continue
+		// Indexed independently: some dats (Xbox 360's included --
+		// confirmed live, a real "Halo - Reach" entry with a correctly
+		// matching MD5 was silently dropped entirely) never embed a
+		// bracketed boot code in the ROM name at all, unlike PSX/PS2/
+		// Saturn/original Xbox. Skipping the whole entry whenever
+		// BootCode is empty meant every such dat's entries were
+		// invisible to MD5 lookup too, not just boot-code lookup.
+		if entry.BootCode != "" {
+			db.byBootCode[entry.BootCode] = entry
 		}
-		db.byBootCode[entry.BootCode] = entry
 		if entry.MD5 != "" {
 			db.byMD5[entry.MD5] = entry
 		}
