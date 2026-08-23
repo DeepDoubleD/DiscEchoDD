@@ -41,6 +41,15 @@
     void load();
   }
 
+  // Removing a single row locally avoids a full reload's flicker/scroll
+  // jump; total/pagination still reload from the server since deleting
+  // near a page boundary can shift what belongs on this page.
+  function onDeleted(e: CustomEvent<string>): void {
+    if (!resp) return;
+    resp = { ...resp, discs: resp.discs.filter((r) => r.disc.id !== e.detail) };
+    void load();
+  }
+
   function retry(): void {
     void load();
   }
@@ -100,7 +109,7 @@
       </div>
     {:else if resp}
       {#each resp.discs as row (row.disc.id)}
-        <DiscHistoryRow {row} on:navigate={(e) => gotoJob(e.detail)} />
+        <DiscHistoryRow {row} on:navigate={(e) => gotoJob(e.detail)} on:deleted={onDeleted} />
       {/each}
 
       {#if total > PAGE_SIZE}

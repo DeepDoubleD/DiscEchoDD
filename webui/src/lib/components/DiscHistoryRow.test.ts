@@ -95,6 +95,56 @@ describe('DiscHistoryRow', () => {
     expect(cancelSpy).toHaveBeenCalledWith('t1');
   });
 
+  it('shows a Delete button for done rows', () => {
+    const { getByTestId } = render(DiscHistoryRow, { props: { row: baseRow('done') } });
+    expect(getByTestId('disc-history-delete').textContent?.trim()).toBe('Delete');
+  });
+
+  it('shows a Delete button for failed rows', () => {
+    const { getByTestId } = render(DiscHistoryRow, { props: { row: baseRow('failed') } });
+    expect(getByTestId('disc-history-delete').textContent?.trim()).toBe('Delete');
+  });
+
+  it('hides Delete for in-flight rows (cannot delete an active rip)', () => {
+    const { queryByTestId } = render(DiscHistoryRow, {
+      props: { row: baseRow('encoding', { latest_transcode_job_id: 't1' }) },
+    });
+    expect(queryByTestId('disc-history-delete')).toBeNull();
+  });
+
+  it('Delete requires a second click to confirm before calling skipDisc', async () => {
+    const skipSpy = vi.spyOn(store, 'skipDisc').mockResolvedValue(undefined);
+    const { getByTestId } = render(DiscHistoryRow, { props: { row: baseRow('done') } });
+    const btn = getByTestId('disc-history-delete');
+
+    await fireEvent.click(btn);
+    expect(skipSpy).not.toHaveBeenCalled();
+    expect(btn.textContent?.trim()).toBe('Confirm?');
+
+    await fireEvent.click(btn);
+    expect(skipSpy).toHaveBeenCalledWith('d1');
+  });
+
+  it('emits deleted(disc.id) once skipDisc resolves', async () => {
+    vi.spyOn(store, 'skipDisc').mockResolvedValue(undefined);
+    const { getByTestId, component } = render(DiscHistoryRow, { props: { row: baseRow('done') } });
+    const onDeleted = vi.fn();
+    component.$on('deleted', onDeleted);
+    const btn = getByTestId('disc-history-delete');
+    await fireEvent.click(btn);
+    await fireEvent.click(btn);
+    expect(onDeleted).toHaveBeenCalled();
+    expect(onDeleted.mock.calls[0][0].detail).toBe('d1');
+  });
+
+  it('clicking Delete does not trigger the body navigate handler', async () => {
+    const { getByTestId, component } = render(DiscHistoryRow, { props: { row: baseRow('done') } });
+    const onNav = vi.fn();
+    component.$on('navigate', onNav);
+    await fireEvent.click(getByTestId('disc-history-delete'));
+    expect(onNav).not.toHaveBeenCalled();
+  });
+
   it('keeps the truncation chain so the action button is never pushed off-screen', () => {
     const { getByTestId } = render(DiscHistoryRow, { props: { row: baseRow('done') } });
     // Body must be allowed to shrink within the outer flex row.
