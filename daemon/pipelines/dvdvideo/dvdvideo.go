@@ -348,6 +348,15 @@ func (h *Handler) runRipMakeMKV(ctx context.Context, drv *state.Drive, disc *sta
 			picked[0].ID, pipelines.HumanDuration(time.Duration(picked[0].DurationSec)*time.Second))
 	}
 
+	var neededBytes int64
+	for _, t := range picked {
+		neededBytes += t.SizeBytes
+	}
+	if err := pipelines.CheckSpoolSpace(ripDir, neededBytes); err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, err
+	}
+
 	ripStart := time.Now()
 	for i, t := range picked {
 		sink.OnLog(state.LogLevelInfo, "MakeMKV: ripping title %d (%s)",

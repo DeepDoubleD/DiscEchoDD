@@ -244,6 +244,14 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, err
 	}
+	var neededBytes int64
+	for _, t := range picked {
+		neededBytes += t.SizeBytes
+	}
+	if err := pipelines.CheckSpoolSpace(ripDir, neededBytes); err != nil {
+		sink.OnStepFailed(state.StepRip, err)
+		return pipelines.RipResult{}, err
+	}
 	ripStart := time.Now()
 	for i, t := range picked {
 		titleSink := pipelines.NewMultiTitleSink(ripStepSink, i+1, len(picked), ripStart)
