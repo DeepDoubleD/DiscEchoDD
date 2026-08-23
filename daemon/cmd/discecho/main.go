@@ -136,12 +136,13 @@ func main() {
 	xbox360Prober := &xbox360.IsoinfoXbox360Prober{Bin: cfg.IsoInfoBin}
 	fsProber := identify.NewFSProber(identify.FSProberConfig{IsoInfoBin: cfg.IsoInfoBin})
 	classifier := identify.NewClassifier(identify.ClassifierConfig{
-		CDInfoBin:       cfg.CDInfoBin,
-		FSProber:        fsProber,
-		BDProber:        bdProber,
-		SystemCNFProber: sysCNFProber,
-		CDGameProber:    identify.NewDevCDGameProber(),
-		XboxProber:      xboxProber,
+		CDInfoBin:          cfg.CDInfoBin,
+		FSProber:           fsProber,
+		BDProber:           bdProber,
+		SystemCNFProber:    sysCNFProber,
+		CDGameProber:       identify.NewDevCDGameProber(),
+		XboxProber:         xboxProber,
+		Xbox360DecoyProber: identify.NewXbox360DecoyProber(identify.Xbox360DecoyProberConfig{IsoInfoBin: cfg.IsoInfoBin}),
 	})
 
 	// urlsForTrigger is shared by every pipeline — looks up the

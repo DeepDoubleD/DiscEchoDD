@@ -246,14 +246,15 @@ type CDGameProber interface {
 // default binaries. SaturnProber, XboxProber, DCProber, and CDGameProber
 // are optional; when nil those branches are skipped.
 type ClassifierConfig struct {
-	CDInfoBin       string          // default "cd-info"
-	FSProber        FSProber        // default NewFSProber({}) — distinguishes DVD/BDMV/DATA
-	BDProber        BDProber        // default NewBDProber({}) — distinguishes BDMV vs UHD
-	SystemCNFProber SystemCNFProber // default NewSystemCNFProber("") — distinguishes PSX vs PS2
-	SaturnProber    SaturnProber    // optional — detects Sega Saturn via IP.BIN
-	XboxProber      XboxProber      // optional — detects Xbox via default.xbe
-	DCProber        DCProber        // optional — detects Dreamcast via GD-ROM TOC heuristic
-	CDGameProber    CDGameProber    // optional — detects CD consoles via data-track magic
+	CDInfoBin          string             // default "cd-info"
+	FSProber           FSProber           // default NewFSProber({}) — distinguishes DVD/BDMV/DATA
+	BDProber           BDProber           // default NewBDProber({}) — distinguishes BDMV vs UHD
+	SystemCNFProber    SystemCNFProber    // default NewSystemCNFProber("") — distinguishes PSX vs PS2
+	SaturnProber       SaturnProber       // optional — detects Sega Saturn via IP.BIN
+	XboxProber         XboxProber         // optional — detects Xbox via default.xbe
+	DCProber           DCProber           // optional — detects Dreamcast via GD-ROM TOC heuristic
+	CDGameProber       CDGameProber       // optional — detects CD consoles via data-track magic
+	Xbox360DecoyProber Xbox360DecoyProber // optional — last-resort Xbox 360 PVD fingerprint
 
 	// CDInfoBackoff overrides the per-attempt wait schedule between
 	// retries. nil → use the production schedule (~13 s total). A
@@ -288,6 +289,7 @@ func NewClassifier(c ClassifierConfig) Classifier {
 		xbox:      c.XboxProber,
 		dc:        c.DCProber,
 		cdGame:    c.CDGameProber,
+		xgdDecoy:  c.Xbox360DecoyProber,
 		runner:    defaultCDInfoRunner,
 		backoff:   backoff,
 	}
@@ -302,6 +304,7 @@ type multiProbeClassifier struct {
 	xbox      XboxProber
 	dc        DCProber
 	cdGame    CDGameProber
+	xgdDecoy  Xbox360DecoyProber
 	runner    cdInfoRunner
 	backoff   []time.Duration
 }
@@ -338,7 +341,7 @@ func (c *multiProbeClassifier) Classify(ctx context.Context, devPath string) (st
 		// permanently mis-labelled. See retryingSystemCNFProber.
 		sysCNF = &retryingSystemCNFProber{inner: c.sysCNF, backoff: c.backoff}
 	}
-	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.dc, c.cdGame, devPath), nil
+	return RefineDiscType(ctx, base, fs, c.bd, sysCNF, c.saturn, c.xbox, c.dc, c.cdGame, c.xgdDecoy, devPath), nil
 }
 
 func (c *multiProbeClassifier) runCDInfo(ctx context.Context, devPath string) ([]byte, error) {
@@ -522,10 +525,11 @@ func ClassifyFromCDInfo(s string) (state.DiscType, error) {
 //   - saturn probe ok (raw sector 0) → SAT
 //   - dc probe ok (TOC heuristic) → DC
 //   - cdGame probe ok (data-track magic) → SegaCD / 3DO / PC-FX / Jaguar / CD-i
+//   - xgdDecoy probe ok (Microsoft CDIMAGE PVD fingerprint, last resort) → XBOX360
 //   - else → DATA
 //
 // Probes that error are logged and treated as a negative result.
-func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, dc DCProber, cdGame CDGameProber, devPath string) state.DiscType {
+func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BDProber, sysCNF SystemCNFProber, saturn SaturnProber, xbox XboxProber, dc DCProber, cdGame CDGameProber, xgdDecoy Xbox360DecoyProber, devPath string) state.DiscType {
 	if base == state.DiscTypeAudioCD {
 		return state.DiscTypeAudioCD
 	}
@@ -659,6 +663,24 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 		if dt, ok := cdGame.Probe(ctx, devPath); ok {
 			slog.Info("classify: cd-game prober matched", "dev", devPath, "type", dt)
 			return dt
+		}
+	}
+	// Last resort: Xbox 360 discs whose decoy DVD layer is too sparse to
+	// carry /_SYSTEMU (some titles' decoy content is just a README.TXT,
+	// not a full branded DVD-Video structure — confirmed live). The PVD
+	// publisher/preparer/application fingerprint Microsoft's CDIMAGE
+	// mastering tool stamps on XGD discs survives regardless of what the
+	// decoy directory tree contains, since it's a fixed-location sector,
+	// not something reached by walking the tree. Runs after every more
+	// specific probe (default.xbe/XBE already claims real original Xbox
+	// discs) so this only fires when nothing else recognised the disc.
+	if xgdDecoy != nil {
+		ok, err := xgdDecoy.Probe(ctx, devPath)
+		if err != nil {
+			slog.Warn("classify: xgd decoy probe failed", "dev", devPath, "err", err)
+		} else if ok {
+			slog.Info("classify: xgd decoy PVD fingerprint matched; treating as XBOX360", "dev", devPath)
+			return state.DiscTypeXBOX360
 		}
 	}
 	// Breadcrumb: nothing recognised the disc. fs_entries==0 points at a
