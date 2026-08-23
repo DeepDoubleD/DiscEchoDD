@@ -62,6 +62,44 @@ func TestStore_Disc_CreateAndGet_RoundTripsCandidates(t *testing.T) {
 	}
 }
 
+// TestStore_Disc_CreateAllDiscTypes reproduces a live bug: the discs.
+// type column's CHECK constraint (migration 001) enumerated only the
+// disc types that existed when it was written and was never extended
+// as new console types were added -- ten types (SEGACD, 3DO, PCFX,
+// JAGCD, CDI, PCECD, NEOCD, CD32, FMTOWNS, PIPPIN) were completely
+// unable to persist a disc row, and XBOX360 hit the identical wall the
+// moment it was added ("CHECK constraint failed" on the very first
+// live Halo Reach insert). Migration 023 drops the constraint
+// entirely rather than re-extending an enum that's already failed
+// twice. This asserts every current state.DiscType round-trips.
+func TestStore_Disc_CreateAllDiscTypes(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+
+	for _, dt := range []state.DiscType{
+		state.DiscTypeAudioCD, state.DiscTypeDVD, state.DiscTypeBDMV, state.DiscTypeUHD,
+		state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeXBOX, state.DiscTypeXBOX360,
+		state.DiscTypeSAT, state.DiscTypeDC, state.DiscTypeSegaCD, state.DiscType3DO,
+		state.DiscTypePCFX, state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
+		state.DiscTypeNeoCD, state.DiscTypeCD32, state.DiscTypeFMTowns, state.DiscTypePippin,
+		state.DiscTypeVCD, state.DiscTypeData,
+	} {
+		t.Run(string(dt), func(t *testing.T) {
+			d := &state.Disc{Type: dt, Title: "Test " + string(dt)}
+			if err := s.CreateDisc(ctx, d); err != nil {
+				t.Fatalf("create disc type %s: %v", dt, err)
+			}
+			got, err := s.GetDisc(ctx, d.ID)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if got.Type != dt {
+				t.Errorf("Type = %s, want %s", got.Type, dt)
+			}
+		})
+	}
+}
+
 func TestStore_Disc_CreateWithoutDriveID(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
