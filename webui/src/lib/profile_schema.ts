@@ -160,6 +160,7 @@ export const DISC_TYPES: ReadonlyArray<string> = [
   'XBOX',
   'XBOX360',
   'WII',
+  'PS3',
   // Catch-all
   'DATA',
 ];
@@ -211,6 +212,7 @@ export const DISC_TYPE_ENGINES: Record<string, string[]> = {
   XBOX: ['redumper'],
   XBOX360: ['redumper'],
   WII: ['redumper'],
+  PS3: ['ps3dumper-cli'],
   SEGACD: ['redumper+chdman'],
   '3DO': ['redumper+chdman'],
   PCFX: ['redumper+chdman'],
@@ -376,6 +378,15 @@ export const DISC_TYPE_DEFAULTS: Record<string, DiscTypeDefault> = {
     qualityPreset: '',
     outputPathTemplate: 'Wii/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso',
   },
+  PS3: {
+    engine: 'ps3dumper-cli',
+    container: '',
+    videoCodec: '',
+    qualityPreset: '',
+    // A ps3dumper-cli dump is a decrypted folder tree, not a single
+    // file -- {{.Title}} names the folder itself.
+    outputPathTemplate: 'PS3/{{.Title}}',
+  },
   SEGACD: {
     engine: 'redumper+chdman',
     container: 'CHD',
@@ -497,6 +508,9 @@ export const OUTPUT_VARS_BY_DISC_TYPE: Record<string, OutputVar[]> = {
   XBOX: gameVars(),
   XBOX360: gameVars(),
   WII: gameVars(),
+  // No Year/Region -- PARAM.SFO gives a real Title but not a
+  // Redump-style region tag, unlike every other console here.
+  PS3: [{ name: 'Title', desc: 'Game title (from PARAM.SFO)' }],
   SEGACD: gameVars(),
   '3DO': gameVars(),
   PCFX: gameVars(),
@@ -579,6 +593,15 @@ export const DISC_TYPE_REQUIREMENTS: Record<string, DiscTypeRequirement | undefi
       'No curated boot-code fallback — identification depends entirely on a Redump "Nintendo - Wii" dat being present.',
     ],
     links: [{ label: 'OmniDrive firmware', href: 'https://wiki.redump.info/index.php?title=OmniDrive' }],
+  },
+  PS3: {
+    tone: 'info',
+    title: 'Needs a disc decryption key',
+    items: [
+      'No special drive firmware needed — PS3 discs are stock-mountable Blu-ray media; only the game content itself is encrypted.',
+      'Decryption needs a matching disc key, looked up automatically from Redump/the community IRD library and cached locally — an unrecognised disc may fail to dump if no key is available anywhere.',
+      'The dump is a decrypted folder, not a single ISO file — point RPCS3 at the title folder directly.',
+    ],
   },
   UHD: {
     tone: 'warn',

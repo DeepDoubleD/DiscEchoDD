@@ -272,6 +272,11 @@
     ) {
       return { Title: 'Final Fantasy VII', Year: 1997, Region: 'USA' };
     }
+    if (dt === 'PS3') {
+      // No Year/Region -- PARAM.SFO gives a real Title but not a
+      // Redump-style region tag, unlike every other console here.
+      return { Title: 'Kingdom Hearts' };
+    }
     if (dt === 'DATA') {
       return { Title: 'BACKUP_DISC' };
     }

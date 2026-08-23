@@ -228,6 +228,15 @@ describe('ProfileEditor', () => {
       container: 'ISO',
       format: 'ISO',
     };
+    const ps3: Profile = {
+      ...seed,
+      id: 'p-ps3',
+      disc_type: 'PS3',
+      name: 'PS3-DECRYPTED',
+      engine: 'ps3dumper-cli',
+      container: '',
+      format: 'DECRYPTED',
+    };
 
     it('shows the UHD hardware/setup requirements with links', () => {
       const { getByText, container } = render(ProfileEditor, { profile: uhd, creating: false });
@@ -266,6 +275,13 @@ describe('ProfileEditor', () => {
       expect(
         container.querySelector('a[href="https://wiki.redump.info/index.php?title=OmniDrive"]'),
       ).not.toBeNull();
+    });
+
+    it('shows the PS3 disc-key requirement (no firmware needed, unlike the others)', () => {
+      const { getByText, container } = render(ProfileEditor, { profile: ps3, creating: false });
+      expect(getByText(/Needs a disc decryption key/i)).toBeInTheDocument();
+      expect(container.textContent).toMatch(/stock-mountable/);
+      expect(container.textContent).toMatch(/IRD library/);
     });
 
     it('shows no requirements callout for an audio CD profile', () => {

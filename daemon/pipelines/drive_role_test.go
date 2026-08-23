@@ -35,6 +35,7 @@ func TestPreferredDriveRole(t *testing.T) {
 		{state.DiscTypePS2, pipelines.DriveRoleBDConsole},
 		{state.DiscTypeXBOX, pipelines.DriveRoleBDConsole},
 		{state.DiscTypeXBOX360, pipelines.DriveRoleBDConsole},
+		{state.DiscTypePS3, pipelines.DriveRoleBDConsole},
 		// No established preference: a plain movie DVD (or unclassified
 		// data disc) works fine on either drive, so nothing is enforced.
 		{state.DiscTypeDVD, ""},

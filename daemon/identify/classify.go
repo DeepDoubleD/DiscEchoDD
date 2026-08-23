@@ -533,6 +533,31 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 	if base == state.DiscTypeAudioCD {
 		return state.DiscTypeAudioCD
 	}
+
+	// Listed once, up front, so both the BD branch below and the
+	// DVD/console checks further down share the same read -- PS3 is a
+	// stock-mountable Blu-ray disc (udev reports it as BD media, same
+	// as a movie or Xbox 360's XGD), so its marker has to be checked
+	// BEFORE the mediaIsBluRay short-circuit below, or every PS3 disc
+	// misclassifies as a plain BDMV.
+	var files []string
+	if fs != nil {
+		var err error
+		files, err = fs.List(ctx, devPath)
+		if err != nil {
+			slog.Warn("classify: fs probe failed", "dev", devPath, "err", err)
+			files = nil
+		}
+	}
+	// PS3: PARAM.SFO is plaintext on every retail disc (only the game
+	// content itself is per-file encrypted) -- confirmed live via a
+	// stock isoinfo listing, no OmniDrive/raw read needed at all. Redump's
+	// PS3 dat doesn't key by product code (MD5-only, like Xbox 360's),
+	// so this is purely a classify-time marker; see pipelines/ps3 for
+	// the actual identification path.
+	if hasPath(files, "/PS3_GAME/PARAM.SFO") {
+		return state.DiscTypePS3
+	}
 	if mediaIsBluRay(devPath) {
 		slog.Info("classify: udev reports BD media; not treating as DATA", "dev", devPath)
 		if bd != nil {
@@ -548,11 +573,6 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 		return state.DiscTypeBDMV
 	}
 	if fs == nil {
-		return base
-	}
-	files, err := fs.List(ctx, devPath)
-	if err != nil {
-		slog.Warn("classify: fs probe failed", "dev", devPath, "err", err)
 		return base
 	}
 	// Xbox 360 (XGD2/XGD3): every retail disc is deliberately mastered as

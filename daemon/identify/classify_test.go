@@ -401,6 +401,51 @@ func TestRefineDiscType_Xbox360WinsOverDVD(t *testing.T) {
 	}
 }
 
+// TestRefineDiscType_PS3 covers the live-confirmed fact behind PS3
+// support: PARAM.SFO is plaintext on every retail disc (only the game
+// content itself is per-file encrypted), so a stock isoinfo listing
+// sees it -- no OmniDrive/raw read needed at all, unlike Xbox 360/Wii.
+func TestRefineDiscType_PS3(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{"/PS3_GAME", "/PS3_GAME/PARAM.SFO", "/PS3_GAME/USRDIR"}},
+		&fakeBDProber{},
+		nil, nil, nil, nil, nil,
+		nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypePS3 {
+		t.Fatalf("got %q, want PS3", got)
+	}
+}
+
+// TestRefineDiscType_PS3WinsOverBDMV is the regression test for the
+// live bug this ordering fix addresses: udev reports every PS3 disc as
+// plain BD media (mediaIsBluRay short-circuits before the filesystem
+// listing is ever consulted), so the PS3 marker check has to run
+// before that short-circuit or every real PS3 disc misclassifies as
+// BDMV. This can't fully exercise mediaIsBluRay itself (it reads live
+// udev properties, not mockable), but locks in that the marker wins
+// over a BDMV-shaped listing regardless.
+func TestRefineDiscType_PS3WinsOverBDMV(t *testing.T) {
+	got := identify.RefineDiscType(
+		context.Background(),
+		state.DiscTypeData,
+		&fakeFSProber{files: []string{
+			"/PS3_GAME", "/PS3_GAME/PARAM.SFO",
+			"/BDMV", "/BDMV/index.bdmv",
+		}},
+		&fakeBDProber{},
+		nil, nil, nil, nil, nil,
+		nil,
+		"/dev/sr0",
+	)
+	if got != state.DiscTypePS3 {
+		t.Fatalf("got %q, want PS3 (checked before /BDMV/index.bdmv)", got)
+	}
+}
+
 func TestRefineDiscType_DataFallback(t *testing.T) {
 	got := identify.RefineDiscType(
 		context.Background(),

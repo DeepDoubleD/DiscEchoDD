@@ -23,7 +23,7 @@ const igdbEnrichTimeout = 15 * time.Second
 func gameDiscForIGDB(t state.DiscType) bool {
 	switch t {
 	case state.DiscTypePSX, state.DiscTypePS2, state.DiscTypeSAT, state.DiscTypeDC,
-		state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeWII,
+		state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeWII, state.DiscTypePS3,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX, state.DiscTypeJaguarCD,
 		state.DiscTypeCDi, state.DiscTypePCECD, state.DiscTypeNeoCD,
 		state.DiscTypeCD32, state.DiscTypeFMTowns, state.DiscTypePippin:

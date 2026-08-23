@@ -315,8 +315,8 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	if gd.Status != "partial" {
 		t.Errorf("GameDiscs status = %q, want partial (empty dat dir)", gd.Status)
 	}
-	if len(gd.Systems) != 17 {
-		t.Fatalf("GameDiscs systems = %d, want 17", len(gd.Systems))
+	if len(gd.Systems) != 18 {
+		t.Fatalf("GameDiscs systems = %d, want 18", len(gd.Systems))
 	}
 	byName := map[state.DiscType]api.GameDiscSystem{}
 	for _, s := range gd.Systems {
@@ -327,7 +327,7 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	}
 	// Xbox and the CD-only consoles have no boot-code index → "na".
 	for _, sys := range []state.DiscType{
-		state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeWII,
+		state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeWII, state.DiscTypePS3,
 		state.DiscTypeSegaCD, state.DiscType3DO, state.DiscTypePCFX,
 		state.DiscTypeJaguarCD, state.DiscTypeCDi, state.DiscTypePCECD,
 		state.DiscTypeNeoCD,
@@ -342,7 +342,7 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	for sys, want := range map[state.DiscType]string{
 		state.DiscTypePSX: "psx", state.DiscTypePS2: "ps2", state.DiscTypeSAT: "saturn",
 		state.DiscTypeDC: "dc", state.DiscTypeXBOX: "xbox", state.DiscTypeXBOX360: "xbox360",
-		state.DiscTypeWII: "wii",
+		state.DiscTypeWII: "wii", state.DiscTypePS3: "ps3",
 		state.DiscTypeSegaCD: "sega-cd", state.DiscType3DO: "3do", state.DiscTypePCFX: "pc-fx",
 		state.DiscTypeJaguarCD: "jaguar-cd", state.DiscTypeCDi: "cdi",
 		state.DiscTypePCECD: "pc-engine-cd", state.DiscTypeNeoCD: "neo-geo-cd",

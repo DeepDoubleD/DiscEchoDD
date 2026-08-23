@@ -30,6 +30,7 @@ import (
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/dreamcast"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/dvdvideo"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/ps2"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/ps3"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/psx"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/saturn"
 	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines/uhd"
@@ -427,6 +428,15 @@ func main() {
 	pipeReg.Register(wii.New(wii.Deps{
 		Redumper:       redumperTool,
 		RedumpDB:       redumpDB,
+		Tools:          toolReg,
+		LibraryRoot:    cfg.LibraryGames,
+		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
+		URLsForTrigger: urlsForTrigger,
+		ShouldEject:    shouldEjectOnFinish,
+	}))
+	pipeReg.Register(ps3.New(ps3.Deps{
+		Dumper:         tools.NewPS3Dumper(cfg.PS3DumperBin),
+		KeyCacheDir:    cfg.PS3KeyCacheDir,
 		Tools:          toolReg,
 		LibraryRoot:    cfg.LibraryGames,
 		WorkRoot:       filepath.Join(cfg.DataPath, "work"),

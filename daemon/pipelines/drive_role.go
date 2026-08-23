@@ -51,7 +51,8 @@ func PreferredDriveRole(dt state.DiscType) DriveRole {
 		state.DiscTypeFMTowns, state.DiscTypePippin, state.DiscTypeVCD:
 		return DriveRoleCDPS1
 	case state.DiscTypeBDMV, state.DiscTypeUHD,
-		state.DiscTypePS2, state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeWII:
+		state.DiscTypePS2, state.DiscTypeXBOX, state.DiscTypeXBOX360, state.DiscTypeWII,
+		state.DiscTypePS3:
 		return DriveRoleBDConsole
 	default:
 		return ""
