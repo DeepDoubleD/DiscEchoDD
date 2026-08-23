@@ -125,6 +125,12 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 	if err := seedBDMVProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed BDMV profile: %w", err)
 	}
+	if err := seedBlurayDDProfiles(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed Blu-Ray DD profiles: %w", err)
+	}
+	if err := seedDVDDDProfiles(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed DVD DD profiles: %w", err)
+	}
 	if err := seedUHDProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed UHD profile: %w", err)
 	}
@@ -323,6 +329,10 @@ const (
 	dvdSeriesMakeMKVProfileName      = "DVD-Series (MakeMKV)"
 	bdProfileName                    = "BD-1080p"
 	bdExtrasProfileName              = "BD-1080p + Extras"
+	blurayDDMovieProfileName         = "Blu-Ray DD (Movies)"
+	blurayDDTVProfileName            = "Blu-Ray DD (TV)"
+	dvdDDMovieProfileName            = "DVD DD (Movies)"
+	dvdDDTVProfileName               = "DVD DD (TV)"
 	uhdProfileName                   = "UHD-Remux"
 	psxProfileName                   = "PSX-CHD"
 	ps2ProfileName                   = "PS2-CHD"
@@ -687,6 +697,167 @@ func seedBDMVProfile(ctx context.Context, store *state.Store) error {
 				"extras_max_ratio":  90,
 			},
 			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedBlurayDDProfiles adds the user's personal Blu-Ray defaults:
+// NVENC on the Quadro, archival-tier quality (RF 18 / "slower" —
+// closes most of the gap with software x265 at NVENC's speed and
+// concurrency), 1080p cap, every audio track kept but downmixed to
+// 2.0 (Japanese + English etc. all survive, just no multichannel),
+// and every text subtitle track pulled to a sidecar file so Jellyfin
+// can switch tracks with nothing burned in. "DD" in the name marks
+// these as the user's own tuned defaults, distinct from the generic
+// BD-1080p/NVENC starter profiles.
+func seedBlurayDDProfiles(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeBDMV)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for _, p := range existing {
+		have[p.Name] = true
+	}
+	now := time.Now()
+	if !have[blurayDDMovieProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:      state.DiscTypeBDMV,
+			Name:          blurayDDMovieProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "archival",
+			Container:     "MKV",
+			VideoCodec:    "nvenc_h265",
+			QualityPreset: "archival",
+			HDRPipeline:   "passthrough",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"content_type":           "movie",
+				"min_title_seconds":      3600,
+				"quality_rf":             18,
+				"encoder_preset":         "slower",
+				"max_height":             1080,
+				"stereo_audio":           true,
+				"extract_text_subtitles": true,
+			},
+			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	if !have[blurayDDTVProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:      state.DiscTypeBDMV,
+			Name:          blurayDDTVProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "archival",
+			Container:     "MKV",
+			VideoCodec:    "nvenc_h265",
+			QualityPreset: "archival",
+			HDRPipeline:   "passthrough",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"content_type":           "tv",
+				"min_title_seconds":      600,
+				"season":                 1,
+				"show_title_picker":      true,
+				"quality_rf":             18,
+				"encoder_preset":         "slower",
+				"max_height":             1080,
+				"stereo_audio":           true,
+				"extract_text_subtitles": true,
+			},
+			OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}} - S{{printf "%02d" .Season}}E{{printf "%02d" .EpisodeNumber}}{{if .EpisodeTitle}} - {{.EpisodeTitle}}{{end}}.mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// seedDVDDDProfiles is seedBlurayDDProfiles' DVD counterpart — same
+// NVENC/archival/1080p/stereo/subtitle-sidecar defaults, routed
+// through the DVD pipeline's MakeMKV+HandBrake engine instead of
+// BDMV's.
+func seedDVDDDProfiles(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeDVD)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for _, p := range existing {
+		have[p.Name] = true
+	}
+	now := time.Now()
+	if !have[dvdDDMovieProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:      state.DiscTypeDVD,
+			Name:          dvdDDMovieProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "archival",
+			Container:     "MKV",
+			VideoCodec:    "nvenc_h265",
+			QualityPreset: "archival",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"content_type":           "movie",
+				"dvd_selection_mode":     "main_feature",
+				"quality_rf":             18,
+				"encoder_preset":         "slower",
+				"max_height":             1080,
+				"stereo_audio":           true,
+				"extract_text_subtitles": true,
+			},
+			OutputPathTemplate: `{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv`,
+			Enabled:            true,
+			StepCount:          7,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}); err != nil {
+			return err
+		}
+	}
+	if !have[dvdDDTVProfileName] {
+		if err := store.CreateProfile(ctx, &state.Profile{
+			DiscType:      state.DiscTypeDVD,
+			Name:          dvdDDTVProfileName,
+			Engine:        "MakeMKV+HandBrake",
+			Format:        "MKV",
+			Preset:        "archival",
+			Container:     "MKV",
+			VideoCodec:    "nvenc_h265",
+			QualityPreset: "archival",
+			DrivePolicy:   "any",
+			Options: map[string]any{
+				"content_type":           "tv",
+				"dvd_selection_mode":     "per_title",
+				"min_title_seconds":      600,
+				"season":                 1,
+				"quality_rf":             18,
+				"encoder_preset":         "slower",
+				"max_height":             1080,
+				"stereo_audio":           true,
+				"extract_text_subtitles": true,
+			},
+			OutputPathTemplate: `{{.Show}}/Season {{printf "%02d" .Season}}/{{.Show}} - S{{printf "%02d" .Season}}E{{printf "%02d" .EpisodeNumber}}{{if .EpisodeTitle}} - {{.EpisodeTitle}}{{end}}.mkv`,
 			Enabled:            true,
 			StepCount:          7,
 			CreatedAt:          now,

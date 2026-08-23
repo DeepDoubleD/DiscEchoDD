@@ -438,6 +438,62 @@ func TestBDMVHandler_Run_ResolutionAndAudioArgsAppended(t *testing.T) {
 	}
 }
 
+// TestBDMVHandler_Run_QualityRFAndEncoderPresetApplied reproduces a
+// live gap: the profile editor's quality_preset tiers (e.g.
+// "archival") resolve to options.quality_rf + options.encoder_preset,
+// but BDMV's transcode step used to hardcode "--quality 19" and never
+// pass --encoder-preset at all, so no tier selection had any effect on
+// a Blu-ray encode. This asserts both options now flow through to the
+// actual HandBrake call.
+func TestBDMVHandler_Run_QualityRFAndEncoderPresetApplied(t *testing.T) {
+	libRoot := t.TempDir()
+	workRoot := t.TempDir()
+
+	reg, _, _, hb := newRegistry()
+	h := bdmv.New(bdmv.Deps{
+		MakeMKVScanner: &fakeMakeMKV{scanTitles: []tools.MakeMKVTitle{
+			{ID: 1, DurationSec: 7000, SourceFile: "00800.mpls"},
+		}},
+		MakeMKVRipper: &fakeMakeMKV{stubName: "title_t01.mkv"},
+		Tools:         reg,
+		LibraryRoot:   libRoot,
+		WorkRoot:      workRoot,
+	})
+	prof := &state.Profile{
+		ID:                 "p-bd-archival",
+		DiscType:           state.DiscTypeBDMV,
+		OutputPathTemplate: "{{.Title}} ({{.Year}})/{{.Title}} ({{.Year}}).mkv",
+		Options: map[string]any{
+			"min_title_seconds": float64(3600),
+			"quality_rf":        float64(18),
+			"encoder_preset":    "slower",
+		},
+	}
+	disc := &state.Disc{ID: "disc-1", Type: state.DiscTypeBDMV, Title: "Movie", Year: 2020}
+	drv := &state.Drive{ID: "d1", DevPath: "/dev/sr0"}
+
+	sink := testutil.NewRecordingSink()
+	if err := h.Run(context.Background(), drv, disc, prof, sink); err != nil {
+		t.Fatal(err)
+	}
+	if len(hb.calls) != 1 {
+		t.Fatalf("want 1 HandBrake call, got %d", len(hb.calls))
+	}
+	args := hb.calls[0]
+	for _, want := range []string{"--quality", "18", "--encoder-preset", "slower"} {
+		found := false
+		for _, a := range args {
+			if a == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("HandBrake args missing %q: %v", want, args)
+		}
+	}
+}
+
 // fakeMKVSubsForBDMV is a scripted pipelines.MKVSubtitleTool.
 type fakeMKVSubsForBDMV struct {
 	tracksCalls []string // mkvPath per Tracks() call

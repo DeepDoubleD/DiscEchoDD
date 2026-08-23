@@ -379,6 +379,15 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 		sink.OnLog(state.LogLevelWarn,
 			"NVENC requested but unavailable on host; falling back to %s software encoder", encoder)
 	}
+	// quality_rf/encoder_preset mirror dvdvideo's pattern: a profile's
+	// quality_preset tier resolves to these two options in the editor,
+	// and the pipeline reads the resolved values rather than the tier
+	// slug. Defaults (19, "slow") preserve this pipeline's previous
+	// hardcoded --quality 19 with no --encoder-preset flag for any
+	// profile that predates these options.
+	qualityRF := pipelines.IntOption(prof, "quality_rf", 19)
+	encoderPreset := pipelines.StringOption(prof, "encoder_preset", "slow")
+
 	transcodedFiles := make([]string, 0, len(rippedFiles))
 	for i, rippedFile := range rippedFiles {
 		transcodedFile := filepath.Join(result.SpoolPath, fmt.Sprintf("out_%02d.mkv", i+1))
@@ -387,7 +396,8 @@ func (h *Handler) RunTranscode(ctx context.Context, result pipelines.RipResult, 
 			"--output", transcodedFile,
 			"--format", "av_mkv",
 			"--encoder", encoder,
-			"--quality", "19",
+			"--quality", strconv.Itoa(qualityRF),
+			"--encoder-preset", encoderPreset,
 			"--all-audio",
 			"--markers",
 			// BDMV output is always MKV — keep every subtitle track the

@@ -333,8 +333,8 @@ func TestLoad_DVDProfilesSeeded(t *testing.T) {
 	}
 
 	dvds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
-	if len(dvds) != 6 {
-		t.Fatalf("want 6 DVD profiles, got %d", len(dvds))
+	if len(dvds) != 8 {
+		t.Fatalf("want 8 DVD profiles, got %d", len(dvds))
 	}
 	byName := map[string]*state.Profile{}
 	for i := range dvds {
@@ -343,6 +343,7 @@ func TestLoad_DVDProfilesSeeded(t *testing.T) {
 	for _, name := range []string{
 		"DVD-Movie", "DVD-Movie + Extras", "DVD-Series",
 		"DVD-Movie (MakeMKV)", "DVD-Movie + Extras (MakeMKV)", "DVD-Series (MakeMKV)",
+		"DVD DD (Movies)", "DVD DD (TV)",
 	} {
 		if byName[name] == nil {
 			t.Fatalf("missing seed %q; got %v", name, byName)
@@ -402,8 +403,55 @@ func TestLoad_DVDProfilesSeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	dvds2, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
-	if len(dvds2) != 6 {
+	if len(dvds2) != 8 {
 		t.Errorf("after re-Load: %d", len(dvds2))
+	}
+}
+
+// TestSeedDVDDDProfiles covers the user's personal DVD DD defaults:
+// NVENC + archival-tier quality (RF 18 / "slower") so the Quadro
+// actually gets used, 1080p cap, every audio track kept but
+// downmixed to 2.0, and text subtitles pulled to sidecars.
+func TestSeedDVDDDProfiles(t *testing.T) {
+	store := openStore(t)
+	dataDir := t.TempDir()
+	env := envFn(map[string]string{"DISCECHO_DATA": dataDir})
+	if _, err := settings.Load(env, store, "test"); err != nil {
+		t.Fatal(err)
+	}
+	dvds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
+	byName := map[string]*state.Profile{}
+	for i := range dvds {
+		byName[dvds[i].Name] = &dvds[i]
+	}
+	mv := byName["DVD DD (Movies)"]
+	if mv == nil {
+		t.Fatalf("missing DVD DD (Movies); got %v", byName)
+	}
+	if mv.VideoCodec != "nvenc_h265" {
+		t.Errorf("DVD DD (Movies) video_codec = %q, want nvenc_h265", mv.VideoCodec)
+	}
+	if rf, _ := mv.Options["quality_rf"].(float64); rf != 18 {
+		t.Errorf("DVD DD (Movies) quality_rf = %v, want 18", mv.Options["quality_rf"])
+	}
+	if p, _ := mv.Options["encoder_preset"].(string); p != "slower" {
+		t.Errorf("DVD DD (Movies) encoder_preset = %q, want slower", p)
+	}
+	if h, _ := mv.Options["max_height"].(float64); h != 1080 {
+		t.Errorf("DVD DD (Movies) max_height = %v, want 1080", mv.Options["max_height"])
+	}
+	if v, _ := mv.Options["stereo_audio"].(bool); !v {
+		t.Errorf("DVD DD (Movies) stereo_audio should be true")
+	}
+	if v, _ := mv.Options["extract_text_subtitles"].(bool); !v {
+		t.Errorf("DVD DD (Movies) extract_text_subtitles should be true")
+	}
+	tv := byName["DVD DD (TV)"]
+	if tv == nil {
+		t.Fatalf("missing DVD DD (TV); got %v", byName)
+	}
+	if ct, _ := tv.Options["content_type"].(string); ct != "tv" {
+		t.Errorf("DVD DD (TV) content_type = %q, want tv", ct)
 	}
 }
 
@@ -442,8 +490,8 @@ func TestSeedBDMVProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bds) != 2 {
-		t.Fatalf("BDMV profiles = %d, want 2 (BD-1080p, BD-1080p + Extras): %+v", len(bds), bds)
+	if len(bds) != 4 {
+		t.Fatalf("BDMV profiles = %d, want 4 (BD-1080p, BD-1080p + Extras, Blu-Ray DD (Movies), Blu-Ray DD (TV)): %+v", len(bds), bds)
 	}
 	byName := map[string]*state.Profile{}
 	for i := range bds {
@@ -477,6 +525,61 @@ func TestSeedBDMVProfile(t *testing.T) {
 	}
 	if v, _ := pe.Options["include_extras"].(bool); !v {
 		t.Errorf("BD-1080p + Extras should have include_extras=true; opts=%v", pe.Options)
+	}
+}
+
+// TestSeedBlurayDDProfiles covers the user's personal Blu-Ray DD
+// defaults: NVENC + archival-tier quality (RF 18 / "slower") so the
+// Quadro actually gets used (BDMV's transcode step used to hardcode
+// --quality 19 and ignore quality_rf/encoder_preset entirely — see
+// the fix in pipelines/bdmv/bdmv.go), 1080p cap, every audio track
+// kept but downmixed to 2.0, and text subtitles pulled to sidecars.
+func TestSeedBlurayDDProfiles(t *testing.T) {
+	store := openStore(t)
+	dataDir := t.TempDir()
+	env := envFn(map[string]string{"DISCECHO_DATA": dataDir})
+	if _, err := settings.Load(env, store, "test"); err != nil {
+		t.Fatal(err)
+	}
+	bds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeBDMV)
+	byName := map[string]*state.Profile{}
+	for i := range bds {
+		byName[bds[i].Name] = &bds[i]
+	}
+	mv := byName["Blu-Ray DD (Movies)"]
+	if mv == nil {
+		t.Fatalf("missing Blu-Ray DD (Movies); got %v", byName)
+	}
+	if mv.VideoCodec != "nvenc_h265" {
+		t.Errorf("Blu-Ray DD (Movies) video_codec = %q, want nvenc_h265", mv.VideoCodec)
+	}
+	if mv.QualityPreset != "archival" {
+		t.Errorf("Blu-Ray DD (Movies) quality_preset = %q, want archival", mv.QualityPreset)
+	}
+	if rf, _ := mv.Options["quality_rf"].(float64); rf != 18 {
+		t.Errorf("Blu-Ray DD (Movies) quality_rf = %v, want 18", mv.Options["quality_rf"])
+	}
+	if p, _ := mv.Options["encoder_preset"].(string); p != "slower" {
+		t.Errorf("Blu-Ray DD (Movies) encoder_preset = %q, want slower", p)
+	}
+	if h, _ := mv.Options["max_height"].(float64); h != 1080 {
+		t.Errorf("Blu-Ray DD (Movies) max_height = %v, want 1080", mv.Options["max_height"])
+	}
+	if v, _ := mv.Options["stereo_audio"].(bool); !v {
+		t.Errorf("Blu-Ray DD (Movies) stereo_audio should be true")
+	}
+	if v, _ := mv.Options["extract_text_subtitles"].(bool); !v {
+		t.Errorf("Blu-Ray DD (Movies) extract_text_subtitles should be true")
+	}
+	if mv.Container != "MKV" {
+		t.Errorf("Blu-Ray DD (Movies) container = %q, want MKV", mv.Container)
+	}
+	tv := byName["Blu-Ray DD (TV)"]
+	if tv == nil {
+		t.Fatalf("missing Blu-Ray DD (TV); got %v", byName)
+	}
+	if ct, _ := tv.Options["content_type"].(string); ct != "tv" {
+		t.Errorf("Blu-Ray DD (TV) content_type = %q, want tv", ct)
 	}
 }
 
@@ -530,12 +633,12 @@ func TestSeedVideoProfiles_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	bds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeBDMV)
-	if len(bds) != 2 {
-		t.Errorf("BDMV after 2 loads = %d, want 2", len(bds))
+	if len(bds) != 4 {
+		t.Errorf("BDMV after 2 loads = %d, want 4", len(bds))
 	}
 	dvds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeDVD)
-	if len(dvds) != 6 {
-		t.Errorf("DVD after 2 loads = %d, want 6", len(dvds))
+	if len(dvds) != 8 {
+		t.Errorf("DVD after 2 loads = %d, want 8", len(dvds))
 	}
 	uhds, _ := store.ListProfilesByDiscType(context.Background(), state.DiscTypeUHD)
 	if len(uhds) != 1 {
