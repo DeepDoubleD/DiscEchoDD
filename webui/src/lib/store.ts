@@ -129,6 +129,30 @@ export async function bootstrap(): Promise<void> {
   }
 }
 
+// clearCurrentDiscIfJobDone mirrors the server's own CurrentDiscByDrive
+// definition (daemon/state/store.go): a disc drops out of "current" the
+// moment ANY of its jobs reaches a terminal state, even if a split
+// pipeline's other half (e.g. the transcode child) is still running.
+// job.done/job.failed payloads only carry job_id, so the job's
+// disc_id/drive_id are looked up from the already-known $jobs store.
+//
+// Live bug this fixes: a drive whose rip auto-ejects on finish (Settings
+// -> rip.eject_on_finish) kept showing "Already ripped — Re-rip" for
+// the disc that had just physically left the tray, because nothing
+// ever told the frontend the drive's current_disc_id was stale --
+// only a hard page reload picked up the server's real (empty) value.
+function clearCurrentDiscIfJobDone(jobID: string): void {
+  const job = get(jobs).find((j) => j.id === jobID);
+  if (!job || !job.drive_id || !job.disc_id) return;
+  const driveID = job.drive_id;
+  const discID = job.disc_id;
+  drives.update((arr) =>
+    arr.map((d) => (d.id === driveID && d.current_disc_id === discID
+      ? { ...d, current_disc_id: undefined }
+      : d)),
+  );
+}
+
 // ----- SSE event dispatch ---------------------------------------------------
 
 export function handleSSEEvent(name: string, payload: unknown): void {
@@ -329,6 +353,7 @@ export function handleSSEEvent(name: string, payload: unknown): void {
     case 'job.done': {
       const jobID = p.job_id as string;
       jobs.update((arr) => arr.map((j) => (j.id === jobID ? { ...j, state: 'done' as const } : j)));
+      clearCurrentDiscIfJobDone(jobID);
       scheduleStatsRefresh();
       break;
     }
@@ -348,6 +373,7 @@ export function handleSSEEvent(name: string, payload: unknown): void {
             : j,
         ),
       );
+      clearCurrentDiscIfJobDone(jobID);
       scheduleStatsRefresh();
       break;
     }
