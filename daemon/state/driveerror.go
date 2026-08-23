@@ -23,6 +23,8 @@ func DriveErrorTip(errMsg string) string {
 		return "The drive couldn't read this disc. Two common, recoverable causes: a dirty or scratched surface (clean the disc and try again), or the drive spinning the disc down before cd-info finishes (eject and re-insert — the second spin-up is usually faster). One hardware cause: original Xbox game discs need a drive flashed with Kreon firmware (https://kreon.dev) — XGD media is unreadable on stock optical drives, so the disc won't be detected at all."
 	case strings.Contains(lower, "deadline exceeded"):
 		return "The drive is reading this disc very slowly — the identify step timed out before cd-info or isoinfo could finish. Try ejecting and re-inserting (often the second spin-up is faster), clean the disc surface, or try a different drive."
+	case strings.HasPrefix(lower, "wrong drive:"):
+		return "The disc was ejected automatically. Move it to the drive named in the message above and re-insert."
 	case strings.Contains(lower, "makemkv") && isMakeMKVKeyError(lower):
 		// MakeMKV's beta key expires roughly every 60 days. Without it,
 		// makemkvcon refuses to scan or rip and the error surfaces from

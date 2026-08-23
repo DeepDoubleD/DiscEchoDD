@@ -569,6 +569,9 @@ func main() {
 		// tight, 60s also clipped some PSX discs that needed the cd-info
 		// retry budget plus a full fs+sysCNF probe pass.
 		identifyDur: 120 * time.Second,
+		eject: func(ctx context.Context, devPath string) error {
+			return ejectTool.Run(ctx, []string{devPath}, nil, "", tools.NopSink{})
+		},
 	}
 	apiH.Reclassify = df.HandleManual
 	go func() {

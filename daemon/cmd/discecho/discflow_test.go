@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jumpingmushroom/DiscEcho/daemon/drive"
+	"github.com/jumpingmushroom/DiscEcho/daemon/pipelines"
 	"github.com/jumpingmushroom/DiscEcho/daemon/state"
 )
 
@@ -20,6 +22,15 @@ type erroringClassifier struct{}
 
 func (erroringClassifier) Classify(_ context.Context, _ string) (state.DiscType, error) {
 	return "", errors.New("no classifier configured in test")
+}
+
+// stubClassifier always reports the same disc type -- used for the
+// drive-role routing tests, which need Classify to succeed rather than
+// error out before the routing check runs.
+type stubClassifier struct{ dt state.DiscType }
+
+func (s stubClassifier) Classify(_ context.Context, _ string) (state.DiscType, error) {
+	return s.dt, nil
 }
 
 func newDiscFlowTestStore(t *testing.T) *state.Store {
@@ -203,4 +214,106 @@ func TestDiscFlow_Eject_DropsFailedDisc(t *testing.T) {
 	if _, err := store.GetDisc(ctx, disc.ID); err == nil {
 		t.Errorf("failed-job disc still present after physical eject")
 	}
+}
+
+// TestDiscFlow_Insert_WrongDriveEjectsAndSkipsIdentify covers drive-role
+// routing: a PSX disc classified in the BD/console (ASUS) drive must be
+// physically ejected, get a "wrong drive" last_error explaining where
+// it belongs, and never reach handler.Identify -- proven here by there
+// being no registered PSX handler at all, so a mismatched Identify call
+// would panic/fail loudly rather than silently succeed.
+func TestDiscFlow_Insert_WrongDriveEjectsAndSkipsIdentify(t *testing.T) {
+	store := newDiscFlowTestStore(t)
+	ctx := context.Background()
+	drv := &state.Drive{DevPath: "/dev/sr0", Model: "ASUS BW-16D1HT", Bus: "sr0", State: state.DriveStateIdle, LastSeenAt: time.Now()}
+	if err := store.UpsertDrive(ctx, drv); err != nil {
+		t.Fatal(err)
+	}
+
+	var ejected []string
+	bc := state.NewBroadcaster()
+	t.Cleanup(bc.Close)
+	df := &discFlow{
+		store:       store,
+		bc:          bc,
+		classifier:  stubClassifier{dt: state.DiscTypePSX},
+		pipelines:   pipelines.NewRegistry(), // no PSX handler registered
+		identifyDur: 5 * time.Second,
+		eject: func(_ context.Context, devPath string) error {
+			ejected = append(ejected, devPath)
+			return nil
+		},
+	}
+	df.handle(insertUevent())
+
+	if len(ejected) != 1 || ejected[0] != "/dev/sr0" {
+		t.Errorf("eject calls = %v, want one call for /dev/sr0", ejected)
+	}
+	got, err := store.GetDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != state.DriveStateIdle {
+		t.Errorf("drive state = %q, want idle", got.State)
+	}
+	if !strings.HasPrefix(got.LastError, "wrong drive:") {
+		t.Errorf("last_error = %q, want a wrong-drive message", got.LastError)
+	}
+}
+
+// TestDiscFlow_Insert_MatchingDriveProceedsToIdentify is the control
+// case: a PSX disc in the Plextor (CD/PS1-role) drive must NOT be
+// ejected by drive-role routing, and should reach handler.Identify
+// normally.
+func TestDiscFlow_Insert_MatchingDriveProceedsToIdentify(t *testing.T) {
+	store := newDiscFlowTestStore(t)
+	ctx := context.Background()
+	drv := &state.Drive{DevPath: "/dev/sr0", Model: "PLEXTOR DVDR PX-716A", Bus: "sr0", State: state.DriveStateIdle, LastSeenAt: time.Now()}
+	if err := store.UpsertDrive(ctx, drv); err != nil {
+		t.Fatal(err)
+	}
+
+	var ejected []string
+	reg := pipelines.NewRegistry()
+	reg.Register(&stubPSXHandler{})
+	bc := state.NewBroadcaster()
+	t.Cleanup(bc.Close)
+	df := &discFlow{
+		store:       store,
+		bc:          bc,
+		classifier:  stubClassifier{dt: state.DiscTypePSX},
+		pipelines:   reg,
+		identifyDur: 5 * time.Second,
+		eject: func(_ context.Context, devPath string) error {
+			ejected = append(ejected, devPath)
+			return nil
+		},
+	}
+	df.handle(insertUevent())
+
+	if len(ejected) != 0 {
+		t.Errorf("eject calls = %v, want none for a disc in its correct drive", ejected)
+	}
+	got, err := store.GetDrive(ctx, drv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastError != "" {
+		t.Errorf("last_error = %q, want empty (no wrong-drive message)", got.LastError)
+	}
+}
+
+// stubPSXHandler is the minimal pipelines.Handler needed to prove
+// Identify actually ran in TestDiscFlow_Insert_MatchingDriveProceedsToIdentify.
+type stubPSXHandler struct{}
+
+func (stubPSXHandler) DiscType() state.DiscType { return state.DiscTypePSX }
+func (stubPSXHandler) Identify(_ context.Context, drv *state.Drive) (*state.Disc, []state.Candidate, error) {
+	return &state.Disc{Type: state.DiscTypePSX, Title: "Test PSX Disc"}, []state.Candidate{
+		{Source: "test", Title: "Test PSX Disc", Confidence: 90},
+	}, nil
+}
+func (stubPSXHandler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan { return nil }
+func (stubPSXHandler) Run(_ context.Context, _ *state.Drive, _ *state.Disc, _ *state.Profile, _ pipelines.EventSink) error {
+	return nil
 }

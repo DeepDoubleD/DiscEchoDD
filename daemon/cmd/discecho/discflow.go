@@ -39,6 +39,11 @@ type discFlow struct {
 	pipelines   *pipelines.Registry
 	identifyDur time.Duration
 	igdb        identify.IGDBClient
+	// eject, when non-nil, physically ejects a disc that landed in the
+	// wrong-role drive (see pipelines.WrongDriveMessage) before
+	// handler.Identify would otherwise run against it. Nil is a no-op
+	// (tests / configurations that don't wire drive-role routing).
+	eject func(ctx context.Context, devPath string) error
 }
 
 // HandleManual fires the same disc-flow as a real udev uevent for the
@@ -158,6 +163,32 @@ func (df *discFlow) handle(ev drive.Uevent) {
 		df.releaseDriveState(drv.ID, state.DriveStateError)
 		return
 	}
+	// Drive-role routing: some disc types have an established best
+	// drive in this station (see pipelines.WrongDriveMessage) -- a
+	// PS1/audio CD wants the Redump-certified Plextor, a BD/console
+	// disc needs the LibreDrive-flashed ASUS (the Plextor has no
+	// Blu-ray hardware at all for BDMV/UHD). Catch the mismatch here,
+	// before handler.Identify spins up a scan on hardware that either
+	// can't read the disc at all or won't produce a certifiable dump,
+	// and eject with an explanation instead.
+	if msg, mismatch := pipelines.WrongDriveMessage(dt, drv.Model); mismatch {
+		slog.Info("disc-flow: wrong drive for disc type, ejecting",
+			"dev", devPath, "disc_type", dt, "drive_model", drv.Model)
+		if df.eject != nil {
+			if ejErr := df.eject(ctx, devPath); ejErr != nil {
+				slog.Warn("disc-flow: eject wrong-drive disc failed", "err", ejErr)
+			}
+		}
+		df.recordDriveError(drv.ID, msg)
+		if df.releaseDriveState(drv.ID, state.DriveStateIdle) {
+			df.bc.Publish(state.Event{
+				Name:    "drive.changed",
+				Payload: map[string]any{"drive_id": drv.ID, "state": "idle"},
+			})
+		}
+		return
+	}
+
 	handler, ok := df.pipelines.Get(dt)
 	if !ok {
 		slog.Info("no handler for disc type; skipping", "type", dt)
