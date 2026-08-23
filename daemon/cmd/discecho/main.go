@@ -604,6 +604,12 @@ func main() {
 		},
 	}
 	apiH.Reclassify = df.HandleManual
+	// Post-rip identification (Xbox 360 and the other post-rip
+	// MD5-identified formats) only gets a title after RunTranscode
+	// finishes, too late for discflow.go's own pre-rip enrichment call
+	// above -- wire compute's callback now that df exists so those
+	// discs still get IGDB cover art / summary / genres.
+	compute.SetOnDiscIdentified(df.enrichGameDiscFromIGDB)
 	go func() {
 		if err := drive.Watch(ctx, df.handle); err != nil {
 			slog.Error("udev watcher exited", "err", err)

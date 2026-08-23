@@ -29,6 +29,11 @@ type splittableStub struct {
 	ripStarted       chan struct{}
 	transcodeStarted chan struct{}
 
+	// setTitleOnTranscode, when non-empty, makes RunTranscode mutate the
+	// disc pointer it's handed -- simulating Xbox 360 / cdgame's post-rip
+	// md5Identify, which only learns the title once the rip is done.
+	setTitleOnTranscode string
+
 	mu             sync.Mutex
 	ripCalls       int
 	transcodeCalls int
@@ -114,7 +119,7 @@ func (s *splittableStub) ScanTitles(_ context.Context, _ *state.Drive, _ *state.
 	return s.scanTitles, nil
 }
 
-func (s *splittableStub) RunTranscode(ctx context.Context, result pipelines.RipResult, _ *state.Disc, _ *state.Profile, _ pipelines.EventSink) error {
+func (s *splittableStub) RunTranscode(ctx context.Context, result pipelines.RipResult, disc *state.Disc, _ *state.Profile, _ pipelines.EventSink) error {
 	s.mu.Lock()
 	s.transcodeCalls++
 	started := s.transcodeStarted
@@ -131,6 +136,13 @@ func (s *splittableStub) RunTranscode(ctx context.Context, result pipelines.RipR
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+	if s.setTitleOnTranscode != "" {
+		disc.Title = s.setTitleOnTranscode
+		disc.Year = 2011
+		disc.MetadataProvider = "Redump"
+		disc.MetadataID = "test-boot-code"
+		disc.Candidates = []state.Candidate{{Source: "Redump", Title: s.setTitleOnTranscode, Confidence: 100}}
 	}
 	return s.failOnTranscode
 }
@@ -231,6 +243,142 @@ func TestOrchestrator_SplittablePath_RunsBothHalves(t *testing.T) {
 	}
 	if len(child.Steps) != 4 {
 		t.Errorf("transcode steps: want 4, got %d", len(child.Steps))
+	}
+}
+
+// TestCompute_PersistsPostRipIdentity_AndFiresHook covers the fix for a
+// live bug: Xbox 360 (and the other post-rip MD5-identified formats)
+// only learn their title inside RunTranscode, after the disc row was
+// already persisted with an empty title. Two real rips landed
+// correctly-named files on disk but showed as bare UUIDs in disc
+// history, because nothing ever wrote the identified title back to the
+// store or gave IGDB enrichment a second chance now that a title
+// exists.
+func TestCompute_PersistsPostRipIdentity_AndFiresHook(t *testing.T) {
+	store, bc, sp, h := openSplit(t)
+	defer bc.Close()
+	h.setTitleOnTranscode = "Gears of War 3 (World)"
+
+	reg := pipelines.NewRegistry()
+	reg.Register(h)
+
+	compute := jobs.NewCompute(jobs.ComputeConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg, Spool: sp, Concurrency: 1,
+	})
+	t.Cleanup(compute.Close)
+
+	type hookCall struct {
+		discID string
+		dt     state.DiscType
+		title  string
+	}
+	hookCalled := make(chan hookCall, 1)
+	compute.SetOnDiscIdentified(func(discID string, dt state.DiscType, title string) {
+		hookCalled <- hookCall{discID, dt, title}
+	})
+
+	o := jobs.NewOrchestrator(jobs.OrchestratorConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg,
+		Compute: compute, Spool: sp,
+	})
+	t.Cleanup(o.Close)
+
+	drv, disc, prof := seedSplitInputs(t, store)
+	_ = drv
+	// Simulate the pre-rip state for a post-rip-identified disc type
+	// (Xbox 360, Sega CD, ...): no title, no candidates yet.
+	disc.Title = ""
+	disc.Candidates = nil
+	if err := store.UpdateDiscMetadata(context.Background(), disc.ID, "", 0, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	ripJob, err := o.Submit(context.Background(), disc.ID, prof.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := waitJobState(store, ripJob.ID, state.JobStateDone, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	transcodeID := waitForChild(t, store, ripJob.ID, 2*time.Second)
+	if err := waitJobState(store, transcodeID, state.JobStateDone, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.GetDisc(context.Background(), disc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "Gears of War 3 (World)" {
+		t.Errorf("disc.Title = %q, want %q (post-rip identity should be persisted)", got.Title, "Gears of War 3 (World)")
+	}
+	if got.Year != 2011 {
+		t.Errorf("disc.Year = %d, want 2011", got.Year)
+	}
+	if got.MetadataProvider != "Redump" {
+		t.Errorf("disc.MetadataProvider = %q, want Redump", got.MetadataProvider)
+	}
+	if len(got.Candidates) != 1 || got.Candidates[0].Title != "Gears of War 3 (World)" {
+		t.Errorf("disc.Candidates not persisted: %+v", got.Candidates)
+	}
+
+	select {
+	case call := <-hookCalled:
+		if call.discID != disc.ID || call.title != "Gears of War 3 (World)" {
+			t.Errorf("hook called with %+v", call)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnDiscIdentified hook never fired")
+	}
+}
+
+// TestCompute_AlreadyIdentifiedDisc_DoesNotRefireHook covers the other
+// half of the gate: a disc already identified pre-rip (DVD, PSX, ...)
+// must not trigger a redundant persist + duplicate IGDB search just
+// because RunTranscode succeeded.
+func TestCompute_AlreadyIdentifiedDisc_DoesNotRefireHook(t *testing.T) {
+	store, bc, sp, h := openSplit(t)
+	defer bc.Close()
+	// Title already set pre-rip; stub leaves it untouched (no
+	// setTitleOnTranscode), matching a real DVD/PSX/... handler.
+
+	reg := pipelines.NewRegistry()
+	reg.Register(h)
+
+	compute := jobs.NewCompute(jobs.ComputeConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg, Spool: sp, Concurrency: 1,
+	})
+	t.Cleanup(compute.Close)
+
+	hookCalled := make(chan struct{}, 1)
+	compute.SetOnDiscIdentified(func(string, state.DiscType, string) {
+		hookCalled <- struct{}{}
+	})
+
+	o := jobs.NewOrchestrator(jobs.OrchestratorConfig{
+		Store: store, Broadcaster: bc, Pipelines: reg,
+		Compute: compute, Spool: sp,
+	})
+	t.Cleanup(o.Close)
+
+	_, disc, prof := seedSplitInputs(t, store) // disc.Title = "Movie" already
+	ripJob, err := o.Submit(context.Background(), disc.ID, prof.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := waitJobState(store, ripJob.ID, state.JobStateDone, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	transcodeID := waitForChild(t, store, ripJob.ID, 2*time.Second)
+	if err := waitJobState(store, transcodeID, state.JobStateDone, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-hookCalled:
+		t.Error("hook fired for a disc that was already identified pre-rip")
+	case <-time.After(300 * time.Millisecond):
+		// expected: no call
 	}
 }
 
