@@ -74,7 +74,7 @@ func NewRedumper(bin string) *Redumper {
 func (r *Redumper) Name() string { return "redumper" }
 
 // Rip dumps the disc to outDir using the given base name. mode is
-// "cd", "dvd", "xbox", "xbox360", or "wii"; selects the right
+// "cd", "dvd", "xbox", "xbox360", "wii", or "wiiu"; selects the right
 // --disc-type override and invokes the `disc` aggregate subcommand
 // (which runs dump+refine+split in one pass).
 //
@@ -95,6 +95,15 @@ func (r *Redumper) Name() string { return "redumper" }
 //	          not even a TOC (cd-info fails outright), unlike Xbox 360's
 //	          readable decoy layer -- so the raw OmniDrive path is
 //	          mandatory here, not an accuracy nice-to-have.
+//	wiiu    → redumper disc --disc-type=BLURAY --bd-raw. Wii U game
+//	          discs are BD-form-factor media, not DVD, so this is the
+//	          Blu-ray analogue of "wii"/"xbox360": a stock BD read
+//	          returns the raw sectors already AES-encrypted (per
+//	          RibShark's OmniDrive documentation — "raw BD reading,
+//	          2052-byte sectors, including encrypted Wii U reading"),
+//	          so --bd-raw is required the same way --dvd-raw is for
+//	          Wii. Unlike PS3, DiscEcho does not decrypt this output —
+//	          see daemon/pipelines/wiiu's package doc for why.
 //
 // Older redumper releases shipped per-media subcommands (`redumper cd`,
 // `redumper dvd`, `redumper xbox`); current builds (b720+) use a single
@@ -105,7 +114,7 @@ func (r *Redumper) Name() string { return "redumper" }
 func (r *Redumper) Rip(ctx context.Context, devPath, outDir, name, mode string, sink Sink) error {
 	discType, ok := redumperDiscType(mode)
 	if !ok {
-		return fmt.Errorf("redumper: unknown mode %q (want cd|dvd|xbox|xbox360|wii)", mode)
+		return fmt.Errorf("redumper: unknown mode %q (want cd|dvd|xbox|xbox360|wii|wiiu)", mode)
 	}
 	args := []string{
 		"disc",
@@ -115,8 +124,11 @@ func (r *Redumper) Rip(ctx context.Context, devPath, outDir, name, mode string, 
 		"--image-name", name,
 		fmt.Sprintf("--retries=%d", redumperRetries),
 	}
-	if mode == "xbox360" || mode == "wii" {
+	switch mode {
+	case "xbox360", "wii":
 		args = append(args, "--dvd-raw")
+	case "wiiu":
+		args = append(args, "--bd-raw")
 	}
 
 	// Derive a cancelable context so the watchdog can kill a runaway rip
@@ -286,6 +298,8 @@ func redumperDiscType(mode string) (string, bool) {
 		return "DVD", true
 	case "wii":
 		return "DVD", true
+	case "wiiu":
+		return "BLURAY", true
 	}
 	return "", false
 }

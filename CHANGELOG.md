@@ -37,8 +37,31 @@ first priority, then adds three new game consoles on top.
   (MIT), which auto-fetches a matching disc key or IRD file from public
   IRD libraries. Output is a decrypted directory tree, not an ISO, so
   there's no Redump MD5 verification step the way the other consoles
-  have. **Verified via a real Docker build only — not yet tested
-  against an actual PS3 disc.**
+  have. **Verified live 2026-08-24** against two real discs (ripped
+  and decrypted successfully on both drives simultaneously) after
+  finding and fixing a deploy gap: the Docker image running on the
+  test box had been built before this pipeline was merged, so
+  `ps3dumper-cli` was simply missing from `/usr/local/bin` despite the
+  Dockerfile building it correctly — rebuilding the image was all it
+  took.
+- **Wii U support**, same OmniDrive requirement as Wii/Xbox 360, via
+  redumper's raw BD path (`--disc-type=BLURAY --bd-raw`) rather than
+  the raw DVD path Wii/Xbox 360 use, since Wii U discs are BD-form-factor
+  media. Same no-pre-rip-signal / post-rip-Redump-MD5 identification
+  story as Wii. A Wii U image needs both a per-disc title key and
+  Nintendo's platform-wide common key to become usable; DiscEcho never
+  embeds or fetches either. If the user drops `common.key` and a
+  matching per-disc `<md5>.key` into `${DISCECHO_DATA}/wiiu-keys/`,
+  decryption runs automatically via
+  [wudecrypt](https://github.com/maki-chan/wudecrypt) (AGPL-3.0),
+  installed as a separate external binary DiscEcho shells out to —
+  built from source in its own Docker stage, never vendored into or
+  linked with DiscEcho's own MIT-licensed source (see NOTICE.md).
+  Without both key files, or if the decrypt attempt itself fails, the
+  raw encrypted dump ships instead — always a valid deliverable on its
+  own, same as before. **Built from redumper's documented `--bd-raw`
+  flag and OmniDrive's published Wii U support — not yet tested against
+  actual Wii U media.**
 - **Job kill-switch**: `POST /api/jobs/cancel-all` plus a confirm-gated
   "Cancel all active jobs" button in Settings → System, for clearing a
   wedged job queue without restarting the daemon.

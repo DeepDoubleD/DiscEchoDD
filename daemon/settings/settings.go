@@ -61,6 +61,8 @@ type Settings struct {
 	IGDBClientSecret     string
 	PS3DumperBin         string
 	PS3KeyCacheDir       string
+	WuDecryptBin         string
+	WiiUKeysDir          string
 }
 
 // Load reads env vars, seeds default rows, and returns a *Settings.
@@ -100,6 +102,8 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 		VCDXRipBin:           firstNonEmpty(getenv("DISCECHO_VCDXRIP_BIN"), "vcdxrip"),
 		PS3DumperBin:         firstNonEmpty(getenv("DISCECHO_PS3DUMPER_BIN"), "ps3dumper-cli"),
 		PS3KeyCacheDir:       firstNonEmpty(getenv("DISCECHO_PS3_KEYCACHE_DIR"), filepath.Join(firstNonEmpty(getenv("DISCECHO_DATA"), "/var/lib/discecho"), "ps3-keys")),
+		WuDecryptBin:         firstNonEmpty(getenv("DISCECHO_WUDECRYPT_BIN"), "wudecrypt"),
+		WiiUKeysDir:          firstNonEmpty(getenv("DISCECHO_WIIU_KEYS_DIR"), filepath.Join(firstNonEmpty(getenv("DISCECHO_DATA"), "/var/lib/discecho"), "wiiu-keys")),
 		IGDBClientID:         getenv("DISCECHO_IGDB_CLIENT_ID"),
 		IGDBClientSecret:     getenv("DISCECHO_IGDB_CLIENT_SECRET"),
 	}
@@ -158,6 +162,9 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 	}
 	if err := seedWiiProfile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed Wii profile: %w", err)
+	}
+	if err := seedWiiUProfile(ctx, store); err != nil {
+		return nil, fmt.Errorf("seed Wii U profile: %w", err)
 	}
 	if err := seedPS3Profile(ctx, store); err != nil {
 		return nil, fmt.Errorf("seed PS3 profile: %w", err)
@@ -354,6 +361,7 @@ const (
 	xboxProfileName                  = "XBOX-ISO"
 	xbox360ProfileName               = "XBOX360-ISO"
 	wiiProfileName                   = "WII-ISO"
+	wiiuProfileName                  = "WIIU-RAW"
 	ps3ProfileName                   = "PS3-DECRYPTED"
 	dataProfileName                  = "Data-ISO"
 	vcdProfileName                   = "VCD-MPEG"
@@ -1112,6 +1120,35 @@ func seedWiiProfile(ctx context.Context, store *state.Store) error {
 		DrivePolicy:        "any",
 		Options:            map[string]any{},
 		OutputPathTemplate: `Wii/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso`,
+		Enabled:            true,
+		StepCount:          5,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+}
+
+func seedWiiUProfile(ctx context.Context, store *state.Store) error {
+	existing, err := store.ListProfilesByDiscType(ctx, state.DiscTypeWIIU)
+	if err != nil {
+		return err
+	}
+	for _, p := range existing {
+		if p.Name == wiiuProfileName {
+			return nil
+		}
+	}
+	now := time.Now()
+	return store.CreateProfile(ctx, &state.Profile{
+		DiscType:           state.DiscTypeWIIU,
+		Name:               wiiuProfileName,
+		Engine:             "redumper",
+		Format:             "ISO",
+		Preset:             "",
+		Container:          "ISO",
+		QualityPreset:      "",
+		DrivePolicy:        "any",
+		Options:            map[string]any{},
+		OutputPathTemplate: `Wii U/{{.Title}} ({{.Region}})/{{.Title}} ({{.Region}}).iso`,
 		Enabled:            true,
 		StepCount:          5,
 		CreatedAt:          now,

@@ -183,6 +183,34 @@ RUN dotnet publish Cli/Cli.csproj \
         -o /out
 
 ###############################################################################
+# Stage — build wudecrypt from source
+#
+# wudecrypt (https://github.com/maki-chan/wudecrypt, AGPL-3.0) decrypts a
+# raw Wii U disc dump (.wud) given the platform-wide common key and a
+# disc-specific key -- both files supplied by the user at runtime, never
+# embedded or fetched by DiscEcho itself (see daemon/pipelines/wiiu's
+# package doc). It is installed here as a separate binary and shelled out
+# to at runtime, matching how this image already treats HandBrake/
+# whipper/ffmpeg (all themselves copyleft-licensed) as external tools
+# whose license stays scoped to themselves rather than DiscEcho's own
+# MIT source -- see NOTICE.md. Upstream ships only a bakefile
+# (wudecrypt.bkl); its handful of plain C files (no deps beyond libc)
+# compile directly with gcc. Pinned to a commit SHA since upstream has
+# no version tags (pre-alpha project).
+###############################################################################
+FROM debian:bookworm-slim AS wudecrypt-build
+ARG WUDECRYPT_COMMIT=6ee75e13934f2e93b257557ceef172d92934c813
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/maki-chan/wudecrypt.git /src/wudecrypt \
+ && cd /src/wudecrypt \
+ && git checkout "${WUDECRYPT_COMMIT}"
+WORKDIR /src/wudecrypt
+RUN gcc -O2 -o wudecrypt aes.c functions.c main.c sha1.c \
+ && strip wudecrypt
+
+###############################################################################
 # Stage 4 — runtime: python slim + apprise + the daemon binary
 ###############################################################################
 FROM python:3.12-slim-bookworm AS runtime
@@ -272,6 +300,11 @@ COPY --from=loudgain-build /usr/local/bin/loudgain /usr/bin/loudgain
 # ps3-disc-dumper). No .NET runtime install needed in this image.
 COPY --from=ps3dumper-build /out/ps3dumper-cli /usr/local/bin/ps3dumper-cli
 RUN chmod +x /usr/local/bin/ps3dumper-cli
+
+# wudecrypt — built from source in the wudecrypt-build stage above.
+# AGPL-3.0, external tool, not vendored; see NOTICE.md.
+COPY --from=wudecrypt-build /src/wudecrypt/wudecrypt /usr/local/bin/wudecrypt
+RUN chmod +x /usr/local/bin/wudecrypt
 
 # redumper — pre-built static Linux binary released on GitHub.
 # Pinned via REDUMPER_VERSION build arg.
