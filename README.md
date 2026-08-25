@@ -418,6 +418,13 @@ ${DISCECHO_DATA}/wiiu-keys/<md5>.key       # per disc — filename is the
 
 Source both from your own legally-obtained material — see the [Cemu
 wiki's key-sourcing guide](https://wiki.cemu.info/wiki/Obtaining_Keys_for_Keys.txt).
+Two settings control this if you need to override them:
+
+```env
+DISCECHO_WUDECRYPT_BIN=wudecrypt            # already on PATH in the image
+DISCECHO_WIIU_KEYS_DIR=${DISCECHO_DATA}/wiiu-keys   # common.key + per-disc <md5>.key files
+```
+
 If `common.key` and a matching `<md5>.key` are both present after the
 rip, DiscEcho decrypts automatically and ships the decrypted GM-partition
 folder tree (Cemu-loadable) instead of the raw dump. **Without both

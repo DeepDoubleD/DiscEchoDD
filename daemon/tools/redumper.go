@@ -102,8 +102,10 @@ func (r *Redumper) Name() string { return "redumper" }
 //	          RibShark's OmniDrive documentation — "raw BD reading,
 //	          2052-byte sectors, including encrypted Wii U reading"),
 //	          so --bd-raw is required the same way --dvd-raw is for
-//	          Wii. Unlike PS3, DiscEcho does not decrypt this output —
-//	          see daemon/pipelines/wiiu's package doc for why.
+//	          Wii. This redumper output is always the raw encrypted
+//	          dump -- daemon/pipelines/wiiu's RunTranscode optionally
+//	          decrypts it afterward via an external tool if the user
+//	          has supplied keys; see that package's doc for why.
 //
 // Older redumper releases shipped per-media subcommands (`redumper cd`,
 // `redumper dvd`, `redumper xbox`); current builds (b720+) use a single
