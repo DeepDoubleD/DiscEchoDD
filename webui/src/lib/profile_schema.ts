@@ -160,6 +160,7 @@ export const DISC_TYPES: ReadonlyArray<string> = [
   'XBOX',
   'XBOX360',
   'WII',
+  'WIIU',
   'PS3',
   // Catch-all
   'DATA',

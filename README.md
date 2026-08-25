@@ -10,7 +10,7 @@ discs to the drive.
 
 > This is a fork of [jumpingmushroom/DiscEcho](https://github.com/jumpingmushroom/DiscEcho),
 > with Blu-ray/UHD identification fixes, a job kill-switch, drive-role
-> routing, and Xbox 360/Wii/PlayStation 3 support added on top.
+> routing, and Xbox 360/Wii/Wii U/PlayStation 3 support added on top.
 
 Supported disc types:
 
@@ -21,11 +21,13 @@ Supported disc types:
   Sega CD, 3DO, PC-FX, Atari Jaguar CD, Philips CD-i, PC Engine CD, Neo Geo CD
   (redumper + chdman, Redump-verified); Amiga CD32, FM Towns, and Bandai Pippin
   via manual disc-type override (not auto-detected)
-- **Xbox 360** (XGD2/XGD3, redumper + Redump MD5 verify) and **Wii**
-  (redumper, MD5-identified post-rip) — both require an
-  [OmniDrive-flashed](https://wiki.redump.info/index.php?title=OmniDrive)
-  drive; Wii discs report no readable TOC under stock firmware, so insert
-  and pick "Wii" from the manual disc-type override
+- **Xbox 360** (XGD2/XGD3, redumper + Redump MD5 verify), **Wii**, and
+  **Wii U** (both redumper, MD5-identified post-rip) — all three require
+  an [OmniDrive-flashed](https://wiki.redump.info/index.php?title=OmniDrive)
+  drive and report no readable pre-rip signal under stock firmware, so
+  insert and pick the right type from the manual disc-type override.
+  Wii U rips ship raw (still encrypted) unless you supply your own
+  keys — see the [Wii U setup](#wii-u-setup) section
 - **PlayStation 3** — stock-mountable, no special drive firmware needed;
   reads `PARAM.SFO` for pre-rip title identification and decrypts via a
   vendored [ps3-disc-dumper](https://github.com/13xforever/ps3-disc-dumper)
@@ -199,7 +201,7 @@ If a UHD disc is inserted and `KEYDB.cfg` is missing, the job fails
 fast at the identify step with a clear error before any disc read.
 Regular BDMV (Blu-ray) discs do not need this file.
 
-### Game-disc setup (PSX / PS2 / Saturn / Dreamcast / Xbox / Xbox 360 / Wii / PS3 / Sega CD / 3DO / PC-FX / Jaguar CD / CD-i / PC Engine CD / Neo Geo CD / Amiga CD32 / FM Towns / Bandai Pippin)
+### Game-disc setup (PSX / PS2 / Saturn / Dreamcast / Xbox / Xbox 360 / Wii / Wii U / PS3 / Sega CD / 3DO / PC-FX / Jaguar CD / CD-i / PC Engine CD / Neo Geo CD / Amiga CD32 / FM Towns / Bandai Pippin)
 
 DiscEcho's game-disc pipelines use
 [redumper](https://github.com/superg/redumper) for ripping and
@@ -245,6 +247,10 @@ readable TOC even under an OmniDrive, so there's no pre-rip identification
 — insert the disc, select "Wii" from the manual override, and start the
 rip. Both are identified post-rip via Redump MD5 verify once ripped.
 
+**Wii U** also requires the same OmniDrive-flashed drive — see the
+dedicated [Wii U setup](#wii-u-setup) section below for what makes it
+different from every other pipeline here.
+
 **PlayStation 3** discs mount stock, with no special drive firmware
 needed — see the dedicated [PS3 setup](#playstation-3-setup) section
 below.
@@ -267,6 +273,11 @@ Disc detection is automatic:
   fixed offset isn't reachable through a stock (or OmniDrive) read.
   Select "Wii" manually from the override; title/year come from a
   post-rip Redump MD5 lookup, same as Xbox 360.
+- Wii U: same story as Wii but one layer up — a stock BD read returns
+  the disc's raw sectors still AES-encrypted, so there's no pre-rip
+  signal at all. Select "Wii U" manually from the override; title/year
+  come from a post-rip Redump MD5 lookup against your own dat, same as
+  Wii/Xbox 360.
 - Sega CD: raw sector 0 magic `SEGADISCSYSTEM` or `SEGABOOTDISC`
   (cooked or raw 2352-byte sector layout).
 - 3DO: sector 0 binary volume magic.
@@ -292,6 +303,7 @@ ${DISCECHO_DATA}/redump/dc/Sega - Dreamcast - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/xbox/Microsoft - Xbox - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/xbox360/Microsoft - Xbox 360 - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/wii/Nintendo - Wii - Datfile (*.dat)
+${DISCECHO_DATA}/redump/wiiu/Nintendo - Wii U - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/sega-cd/Sega - Mega-CD & Sega CD - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/3do/Panasonic - 3DO Interactive Multiplayer - Datfile (*.dat)
 ${DISCECHO_DATA}/redump/pc-fx/NEC - PC-FX & PC-FXGA - Datfile (*.dat)
@@ -364,6 +376,68 @@ DISCECHO_PS3_KEYCACHE_DIR=${DISCECHO_DATA}/ps3-keys   # downloaded IRD/key cache
 Output is a decrypted directory tree per title (`PS3/{{.Title}}/`), not
 a single ISO — there's no Redump dat-based MD5 verification step for
 PS3 the way there is for the disc-image formats above.
+
+#### Wii U setup
+
+Wii U game discs are Blu-ray-form-factor media, but a stock BD-ROM
+drive still can't read them cleanly: per
+[OmniDrive's](https://wiki.redump.info/index.php?title=OmniDrive)
+documentation, a normal read returns the disc's raw sectors still
+AES-encrypted. DiscEcho rips via redumper's raw BD path
+(`--disc-type=BLURAY --bd-raw`) on the same OmniDrive-flashed drive
+Xbox 360/Wii need — no extra config beyond that drive.
+
+**DiscEcho does not embed or fetch any Wii U key material.** Unlike
+PS3 (where the per-disc key the dumper needs is small,
+community-distributed sector-layout metadata it can fetch
+automatically), a Wii U dump needs *two* keys to become playable: a
+per-disc title key, and Nintendo's single platform-wide "common key" —
+a fixed DRM master secret shared by every Wii U ever made, not
+disc-specific data. DiscEcho never embeds that key or fetches it from
+anywhere; you always supply both files yourself.
+
+Decryption is delegated to
+[wudecrypt](https://github.com/maki-chan/wudecrypt) (AGPL-3.0), which
+DiscEcho installs as a separate external binary and shells out to at
+runtime — its own build stage in the Dockerfile, like
+MakeMKV/HandBrake/redumper/whipper (all themselves copyleft- or
+proprietary-licensed). It is **not** vendored into this repository, so
+its AGPL-3.0 license stays scoped to that one binary; see
+[NOTICE.md](./NOTICE.md).
+
+To enable decryption, drop two files into
+`${DISCECHO_DATA}/wiiu-keys/` (override with `DISCECHO_WIIU_KEYS_DIR`):
+
+```
+${DISCECHO_DATA}/wiiu-keys/common.key      # platform-wide, one time
+${DISCECHO_DATA}/wiiu-keys/<md5>.key       # per disc — filename is the
+                                            # raw dump's own MD5 (the
+                                            # same hash Redump itself
+                                            # catalogues the disc by)
+```
+
+Source both from your own legally-obtained material — see the [Cemu
+wiki's key-sourcing guide](https://wiki.cemu.info/wiki/Obtaining_Keys_for_Keys.txt).
+Two settings control this if you need to override them:
+
+```env
+DISCECHO_WUDECRYPT_BIN=wudecrypt            # already on PATH in the image
+DISCECHO_WIIU_KEYS_DIR=${DISCECHO_DATA}/wiiu-keys   # common.key + per-disc <md5>.key files
+```
+
+If `common.key` and a matching `<md5>.key` are both present after the
+rip, DiscEcho decrypts automatically and ships the decrypted GM-partition
+folder tree (Cemu-loadable) instead of the raw dump. **Without both
+files present, the pipeline's deliverable is the raw, still-encrypted
+dump** — exactly what Redump itself catalogues Wii U discs by, which is
+also why post-rip Redump MD5 verification works normally against your
+own dat-file either way. A failed decrypt attempt (bad key, wudecrypt's
+own pre-alpha quirks) also falls back to the raw dump rather than
+failing the job.
+
+**Not yet verified against real hardware.** Built from redumper's
+documented `--bd-raw` flag and OmniDrive's published Wii U support, but
+untested against actual Wii U media at the time this was written.
 
 ### Raw-data discs
 

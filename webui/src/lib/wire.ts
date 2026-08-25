@@ -11,6 +11,7 @@ export type DiscType =
   | 'XBOX'
   | 'XBOX360'
   | 'WII'
+  | 'WIIU'
   | 'PS3'
   | 'SAT'
   | 'DC'

@@ -189,6 +189,7 @@ var DiscTypeEngines = map[state.DiscType][]string{
 	state.DiscTypeXBOX:     {"redumper"},
 	state.DiscTypeXBOX360:  {"redumper"},
 	state.DiscTypeWII:      {"redumper"},
+	state.DiscTypeWIIU:     {"redumper"},
 	state.DiscTypePS3:      {"ps3dumper-cli"},
 	state.DiscTypeSegaCD:   {"redumper+chdman"},
 	state.DiscType3DO:      {"redumper+chdman"},

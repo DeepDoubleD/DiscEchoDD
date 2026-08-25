@@ -24,6 +24,7 @@
     XBOX: { label: 'Xbox', color: GAME },
     XBOX360: { label: 'Xbox 360', color: GAME },
     WII: { label: 'Wii', color: GAME },
+    WIIU: { label: 'Wii U', color: GAME },
     PS3: { label: 'PS3', color: GAME },
     SEGACD: { label: 'Sega CD', color: GAME },
     '3DO': { label: '3DO', color: GAME },

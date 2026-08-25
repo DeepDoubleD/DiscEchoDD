@@ -315,8 +315,8 @@ func TestGetSystemIntegrations_GameDiscsSection(t *testing.T) {
 	if gd.Status != "partial" {
 		t.Errorf("GameDiscs status = %q, want partial (empty dat dir)", gd.Status)
 	}
-	if len(gd.Systems) != 18 {
-		t.Fatalf("GameDiscs systems = %d, want 18", len(gd.Systems))
+	if len(gd.Systems) != 19 {
+		t.Fatalf("GameDiscs systems = %d, want 19", len(gd.Systems))
 	}
 	byName := map[state.DiscType]api.GameDiscSystem{}
 	for _, s := range gd.Systems {
