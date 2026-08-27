@@ -87,11 +87,27 @@ func IsTVProfile(prof *state.Profile) bool {
 	return StringOption(prof, "content_type", "movie") == "tv"
 }
 
-// LibraryRootFor picks between a pipeline's movies and TV library
-// roots based on IsTVProfile. Falls back to moviesRoot when tvRoot is
-// empty, so a deployment that hasn't configured a separate TV path
-// still works.
-func LibraryRootFor(moviesRoot, tvRoot string, prof *state.Profile) string {
+// LibraryRootFor picks the library root for a rip's output. A
+// disc-level category override (set by the picker at rip-start time
+// and stored on disc.metadata_json under "selected_category") takes
+// priority over the profile's own content_type: "kids_cartoons" or
+// "anime" route to kidsRoot/animeRoot respectively when that root is
+// configured (non-empty), regardless of whether the profile is a
+// movie or TV type. Otherwise falls back to the existing
+// IsTVProfile-driven movies/TV split, and moviesRoot when tvRoot is
+// empty, so a deployment that hasn't configured the newer roots
+// still works exactly as before.
+func LibraryRootFor(moviesRoot, tvRoot, kidsRoot, animeRoot string, disc *state.Disc, prof *state.Profile) string {
+	switch SelectedCategoryFromDisc(disc) {
+	case "kids_cartoons":
+		if kidsRoot != "" {
+			return kidsRoot
+		}
+	case "anime":
+		if animeRoot != "" {
+			return animeRoot
+		}
+	}
 	if IsTVProfile(prof) && tvRoot != "" {
 		return tvRoot
 	}

@@ -126,6 +126,25 @@ func SelectedSeasonFromDisc(disc *state.Disc) int {
 	return 0
 }
 
+// SelectedCategoryFromDisc returns the library-routing override the
+// picker recorded for this rip, or "" when unset (the default —
+// route by the profile's own content_type as before). Stored under
+// the "selected_category" key in metadata_json. Valid non-empty
+// values are "kids_cartoons" and "anime"; any other value is treated
+// as unset by the caller (LibraryRootFor) so an unrecognized value
+// never silently misroutes output.
+func SelectedCategoryFromDisc(disc *state.Disc) string {
+	if disc == nil || disc.MetadataJSON == "" || disc.MetadataJSON == "{}" {
+		return ""
+	}
+	var blob map[string]any
+	if err := json.Unmarshal([]byte(disc.MetadataJSON), &blob); err != nil {
+		return ""
+	}
+	s, _ := blob["selected_category"].(string)
+	return s
+}
+
 // SelectedEpisodeMapFromDisc returns the per-title episode
 // assignments the picker recorded, keyed by title ID. Empty map
 // when no mapping was persisted (movie rip, audio CD, picker-less

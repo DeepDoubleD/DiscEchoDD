@@ -51,23 +51,25 @@ type MakeMKVRipper interface {
 
 // Deps bundles the handler's dependencies for mock injection.
 type Deps struct {
-	Prober         identify.DVDProber
-	BDProber       identify.BDProber // optional: disc-library metadata name, preferred over the volume label when present
-	TMDB           identify.TMDBClient
+	Prober   identify.DVDProber
+	BDProber identify.BDProber // optional: disc-library metadata name, preferred over the volume label when present
+	TMDB     identify.TMDBClient
 	// MKVSubs pulls text-based subtitle tracks out of the moved output
 	// as sidecar files when the profile's extract_text_subtitles option
 	// is set. nil disables the feature regardless of profile options.
-	MKVSubs pipelines.MKVSubtitleTool
-	MakeMKVScanner MakeMKVScanner
-	MakeMKVRipper  MakeMKVRipper
-	Tools          *tools.Registry // looked up: apprise, eject
-	LibraryRoot    string
-	LibraryTV      string // used instead of LibraryRoot when the profile's content_type is "tv"
-	WorkRoot       string
-	LibraryProbe   func(string) error
-	URLsForTrigger func(ctx context.Context, trigger string) []string
-	SubsLang       string
-	AACS2KeyDB     string // path to KEYDB.cfg; checked at Identify-time
+	MKVSubs             pipelines.MKVSubtitleTool
+	MakeMKVScanner      MakeMKVScanner
+	MakeMKVRipper       MakeMKVRipper
+	Tools               *tools.Registry // looked up: apprise, eject
+	LibraryRoot         string
+	LibraryTV           string // used instead of LibraryRoot when the profile's content_type is "tv"
+	LibraryKidsCartoons string // overrides LibraryRoot/LibraryTV when the disc-level category is "kids_cartoons"
+	LibraryAnime        string // overrides LibraryRoot/LibraryTV when the disc-level category is "anime"
+	WorkRoot            string
+	LibraryProbe        func(string) error
+	URLsForTrigger      func(ctx context.Context, trigger string) []string
+	SubsLang            string
+	AACS2KeyDB          string // path to KEYDB.cfg; checked at Identify-time
 	// ShouldEject gates the rip-end eject step; nil = always eject.
 	ShouldEject func(ctx context.Context) bool
 }
@@ -210,7 +212,7 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	sink.OnStepDone(state.StepIdentify, nil)
 
 	sink.OnStepStart(state.StepRip)
-	if err := h.deps.LibraryProbe(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof)); err != nil {
+	if err := h.deps.LibraryProbe(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, h.deps.LibraryKidsCartoons, h.deps.LibraryAnime, disc, prof)); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
@@ -427,7 +429,7 @@ func (h *Handler) moveMultiTitle(srcs []string, disc *state.Disc, prof *state.Pr
 			rendered[i] = strings.TrimSuffix(r, ext) + fmt.Sprintf("-title%02d", i+1) + ext
 		}
 	}
-	root := pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof)
+	root := pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, h.deps.LibraryKidsCartoons, h.deps.LibraryAnime, disc, prof)
 	moved := make([]string, 0, len(srcs))
 	for i, src := range srcs {
 		dst := filepath.Join(root, rendered[i])

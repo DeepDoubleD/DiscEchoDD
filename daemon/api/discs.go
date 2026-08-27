@@ -35,6 +35,12 @@ type startDiscRequest struct {
 	TitleIDs       []int       `json:"title_ids,omitempty"`
 	Season         int         `json:"season,omitempty"`
 	EpisodeMap     map[int]int `json:"episode_map,omitempty"` // title id → tmdb episode number
+	// Category overrides where a movie/TV rip's output lands, regardless
+	// of the profile's own content_type. "" (default) preserves today's
+	// movies/tv split; "kids_cartoons" and "anime" route to those library
+	// roots instead. Anything else is treated as unset -- see
+	// pipelines.LibraryRootFor / SelectedCategoryFromDisc.
+	Category string `json:"category,omitempty"`
 }
 
 // StartDisc creates a job for the given disc + profile and queues it on
@@ -152,12 +158,18 @@ func (h *Handlers) StartDisc(w http.ResponseWriter, r *http.Request) {
 	// identify (when a fresh disc is inserted into the same drive)
 	// via the existing UpdateDiscMetadataBlob path. Skipped when the
 	// list is empty so the default auto-pick path stays unchanged.
-	if len(req.TitleIDs) > 0 {
+	validCategory := req.Category == "kids_cartoons" || req.Category == "anime"
+	if len(req.TitleIDs) > 0 || validCategory {
 		merged := map[string]any{}
 		if disc.MetadataJSON != "" && disc.MetadataJSON != "{}" {
 			_ = json.Unmarshal([]byte(disc.MetadataJSON), &merged)
 		}
-		merged["selected_title_ids"] = req.TitleIDs
+		if len(req.TitleIDs) > 0 {
+			merged["selected_title_ids"] = req.TitleIDs
+		}
+		if validCategory {
+			merged["selected_category"] = req.Category
+		}
 		if req.Season > 0 {
 			merged["selected_season"] = req.Season
 		}

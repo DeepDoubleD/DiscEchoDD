@@ -149,6 +149,23 @@
     profileTouched = true;
   }
 
+  // Same movie/TV eligibility check as AwaitingDecisionCard, based on
+  // the chosen profile's content_type rather than isTV (candidate
+  // media_type) so this stays consistent with the server-side
+  // pipelines.IsTVProfile check regardless of candidate-metadata edge
+  // cases.
+  $: chosenProfile = $profiles.find((p) => p.id === chosenProfileID);
+  $: showsCategoryPicker =
+    chosenProfile?.options?.['content_type'] === 'movie' ||
+    chosenProfile?.options?.['content_type'] === 'tv';
+  let selectedCategory: '' | 'kids_cartoons' | 'anime' = '';
+  $: if (!showsCategoryPicker && selectedCategory !== '') {
+    selectedCategory = '';
+  }
+  function toggleCategory(value: 'kids_cartoons' | 'anime'): void {
+    selectedCategory = selectedCategory === value ? '' : value;
+  }
+
   let starting = false;
   let errMsg = '';
 
@@ -165,6 +182,7 @@
         titleIDs: selectedIDs,
         season: isTV ? season : undefined,
         episodeMap: isTV ? episodeMap : undefined,
+        category: selectedCategory || undefined,
       });
     } catch (e) {
       starting = false;
@@ -242,6 +260,34 @@
           <option value={p.id}>{p.name}</option>
         {/each}
       </select>
+    </div>
+  {/if}
+
+  {#if showsCategoryPicker}
+    <div class="mb-3 flex items-center gap-2">
+      <span class="text-[11px] uppercase tracking-[0.14em] text-text-3">Sort as</span>
+      <button
+        type="button"
+        class="min-h-[32px] rounded-lg border px-3 text-[13px] {selectedCategory === 'kids_cartoons'
+          ? 'border-accent bg-accent/20 text-text'
+          : 'border-border text-text-2'}"
+        aria-pressed={selectedCategory === 'kids_cartoons'}
+        on:click={() => toggleCategory('kids_cartoons')}
+        data-testid="title-picker-category-kids-cartoons"
+      >
+        Kids / Cartoons
+      </button>
+      <button
+        type="button"
+        class="min-h-[32px] rounded-lg border px-3 text-[13px] {selectedCategory === 'anime'
+          ? 'border-accent bg-accent/20 text-text'
+          : 'border-border text-text-2'}"
+        aria-pressed={selectedCategory === 'anime'}
+        on:click={() => toggleCategory('anime')}
+        data-testid="title-picker-category-anime"
+      >
+        Anime
+      </button>
     </div>
   {/if}
 

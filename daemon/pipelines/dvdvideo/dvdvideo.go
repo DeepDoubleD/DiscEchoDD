@@ -60,20 +60,22 @@ type MetadataStore interface {
 }
 
 type Deps struct {
-	Prober           identify.DVDProber
-	TMDB             identify.TMDBClient
-	DVDBackup        DVDMirror
-	HandBrakeScanner HandBrakeScanner
-	MakeMKVScanner   MakeMKVScanner
-	MakeMKVRipper    MakeMKVRipper
-	Tools            *tools.Registry
-	LibraryRoot      string
-	LibraryTV        string // used instead of LibraryRoot when the profile's content_type is "tv"
-	WorkRoot         string
-	LibraryProbe     func(string) error
-	URLsForTrigger   func(ctx context.Context, trigger string) []string
-	SubsLang         string        // e.g. "eng"; empty → no --subtitle-lang-list flag
-	MetadataStore    MetadataStore // optional; pipeline persists scan title list when set
+	Prober              identify.DVDProber
+	TMDB                identify.TMDBClient
+	DVDBackup           DVDMirror
+	HandBrakeScanner    HandBrakeScanner
+	MakeMKVScanner      MakeMKVScanner
+	MakeMKVRipper       MakeMKVRipper
+	Tools               *tools.Registry
+	LibraryRoot         string
+	LibraryTV           string // used instead of LibraryRoot when the profile's content_type is "tv"
+	LibraryKidsCartoons string // overrides LibraryRoot/LibraryTV when the disc-level category is "kids_cartoons"
+	LibraryAnime        string // overrides LibraryRoot/LibraryTV when the disc-level category is "anime"
+	WorkRoot            string
+	LibraryProbe        func(string) error
+	URLsForTrigger      func(ctx context.Context, trigger string) []string
+	SubsLang            string        // e.g. "eng"; empty → no --subtitle-lang-list flag
+	MetadataStore       MetadataStore // optional; pipeline persists scan title list when set
 	// MKVSubs pulls text-based subtitle tracks out of .mkv outputs
 	// (movie and TV alike) as sidecar files when the profile's
 	// extract_text_subtitles option is set. nil disables the feature.
@@ -233,7 +235,7 @@ func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc
 	sink.OnStepDone(state.StepIdentify, nil)
 
 	sink.OnStepStart(state.StepRip)
-	if err := h.deps.LibraryProbe(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof)); err != nil {
+	if err := h.deps.LibraryProbe(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, h.deps.LibraryKidsCartoons, h.deps.LibraryAnime, disc, prof)); err != nil {
 		sink.OnStepFailed(state.StepRip, err)
 		return pipelines.RipResult{}, fmt.Errorf("library probe: %w", err)
 	}
@@ -731,7 +733,7 @@ func (h *Handler) runTranscodeMakeMKV(ctx context.Context, result pipelines.RipR
 	}
 
 	sink.OnStepStart(state.StepMove)
-	moved, err := pipelines.MoveMovieOutputs(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof), moveSources, disc, prof)
+	moved, err := pipelines.MoveMovieOutputs(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, h.deps.LibraryKidsCartoons, h.deps.LibraryAnime, disc, prof), moveSources, disc, prof)
 	if err != nil {
 		sink.OnStepFailed(state.StepMove, err)
 		return fmt.Errorf("move: %w", err)
@@ -1126,7 +1128,7 @@ func (h *Handler) moveOutputs(transcoded []string, encodeTitles []tools.HandBrak
 				rel += "." + ext
 			}
 		}
-		dst := filepath.Join(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, prof), rel)
+		dst := filepath.Join(pipelines.LibraryRootFor(h.deps.LibraryRoot, h.deps.LibraryTV, h.deps.LibraryKidsCartoons, h.deps.LibraryAnime, disc, prof), rel)
 		if err := pipelines.AtomicMove(src, dst); err != nil {
 			return moved, err
 		}

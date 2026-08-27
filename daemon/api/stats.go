@@ -146,7 +146,7 @@ func (h *Handlers) libraryRoots(ctx context.Context) []string {
 	if err != nil {
 		return nil
 	}
-	keys := []string{"library.movies", "library.tv", "library.music", "library.games", "library.data"}
+	keys := []string{"library.movies", "library.tv", "library.music", "library.games", "library.data", "library.kids-cartoons", "library.anime"}
 	out := make([]string, 0, len(keys))
 	for _, k := range keys {
 		if v := all[k]; v != "" {

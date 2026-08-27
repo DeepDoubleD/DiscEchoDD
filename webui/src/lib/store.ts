@@ -147,9 +147,9 @@ function clearCurrentDiscIfJobDone(jobID: string): void {
   const driveID = job.drive_id;
   const discID = job.disc_id;
   drives.update((arr) =>
-    arr.map((d) => (d.id === driveID && d.current_disc_id === discID
-      ? { ...d, current_disc_id: undefined }
-      : d)),
+    arr.map((d) =>
+      d.id === driveID && d.current_disc_id === discID ? { ...d, current_disc_id: undefined } : d,
+    ),
   );
 }
 
@@ -460,6 +460,10 @@ export interface StartDiscOpts {
   titleIDs?: number[];
   season?: number;
   episodeMap?: Record<number, number>; // titleID → episode number (TMDB ep_number)
+  // category overrides where a movie/TV rip lands, regardless of the
+  // profile's own content_type -- "kids_cartoons" | "anime" | undefined
+  // (default: today's movies/tv split).
+  category?: string;
 }
 
 export async function startDisc(
@@ -474,6 +478,7 @@ export async function startDisc(
     title_ids?: number[];
     season?: number;
     episode_map?: Record<number, number>;
+    category?: string;
   } = { profile_id: profileID };
   if (candidateIndex !== undefined) body.candidate_index = candidateIndex;
   if (Array.isArray(titleIDsOrOpts)) {
@@ -483,6 +488,7 @@ export async function startDisc(
     if (o.titleIDs && o.titleIDs.length > 0) body.title_ids = o.titleIDs;
     if (o.season && o.season > 0) body.season = o.season;
     if (o.episodeMap && Object.keys(o.episodeMap).length > 0) body.episode_map = o.episodeMap;
+    if (o.category) body.category = o.category;
   }
   return apiPost<Job>(`/api/discs/${discID}/start`, body);
 }

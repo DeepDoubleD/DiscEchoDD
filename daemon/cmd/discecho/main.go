@@ -214,58 +214,64 @@ func main() {
 	// library.tv requires per-job profile lookup in the dispatcher —
 	// tracked for branch 3.
 	pipeReg.Register(dvdvideo.New(dvdvideo.Deps{
-		Prober:           dvdProber,
-		TMDB:             tmdbClient,
-		DVDBackup:        dvdBackup,
-		HandBrakeScanner: handBrake,
-		MakeMKVScanner:   makeMKV,
-		MakeMKVRipper:    makeMKV,
-		Tools:            toolReg,
-		LibraryRoot:      cfg.LibraryMovies,
-		LibraryTV:        cfg.LibraryTV,
-		WorkRoot:         filepath.Join(cfg.DataPath, "work"),
-		SubsLang:         cfg.SubsLang,
-		URLsForTrigger:   urlsForTrigger,
-		MetadataStore:    store,
-		NVENCAvailable:   nvencAvailable,
-		ShouldEject:      shouldEjectOnFinish,
-		MKVSubs:          mkvSubs,
+		Prober:              dvdProber,
+		TMDB:                tmdbClient,
+		DVDBackup:           dvdBackup,
+		HandBrakeScanner:    handBrake,
+		MakeMKVScanner:      makeMKV,
+		MakeMKVRipper:       makeMKV,
+		Tools:               toolReg,
+		LibraryRoot:         cfg.LibraryMovies,
+		LibraryTV:           cfg.LibraryTV,
+		LibraryKidsCartoons: cfg.LibraryKidsCartoons,
+		LibraryAnime:        cfg.LibraryAnime,
+		WorkRoot:            filepath.Join(cfg.DataPath, "work"),
+		SubsLang:            cfg.SubsLang,
+		URLsForTrigger:      urlsForTrigger,
+		MetadataStore:       store,
+		NVENCAvailable:      nvencAvailable,
+		ShouldEject:         shouldEjectOnFinish,
+		MKVSubs:             mkvSubs,
 	}))
 
 	// BDMV + UHD pipelines (M3.1).
 
 	pipeReg.Register(bdmv.New(bdmv.Deps{
-		Prober:         dvdProber, // re-used for volume-label reading
-		BDProber:       bdProber,  // preferred: real disc-library title from bdmt_*.xml
-		TMDB:           tmdbClient,
-		MakeMKVScanner: makeMKV,
-		MakeMKVRipper:  makeMKV,
-		Tools:          toolReg,
-		LibraryRoot:    cfg.LibraryMovies,
-		LibraryTV:      cfg.LibraryTV,
-		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
-		SubsLang:       cfg.SubsLang,
-		URLsForTrigger: urlsForTrigger,
-		NVENCAvailable: nvencAvailable,
-		ShouldEject:    shouldEjectOnFinish,
-		MKVSubs:        mkvSubs,
+		Prober:              dvdProber, // re-used for volume-label reading
+		BDProber:            bdProber,  // preferred: real disc-library title from bdmt_*.xml
+		TMDB:                tmdbClient,
+		MakeMKVScanner:      makeMKV,
+		MakeMKVRipper:       makeMKV,
+		Tools:               toolReg,
+		LibraryRoot:         cfg.LibraryMovies,
+		LibraryTV:           cfg.LibraryTV,
+		LibraryKidsCartoons: cfg.LibraryKidsCartoons,
+		LibraryAnime:        cfg.LibraryAnime,
+		WorkRoot:            filepath.Join(cfg.DataPath, "work"),
+		SubsLang:            cfg.SubsLang,
+		URLsForTrigger:      urlsForTrigger,
+		NVENCAvailable:      nvencAvailable,
+		ShouldEject:         shouldEjectOnFinish,
+		MKVSubs:             mkvSubs,
 	}))
 
 	pipeReg.Register(uhd.New(uhd.Deps{
-		Prober:         dvdProber,
-		BDProber:       bdProber, // preferred: real disc-library title from bdmt_*.xml
-		TMDB:           tmdbClient,
-		MakeMKVScanner: makeMKV,
-		MakeMKVRipper:  makeMKV,
-		Tools:          toolReg,
-		LibraryRoot:    cfg.LibraryMovies,
-		LibraryTV:      cfg.LibraryTV,
-		WorkRoot:       filepath.Join(cfg.DataPath, "work"),
-		SubsLang:       cfg.SubsLang,
-		AACS2KeyDB:     filepath.Join(cfg.MakeMKVDataDir, "KEYDB.cfg"),
-		URLsForTrigger: urlsForTrigger,
-		ShouldEject:    shouldEjectOnFinish,
-		MKVSubs:        mkvSubs,
+		Prober:              dvdProber,
+		BDProber:            bdProber, // preferred: real disc-library title from bdmt_*.xml
+		TMDB:                tmdbClient,
+		MakeMKVScanner:      makeMKV,
+		MakeMKVRipper:       makeMKV,
+		Tools:               toolReg,
+		LibraryRoot:         cfg.LibraryMovies,
+		LibraryTV:           cfg.LibraryTV,
+		LibraryKidsCartoons: cfg.LibraryKidsCartoons,
+		LibraryAnime:        cfg.LibraryAnime,
+		WorkRoot:            filepath.Join(cfg.DataPath, "work"),
+		SubsLang:            cfg.SubsLang,
+		AACS2KeyDB:          filepath.Join(cfg.MakeMKVDataDir, "KEYDB.cfg"),
+		URLsForTrigger:      urlsForTrigger,
+		ShouldEject:         shouldEjectOnFinish,
+		MKVSubs:             mkvSubs,
 	}))
 
 	// PSX + PS2 pipelines (M5.1).

@@ -30,6 +30,8 @@ type Settings struct {
 	LibraryMusic         string
 	LibraryGames         string
 	LibraryData          string
+	LibraryKidsCartoons  string
+	LibraryAnime         string
 	DataPath             string
 	AutoConfirmSeconds   int
 	WhipperBin           string
@@ -212,6 +214,8 @@ func Load(getenv func(string) string, store *state.Store, version string) (*Sett
 	s.LibraryMusic = resolveLibraryRoot(ctx, store, getenv, "library.music", "DISCECHO_LIBRARY_MUSIC", s.LibraryRoot, "music")
 	s.LibraryGames = resolveLibraryRoot(ctx, store, getenv, "library.games", "DISCECHO_LIBRARY_GAMES", s.LibraryRoot, "games")
 	s.LibraryData = resolveLibraryRoot(ctx, store, getenv, "library.data", "DISCECHO_LIBRARY_DATA", s.LibraryRoot, "data")
+	s.LibraryKidsCartoons = resolveLibraryRoot(ctx, store, getenv, "library.kids-cartoons", "DISCECHO_LIBRARY_KIDS_CARTOONS", s.LibraryRoot, "kids-cartoons")
+	s.LibraryAnime = resolveLibraryRoot(ctx, store, getenv, "library.anime", "DISCECHO_LIBRARY_ANIME", s.LibraryRoot, "anime")
 	return s, nil
 }
 
@@ -225,10 +229,16 @@ const (
 	MediaMusic  MediaRoot = "music"
 	MediaGames  MediaRoot = "games"
 	MediaData   MediaRoot = "data"
+	// MediaKidsCartoons and MediaAnime are picker-time overrides, not
+	// tied to a disc_type the way the other five are -- any movie/TV
+	// rip can be routed here regardless of its profile's content_type.
+	// See pipelines.LibraryRootFor.
+	MediaKidsCartoons MediaRoot = "kids-cartoons"
+	MediaAnime        MediaRoot = "anime"
 )
 
 // AllMediaRoots is the canonical iteration order.
-var AllMediaRoots = []MediaRoot{MediaMovies, MediaTV, MediaMusic, MediaGames, MediaData}
+var AllMediaRoots = []MediaRoot{MediaMovies, MediaTV, MediaMusic, MediaGames, MediaData, MediaKidsCartoons, MediaAnime}
 
 // LibraryFor returns the configured root for one media type. Falls back
 // to LibraryRoot/<media> if the typed field is empty (which only happens
@@ -257,6 +267,14 @@ func (s *Settings) LibraryFor(m MediaRoot) string {
 	case MediaData:
 		if s.LibraryData != "" {
 			return s.LibraryData
+		}
+	case MediaKidsCartoons:
+		if s.LibraryKidsCartoons != "" {
+			return s.LibraryKidsCartoons
+		}
+	case MediaAnime:
+		if s.LibraryAnime != "" {
+			return s.LibraryAnime
 		}
 	}
 	if s.LibraryRoot != "" {
@@ -299,11 +317,13 @@ func resolveLibraryRoot(ctx context.Context, store *state.Store, getenv func(str
 // upgrades from "library.path" deployments seed the 5 from the parent.
 func seedLibraryRoots(ctx context.Context, store *state.Store, getenv func(string) string, root string) error {
 	envFor := map[MediaRoot]string{
-		MediaMovies: "DISCECHO_LIBRARY_MOVIES",
-		MediaTV:     "DISCECHO_LIBRARY_TV",
-		MediaMusic:  "DISCECHO_LIBRARY_MUSIC",
-		MediaGames:  "DISCECHO_LIBRARY_GAMES",
-		MediaData:   "DISCECHO_LIBRARY_DATA",
+		MediaMovies:       "DISCECHO_LIBRARY_MOVIES",
+		MediaTV:           "DISCECHO_LIBRARY_TV",
+		MediaMusic:        "DISCECHO_LIBRARY_MUSIC",
+		MediaGames:        "DISCECHO_LIBRARY_GAMES",
+		MediaData:         "DISCECHO_LIBRARY_DATA",
+		MediaKidsCartoons: "DISCECHO_LIBRARY_KIDS_CARTOONS",
+		MediaAnime:        "DISCECHO_LIBRARY_ANIME",
 	}
 	// Single-root upgrade: legacy "library.path" wins if no per-media
 	// rows exist yet. After this seed it acts only as a default source.

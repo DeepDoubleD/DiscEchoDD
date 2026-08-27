@@ -81,17 +81,42 @@ func TestIsTVProfile(t *testing.T) {
 func TestLibraryRootFor(t *testing.T) {
 	movie := &state.Profile{Options: map[string]any{"content_type": "movie"}}
 	tv := &state.Profile{Options: map[string]any{"content_type": "tv"}}
+	const kidsRoot, animeRoot = "/library/kids-cartoons", "/library/anime"
 
-	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", movie); got != "/library/movies" {
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", kidsRoot, animeRoot, nil, movie); got != "/library/movies" {
 		t.Errorf("movie profile: got %q, want /library/movies", got)
 	}
-	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", tv); got != "/library/tv" {
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", kidsRoot, animeRoot, nil, tv); got != "/library/tv" {
 		t.Errorf("tv profile: got %q, want /library/tv", got)
 	}
 	// A deployment that hasn't configured LibraryTV must still work --
 	// fall back to the movies root rather than writing to "".
-	if got := pipelines.LibraryRootFor("/library/movies", "", tv); got != "/library/movies" {
+	if got := pipelines.LibraryRootFor("/library/movies", "", kidsRoot, animeRoot, nil, tv); got != "/library/movies" {
 		t.Errorf("tv profile, unconfigured TV root: got %q, want fallback to /library/movies", got)
+	}
+
+	kidsDisc := &state.Disc{MetadataJSON: `{"selected_category":"kids_cartoons"}`}
+	animeDisc := &state.Disc{MetadataJSON: `{"selected_category":"anime"}`}
+	bogusDisc := &state.Disc{MetadataJSON: `{"selected_category":"not_a_real_category"}`}
+
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", kidsRoot, animeRoot, kidsDisc, movie); got != kidsRoot {
+		t.Errorf("kids_cartoons override, movie profile: got %q, want %q", got, kidsRoot)
+	}
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", kidsRoot, animeRoot, kidsDisc, tv); got != kidsRoot {
+		t.Errorf("kids_cartoons override, tv profile: got %q, want %q", got, kidsRoot)
+	}
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", kidsRoot, animeRoot, animeDisc, movie); got != animeRoot {
+		t.Errorf("anime override, movie profile: got %q, want %q", got, animeRoot)
+	}
+	// An unrecognized category value must never silently misroute --
+	// falls through to the normal movie/TV split.
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", kidsRoot, animeRoot, bogusDisc, movie); got != "/library/movies" {
+		t.Errorf("bogus category, movie profile: got %q, want /library/movies", got)
+	}
+	// A category override with the corresponding root left unconfigured
+	// must still fall back to the normal movie/TV split rather than "".
+	if got := pipelines.LibraryRootFor("/library/movies", "/library/tv", "", "", kidsDisc, movie); got != "/library/movies" {
+		t.Errorf("kids_cartoons override, unconfigured kids root: got %q, want fallback to /library/movies", got)
 	}
 }
 

@@ -137,6 +137,8 @@ var allowedSettings = map[string]func(any) (string, error){
 	"library.music":           absolutePathValidator,
 	"library.games":           absolutePathValidator,
 	"library.data":            absolutePathValidator,
+	"library.kids-cartoons":   absolutePathValidator,
+	"library.anime":           absolutePathValidator,
 	"operation.mode": func(v any) (string, error) {
 		s, ok := v.(string)
 		if !ok {

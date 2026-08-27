@@ -76,6 +76,25 @@
   $: if (!profileTouched && chosenProfileID !== defaultProfileID) {
     chosenProfileID = defaultProfileID;
   }
+
+  // The kids/cartoons + anime category override only makes sense for
+  // movie/TV rips -- game, audio, and data profiles have no such
+  // concept and always route by disc_type/platform instead. Mirrors
+  // the server-side content_type check in pipelines.IsTVProfile.
+  $: chosenProfile = $profiles.find((p) => p.id === chosenProfileID);
+  $: showsCategoryPicker =
+    chosenProfile?.options?.['content_type'] === 'movie' ||
+    chosenProfile?.options?.['content_type'] === 'tv';
+  // '' = default routing (today's movies/tv split). Reset whenever the
+  // picker disappears (profile switched to something non-movie/TV) so
+  // a stale selection can't silently apply to an unrelated rip.
+  let selectedCategory: '' | 'kids_cartoons' | 'anime' = '';
+  $: if (!showsCategoryPicker && selectedCategory !== '') {
+    selectedCategory = '';
+  }
+  function toggleCategory(value: 'kids_cartoons' | 'anime'): void {
+    selectedCategory = selectedCategory === value ? '' : value;
+  }
   // scanProfileID is what the "Pick titles…" button hands to /scan.
   // Mirrors the chosen profile when there's a non-empty selection so
   // the picker UI later inherits the same choice via the scan job row.
@@ -230,7 +249,12 @@
       if (showsTitlePicker(profileId)) {
         await scanDisc(liveDisc.id, profileId);
       } else {
-        await startDisc(liveDisc.id, profileId, idx);
+        await startDisc(
+          liveDisc.id,
+          profileId,
+          idx,
+          selectedCategory ? { category: selectedCategory } : undefined,
+        );
       }
     } catch (_e) {
       // Daemon refuses duplicate starts with 409 since 0.4.1; if we
@@ -255,7 +279,12 @@
       if (showsTitlePicker(profileId)) {
         await scanDisc(liveDisc.id, profileId);
       } else {
-        await startDisc(liveDisc.id, profileId, candidateIndex);
+        await startDisc(
+          liveDisc.id,
+          profileId,
+          candidateIndex,
+          selectedCategory ? { category: selectedCategory } : undefined,
+        );
       }
     } catch (_e) {
       starting = false;
@@ -580,6 +609,35 @@
             <option value={p.id}>{p.name}</option>
           {/each}
         </select>
+      </div>
+    {/if}
+
+    {#if showsCategoryPicker}
+      <div class="mt-3 flex items-center gap-2">
+        <span class="text-[11px] uppercase tracking-[0.14em] text-text-3">Sort as</span>
+        <button
+          type="button"
+          class="min-h-[32px] rounded-lg border px-3 text-[13px] {selectedCategory ===
+          'kids_cartoons'
+            ? 'border-accent bg-accent/20 text-text'
+            : 'border-border text-text-2'}"
+          aria-pressed={selectedCategory === 'kids_cartoons'}
+          on:click={() => toggleCategory('kids_cartoons')}
+          data-testid="category-kids-cartoons"
+        >
+          Kids / Cartoons
+        </button>
+        <button
+          type="button"
+          class="min-h-[32px] rounded-lg border px-3 text-[13px] {selectedCategory === 'anime'
+            ? 'border-accent bg-accent/20 text-text'
+            : 'border-border text-text-2'}"
+          aria-pressed={selectedCategory === 'anime'}
+          on:click={() => toggleCategory('anime')}
+          data-testid="category-anime"
+        >
+          Anime
+        </button>
       </div>
     {/if}
 
