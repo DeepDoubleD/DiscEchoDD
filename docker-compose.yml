@@ -1,32 +1,29 @@
-# DiscEcho — local / homelab deploy.
-# Required: at least one optical drive at /dev/sr0 AND its matching
-# SCSI Generic node (typically /dev/sg0; some hosts may number it
-# differently — check `ls -l /dev/sg* | grep cdrom`). MakeMKV uses
-# the sg node for CSS / AACS handshakes and drive control; /dev/sr0
-# alone is not enough for DVD or BD rips.
-
 services:
   discecho:
-    build:
-      context: .
-      args:
-        VERSION: ${DISCECHO_VERSION:-dev}
-        COMMIT: ${DISCECHO_COMMIT:-unknown}
-        BUILD_DATE: ${DISCECHO_BUILD_DATE:-unknown}
     image: discecho:${DISCECHO_VERSION:-dev}
     container_name: discecho
+    runtime: nvidia
     restart: unless-stopped
+    privileged: true
+    network_mode: host
     devices:
       - /dev/sr0:/dev/sr0
-      - ${OPTICAL_SG_DEVICE:-/dev/sg0}:${OPTICAL_SG_DEVICE:-/dev/sg0}
+      - /dev/sg1:/dev/sg1
+      - /dev/sr1:/dev/sr1
+      - /dev/sg2:/dev/sg2
     group_add:
-      - "${CDROM_GID:-24}"
+      - "24"
     volumes:
-      - ${DISCECHO_LIBRARY_PATH:-/srv/media}:/library
+      - /mnt/mediastaging/discecho:/library
       - ./.docker-data:/var/lib/discecho
+      - /mnt/redumpdats:/var/lib/discecho/redump
+      - /mnt/mediastaging/discecho-spool:/var/lib/discecho/spool
+      - /run/udev:/run/udev:ro
+      - /sys:/sys:ro
+      - /dev:/dev
     environment:
       DISCECHO_ADDR: ":8088"
       DISCECHO_LIBRARY: "/library"
       DISCECHO_DATA: "/var/lib/discecho"
-    ports:
-      - "8088:8088"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,video,utility

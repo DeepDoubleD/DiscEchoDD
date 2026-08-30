@@ -21,8 +21,20 @@
 
   const COUNTDOWN_SEC = 8;
   const AUTO_CONFIRM_MIN_CONFIDENCE = 50;
+  // Xbox 360's Identify() almost always fails pre-rip (security sectors
+  // aren't reachable before the rip starts -- see the pipeline's own
+  // doc comment), so it surfaces a synthetic zero-confidence candidate
+  // (source "Unidentified") instead of leaving the card with zero
+  // candidates forever. That candidate deliberately sits below
+  // AUTO_CONFIRM_MIN_CONFIDENCE and outside batch-mode gating -- real
+  // identification still happens automatically post-rip via MD5 lookup
+  // (RunTranscode), so this fallback just needs to get the rip started
+  // rather than block on an identification step that's expected to
+  // fail. Runs independently of operationMode/autoConfirmAllowed.
+  const FALLBACK_COUNTDOWN_SEC = 10;
 
   let countdownSec = COUNTDOWN_SEC;
+  let fallbackCountdownSec = FALLBACK_COUNTDOWN_SEC;
   let cancelled = false;
   // `starting` becomes true the instant a rip-start request is in
   // flight, whether from a manual click or the auto-confirm timer.
@@ -38,6 +50,13 @@
   $: candidates = liveDisc.candidates ?? [];
   $: topConfidence = candidates[0]?.confidence ?? 0;
   $: selectedCandidate = candidates[selectedIndex] ?? candidates[0];
+  // The Xbox 360 pipeline's no-match fallback candidate (see xbox360.go
+  // Identify): a single zero-confidence "Unidentified" entry standing
+  // in for a disc that's confirmed as real Xbox 360 media but couldn't
+  // be pre-rip identified. Distinct from a genuine low-confidence match
+  // -- gets its own always-on countdown rather than autoConfirmAllowed's
+  // batch-mode/confidence gate.
+  $: isUnidentifiedFallback = candidates.length === 1 && candidates[0]?.source === 'Unidentified';
   $: isGameDisc = [
     'PSX',
     'PS2',
@@ -228,7 +247,24 @@
     }
   }, 1000);
 
-  onDestroy(() => clearInterval(timer));
+  // Independent of the batch-mode/confidence-gated timer above -- see
+  // isUnidentifiedFallback's comment. Shares the same `cancelled` flag
+  // (every existing interaction handler already sets it), so any user
+  // action -- search, skip, pick, profile change -- cancels this too
+  // without needing its own wiring at each call site.
+  const fallbackTimer: ReturnType<typeof setInterval> = setInterval(() => {
+    if (cancelled || !isUnidentifiedFallback) return;
+    fallbackCountdownSec--;
+    if (fallbackCountdownSec <= 0) {
+      clearInterval(fallbackTimer);
+      fallbackConfirm();
+    }
+  }, 1000);
+
+  onDestroy(() => {
+    clearInterval(timer);
+    clearInterval(fallbackTimer);
+  });
 
   async function pick(idx: number): Promise<void> {
     if (starting) return;
@@ -286,6 +322,28 @@
           selectedCategory ? { category: selectedCategory } : undefined,
         );
       }
+    } catch (_e) {
+      starting = false;
+    }
+  }
+
+  // Mirrors autoConfirm's shape but without the autoConfirmAllowed
+  // gate (batch-mode + AUTO_CONFIRM_MIN_CONFIDENCE don't apply here --
+  // see isUnidentifiedFallback). Starts the rip with the single
+  // zero-confidence fallback candidate so the pipeline's post-rip MD5
+  // identify path (the one that actually works for this disc type) gets
+  // a chance to run, instead of the card blocking forever on a pre-rip
+  // step that's expected to fail.
+  async function fallbackConfirm(): Promise<void> {
+    if (starting || cancelled || !isUnidentifiedFallback) return;
+    cancelled = true;
+    const c = candidates[0];
+    if (!c) return;
+    const profileId = profileTouched && chosenProfileID ? chosenProfileID : profileForCandidate(c);
+    if (!profileId) return;
+    starting = true;
+    try {
+      await startDisc(liveDisc.id, profileId, 0);
     } catch (_e) {
       starting = false;
     }
@@ -455,7 +513,13 @@
         {candidates.length} match{candidates.length === 1 ? '' : 'es'}
       </div>
       {#if !searching}
-        {#if autoConfirmAllowed && !cancelled}
+        {#if isUnidentifiedFallback && !cancelled}
+          <div class="mt-1 font-mono text-[11px] text-warn">
+            {`Unidentified · auto-rip in ${fallbackCountdownSec}s`}
+          </div>
+        {:else if isUnidentifiedFallback && cancelled}
+          <div class="mt-1 text-[11px] text-warn">No match found · search manually</div>
+        {:else if autoConfirmAllowed && !cancelled}
           <div class="mt-1 font-mono text-[11px] text-text-3">
             {`Auto-rip in ${countdownSec}s`}
           </div>
@@ -691,3 +755,4 @@
     {/if}
   {/if}
 </div>
+

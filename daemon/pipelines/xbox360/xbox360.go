@@ -2,7 +2,7 @@
 //
 // Pipeline shape (6 active steps; transcode AND compress skipped):
 //
-//	detect → identify → rip (redumper xbox360, --dvd-raw) → move → notify → eject
+//	detect â identify â rip (redumper xbox360, --dvd-raw) â move â notify â eject
 //
 // Identify is a best-effort pre-rip attempt only: it tries reading
 // default.xex off the disc via isoinfo (parsing the XEX Execution ID
@@ -20,7 +20,7 @@
 // embedded boot-code fallback for Xbox 360 either.
 //
 // Rip requires an OmniDrive-flashed drive (e.g. an ASUS/Pioneer
-// BW-16D1HT reflashed to Panasonic UJ-260 firmware) — XGD2/XGD3's
+// BW-16D1HT reflashed to Panasonic UJ-260 firmware) â XGD2/XGD3's
 // security sectors aren't reachable through a plain DVD read, which is
 // why the redumper invocation adds --dvd-raw on top of what the
 // original Xbox pipeline's "xbox" mode does. See
@@ -148,34 +148,69 @@ func (h *Handler) Identify(ctx context.Context, drv *state.Drive) (*state.Disc, 
 		}
 	}
 
-	if h.deps.Xbox360Prober == nil {
-		return disc, nil, pipelines.ErrNoCandidates
-	}
-	info, err := h.deps.Xbox360Prober.Probe(ctx, drv.DevPath)
-	if err != nil || info == nil {
-		return disc, nil, pipelines.ErrNoCandidates
-	}
+	// Every path below that can't produce a real Redump match --
+	// including the common case where the XEX probe itself fails
+	// (expected on nearly every real retail disc: default.xex lives
+	// behind security sectors a stock optical read can't reach before
+	// ripping -- see the package doc comment) -- falls through to
+	// noMatchFallback at the bottom instead of returning early, so the
+	// TOC-hash fallback candidate is reachable regardless of *why*
+	// pre-rip identification failed, not just the rarer "probe
+	// succeeded but no title-ID match" case.
+	if h.deps.Xbox360Prober != nil {
+		if info, err := h.deps.Xbox360Prober.Probe(ctx, drv.DevPath); err == nil && info != nil {
+			// Store the 8-hex-digit title ID so RunTranscode can
+			// re-fetch the entry for MD5 verify (mirrors the original
+			// Xbox pipeline).
+			code := fmt.Sprintf("%08X", info.TitleID)
 
-	// Store the 8-hex-digit title ID so RunTranscode can re-fetch the
-	// entry for MD5 verify (mirrors the original Xbox pipeline).
-	code := fmt.Sprintf("%08X", info.TitleID)
-
-	if h.deps.RedumpDB != nil {
-		if entry := h.deps.RedumpDB.LookupByXboxTitleID(info.TitleID); entry != nil {
-			disc.Title = entry.Title
-			disc.Year = entry.Year
-			disc.MetadataProvider = "Redump"
-			disc.MetadataID = code
-			disc.Candidates = []state.Candidate{{
-				Source: "Redump", Title: entry.Title, Year: entry.Year,
-				Region: entry.Region, Confidence: 100,
-			}}
-			return disc, disc.Candidates, nil
+			if h.deps.RedumpDB != nil {
+				if entry := h.deps.RedumpDB.LookupByXboxTitleID(info.TitleID); entry != nil {
+					disc.Title = entry.Title
+					disc.Year = entry.Year
+					disc.MetadataProvider = "Redump"
+					disc.MetadataID = code
+					disc.Candidates = []state.Candidate{{
+						Source: "Redump", Title: entry.Title, Year: entry.Year,
+						Region: entry.Region, Confidence: 100,
+					}}
+					return disc, disc.Candidates, nil
+				}
+			}
+			slog.Info("xbox360: XEX probe succeeded but no Redump title-ID match", "dev", drv.DevPath, "title_id", code)
 		}
 	}
 
-	slog.Info("xbox360: XEX probe succeeded but no Redump title-ID match", "dev", drv.DevPath, "title_id", code)
-	return disc, nil, pipelines.ErrNoCandidates
+	return h.noMatchFallback(disc)
+}
+
+// noMatchFallback handles every "couldn't pre-rip identify" exit from
+// Identify (prober unset, probe failed, or probe succeeded but no
+// Redump title-ID match). The disc IS still confirmed as real Xbox 360
+// media by classify.go's RefineDiscType before Identify ever runs, and
+// a stable per-disc fingerprint (TOCHash) is already computed above.
+// Rather than blocking indefinitely in Awaiting Decision -- which is
+// what happens on nearly every real disc, per the package doc comment
+// -- this surfaces a synthetic zero-confidence candidate so the card
+// can offer a short manual-entry window before falling back to an
+// unidentified auto-rip, named from the TOC hash and re-identifiable
+// later via the same RedumpDB's MD5 index once the rip completes.
+func (h *Handler) noMatchFallback(disc *state.Disc) (*state.Disc, []state.Candidate, error) {
+	if disc.TOCHash == "" {
+		return disc, nil, pipelines.ErrNoCandidates
+	}
+	fallbackTitle := fmt.Sprintf("Xbox 360 Disc [%s]", disc.TOCHash[:8])
+	disc.Title = fallbackTitle
+	disc.MetadataProvider = "Unidentified"
+	// MetadataID deliberately left empty: RunTranscode branches on it
+	// to decide md5Verify (already identified, just confirm) vs
+	// md5Identify (the real post-rip lookup this fallback exists to
+	// still reach). A non-empty value here would skip md5Identify
+	// entirely and leave the placeholder title permanent.
+	disc.Candidates = []state.Candidate{{
+		Source: "Unidentified", Title: fallbackTitle, Confidence: 0,
+	}}
+	return disc, disc.Candidates, nil
 }
 
 // Plan returns the 6-active-step plan; both transcode and compress are
@@ -192,7 +227,7 @@ func (h *Handler) Plan(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
 	return out
 }
 
-// PlanRip — rip-half: detect, identify, rip, eject. Transcode-half marked Skip.
+// PlanRip â rip-half: detect, identify, rip, eject. Transcode-half marked Skip.
 func (h *Handler) PlanRip(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
 	transcodeHalf := map[state.StepID]bool{
 		state.StepTranscode: true,
@@ -207,7 +242,7 @@ func (h *Handler) PlanRip(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan 
 	return out
 }
 
-// PlanTranscode — transcode-half: Xbox 360 has no transcode AND no
+// PlanTranscode â transcode-half: Xbox 360 has no transcode AND no
 // compress (the .iso is the deliverable, MD5-verified against Redump
 // before the move). Only move + notify are active.
 func (h *Handler) PlanTranscode(_ *state.Disc, _ *state.Profile) []pipelines.StepPlan {
@@ -238,7 +273,7 @@ func (h *Handler) Run(ctx context.Context, drv *state.Drive, disc *state.Disc, p
 }
 
 // RunRip executes the drive-bound half: detect, identify, redumper
-// xbox360 mode (--dvd-raw) → spoolDir/rip/rip.iso, eject.
+// xbox360 mode (--dvd-raw) â spoolDir/rip/rip.iso, eject.
 func (h *Handler) RunRip(ctx context.Context, drv *state.Drive, disc *state.Disc, prof *state.Profile, spoolDir string, sink pipelines.EventSink) (pipelines.RipResult, error) {
 	sink.OnStepStart(state.StepDetect)
 	sink.OnStepDone(state.StepDetect, nil)
@@ -322,7 +357,7 @@ func (h *Handler) createWorkDir(discID string) (string, error) {
 
 // md5Verify checks the ripped ISO against the title-ID-keyed Redump
 // entry. Used only in the rare case Identify's pre-rip XEX probe
-// actually found a title. Logs only — a mismatch does not abort the
+// actually found a title. Logs only â a mismatch does not abort the
 // pipeline.
 func (h *Handler) md5Verify(path string, disc *state.Disc) {
 	if h.deps.RedumpDB == nil || disc.MetadataID == "" {
@@ -394,3 +429,4 @@ func fsListingIdentityHash(files []string) string {
 	_, _ = fmt.Fprintf(h, "xbox360:v1:%s", strings.Join(sorted, "\n"))
 	return hex.EncodeToString(h.Sum(nil))
 }
+

@@ -888,21 +888,21 @@ public partial class Dumper: IDisposable
         
     private async Task<(List<FileRecord> files, List<DirRecord> dirs)> GetFilesystemStructureAsync(CancellationToken cancellationToken)
     {
-        var pos = driveStream.Position;
-        var buf = new byte[64 * 1024 * 1024];
-        driveStream.Seek(0, SeekOrigin.Begin);
-        await driveStream.ReadExactlyAsync(buf, 0, buf.Length, cancellationToken).ConfigureAwait(false);
-        driveStream.Seek(pos, SeekOrigin.Begin);
-        try
-        {
-            using var memStream = new MemoryStream(buf, false);
-            var reader = new CDReader(memStream, true, true);
-            return await reader.GetFilesystemStructureAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception e)
-        {
-            Log.Error(e, "Failed to buffer TOC");
-        }
+        // Previously buffered the first 64MB into a MemoryStream and parsed
+        // that instead of the full device stream, as a performance
+        // optimization. Removed: CDReader's traversal reads past the end of
+        // that fixed-size MemoryStream via plain Stream.Read (not
+        // ReadExactly), which returns 0 at EOF instead of throwing -- so
+        // any disc whose ISO9660 directory records extend past 64MB (e.g.
+        // several top-level directories deep into the volume) had those
+        // directories silently drop out of the listing with no exception,
+        // no BrokenFiles entry, and no error surfaced anywhere. Confirmed
+        // in practice: a real Uncharted: Drake's Fortune dump reported
+        // complete success while silently missing 84 files (~12GB) --
+        // every cutscene, every language's speech/music, all subtitles --
+        // because their directory entries (movie1/, sound1/, text1/, cfg/)
+        // sat beyond the buffered window. Parsing directly against the
+        // full device stream has no such truncation point.
         return await discReader.GetFilesystemStructureAsync(cancellationToken).ConfigureAwait(false);
     }
 

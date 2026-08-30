@@ -38,6 +38,14 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
+	// SQLite (even in WAL mode) only ever allows one writer at a time.
+	// Go's database/sql pool otherwise happily opens multiple concurrent
+	// connections that all contend for that single-writer lock, which
+	// under real concurrent load (e.g. 3 drives ripping/updating job
+	// progress at once) blows past busy_timeout and surfaces as
+	// SQLITE_BUSY errors instead of just queuing behind one connection.
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
 	if err := conn.Ping(); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("sqlite ping: %w", err)
@@ -120,3 +128,4 @@ func (d *DB) applyMigration(ctx context.Context, version int, body string) error
 	}
 	return tx.Commit()
 }
+

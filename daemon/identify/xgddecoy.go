@@ -63,7 +63,7 @@ func (p *isoinfoXbox360DecoyProber) Probe(ctx context.Context, devPath string) (
 // probe branch, so a real original-Xbox disc is already claimed by the
 // time this runs.
 func matchesXGDDecoyFingerprint(s string) bool {
-	var publisher, preparer, application string
+	var publisher, preparer, application, volumeID string
 	scanner := bufio.NewScanner(strings.NewReader(s))
 	scanner.Buffer(make([]byte, 4096), 64*1024)
 	for scanner.Scan() {
@@ -75,9 +75,24 @@ func matchesXGDDecoyFingerprint(s string) bool {
 			preparer = strings.TrimSpace(strings.TrimPrefix(line, "Data preparer id:"))
 		case strings.HasPrefix(line, "Application id:"):
 			application = strings.TrimSpace(strings.TrimPrefix(line, "Application id:"))
+		case strings.HasPrefix(line, "Volume id:"):
+			volumeID = strings.TrimSpace(strings.TrimPrefix(line, "Volume id:"))
 		}
 	}
-	return strings.EqualFold(publisher, "MICROSOFT CORPORATION") &&
+	if strings.EqualFold(publisher, "MICROSOFT CORPORATION") &&
 		strings.Contains(strings.ToUpper(preparer), "ONE MICROSOFT WAY") &&
-		strings.HasPrefix(strings.ToUpper(application), "CDIMAGE")
+		strings.HasPrefix(strings.ToUpper(application), "CDIMAGE") {
+		return true
+	}
+	// Fallback: Microsoft's own XGD volume-label scheme (XGD1/XGD2/XGD3
+	// + media type + region, e.g. "XGD2DVD_NTSC") is stamped directly
+	// into the PVD's Volume id field -- confirmed live on a real XGD2
+	// disc (Too Human) whose Publisher/Data preparer/Application id
+	// fields were all blank (so the fingerprint match above never
+	// fires), while Volume id still unambiguously read "XGD2DVD_NTSC".
+	// This is simpler and more broadly reliable than the id-triplet
+	// fingerprint: it doesn't depend on those three fields actually
+	// being populated, which apparently isn't guaranteed across XGD
+	// generations/mastering runs.
+	return strings.HasPrefix(strings.ToUpper(volumeID), "XGD")
 }

@@ -558,6 +558,15 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 	if hasPath(files, "/PS3_GAME/PARAM.SFO") {
 		return state.DiscTypePS3
 	}
+	// Xbox 360 (XGD2/XGD3) discs are also stock-mountable BD-flagged media
+	// on an OmniDrive-flashed drive -- confirmed live: a real XGD3 disc
+	// (Too Human) tripped mediaIsBluRay() and misclassified as BDMV,
+	// never reaching the /_SYSTEMU check further down this function.
+	// Same class of bug as the PS3 check above (see its comment); same
+	// fix -- check the Xbox 360 marker before the BD short-circuit too.
+	if hasPath(files, "/_SYSTEMU") {
+		return state.DiscTypeXBOX360
+	}
 	if mediaIsBluRay(devPath) {
 		slog.Info("classify: udev reports BD media; not treating as DATA", "dev", devPath)
 		if bd != nil {
@@ -590,6 +599,23 @@ func RefineDiscType(ctx context.Context, base state.DiscType, fs FSProber, bd BD
 	// as a plain DVD.
 	if hasPath(files, "/_SYSTEMU") {
 		return state.DiscTypeXBOX360
+	}
+	// The xgdDecoy PVD-fingerprint probe (defined much further down,
+	// originally written as a "last resort" for decoy layers too sparse
+	// to carry /_SYSTEMU) has to run here too, before the /VIDEO_TS
+	// check, not just after every other probe -- confirmed live on a
+	// real XGD3 disc (Too Human) whose decoy layer IS a fully populated,
+	// real-looking /VIDEO_TS + /AUDIO_TS (no /_SYSTEMU visible via a
+	// stock isoinfo read at all, unlike the XGD2 disc that originally
+	// validated the /_SYSTEMU check). Left in its original position
+	// further down, this check is unreachable for any Xbox 360 disc
+	// whose decoy layer happens to look like a real DVD, since the
+	// /VIDEO_TS branch below returns unconditionally first.
+	if xgdDecoy != nil {
+		if ok, err := xgdDecoy.Probe(ctx, devPath); err == nil && ok {
+			slog.Info("classify: xgd decoy PVD fingerprint matched before VIDEO_TS check; treating as XBOX360", "dev", devPath)
+			return state.DiscTypeXBOX360
+		}
 	}
 	if hasPath(files, "/VIDEO_TS") {
 		return state.DiscTypeDVD
