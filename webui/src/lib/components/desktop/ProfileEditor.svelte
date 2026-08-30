@@ -268,7 +268,8 @@
       dt === 'DC' ||
       dt === 'XBOX' ||
       dt === 'XBOX360' ||
-      dt === 'WII'
+      dt === 'WII' ||
+      dt === 'WIIU'
     ) {
       return { Title: 'Final Fantasy VII', Year: 1997, Region: 'USA' };
     }

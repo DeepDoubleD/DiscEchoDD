@@ -196,6 +196,23 @@ func TestRedumperRip_AcceptsXbox360Mode(t *testing.T) {
 	}
 }
 
+func TestRedumperOutputExt_WiiU(t *testing.T) {
+	if got := tools.RedumperOutputExt("wiiu"); got != ".iso" {
+		t.Fatalf("wiiu: got %q, want .iso", got)
+	}
+}
+
+func TestRedumperRip_AcceptsWiiUMode(t *testing.T) {
+	r := tools.NewRedumper("")
+	// wiiu is a valid mode (--disc-type=BLURAY plus --bd-raw); redumper
+	// binary won't exist in CI so we expect a start error, not a
+	// mode-rejection error.
+	err := r.Rip(context.Background(), "/dev/null", t.TempDir(), "x", "wiiu", &captureSinkRedumper{})
+	if err != nil && strings.Contains(err.Error(), "unknown mode") {
+		t.Fatalf("wiiu mode rejected: %v", err)
+	}
+}
+
 func TestParseRedumperProgress_B720Format(t *testing.T) {
 	// redumper b720+ writes progress as `/ [ NN%] LBA: cur/max, errors: { ... }`
 	// with a leading spinner char and an in-band percent that's easier to

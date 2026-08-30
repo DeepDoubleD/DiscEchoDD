@@ -19,6 +19,7 @@ const (
 	DiscTypeXBOX     DiscType = "XBOX"
 	DiscTypeXBOX360  DiscType = "XBOX360"
 	DiscTypeWII      DiscType = "WII"
+	DiscTypeWIIU     DiscType = "WIIU"
 	DiscTypePS3      DiscType = "PS3"
 	DiscTypeSAT      DiscType = "SAT"
 	DiscTypeDC       DiscType = "DC"
